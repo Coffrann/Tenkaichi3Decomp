@@ -580,6 +580,13 @@ s32 BtlAct_CheckTechniqueInput(BtlActJChr *chr) {
     if (slot < 0) {
         return 0;
     }
+#ifdef PORT
+    if (chr->player >= 2) { /* (the experiment's tool, BT3_HEAPCHK: the third fighter asks for a skill) */
+        extern void Port_Dbg3(const char *what, int a, int b, int c, int d);
+        Port_Dbg3("third fighter asks for skill: slot / locked on / has the ki / free", slot, BtlChar_TestFlag(chr, 5),
+                  BtlMember_HasKi(chr, BtlSuper_GetKiCost(chr, slot)), BtlChar_IsFree(chr));
+    }
+#endif
     if (!BtlAct_CanUseTechnique(chr, slot)) {
         return 0;
     }

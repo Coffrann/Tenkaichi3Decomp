@@ -3,7 +3,11 @@
 
 #include "types.h"
 
+#ifdef PORT /* (the third-fighter experiment: arenas 9 and 10 are the third fighter's shots and effects, as 5 and 8) */
+#define BTL_POOL_SLOT_COUNT 11
+#else
 #define BTL_POOL_SLOT_COUNT 9
+#endif
 /* Bit in BtlPool.arenaMask saying that a slot is a bump arena. */
 #define BTL_POOL_ARENA_BIT(slot) (1 << ((slot) + 1)) /* arenaMask is unsigned: a signed mask compiles to srav/andi */
 

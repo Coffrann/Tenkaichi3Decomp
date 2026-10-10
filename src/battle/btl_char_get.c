@@ -187,6 +187,15 @@ BtlCharGetChr *BtlChar_FindBySide(s32 side) {
     if (gBtlChars == NULL) {
         return NULL;
     }
+#ifdef PORT
+    /* The third-fighter experiment. The number compared here is also the VIEW a fighter belongs to, and the third
+       fighter was given its side's (1) so that what is kept per view stays in range; asked for by its own number
+       it was not found. The 42 callers pass an object id or a roster index: the AI read its ki and blast stock as
+       0 through this and never used a skill (seen by the user). A number past the two sides is the roster index. */
+    if (side >= 2) {
+        return side < BtlChar_GetCount() ? BtlChar_Get(side) : NULL;
+    }
+#endif
     for (i = 0; i < BtlChar_GetCount(); i++) {
         BtlCharGetChr *chr = BtlChar_Get(i);
 

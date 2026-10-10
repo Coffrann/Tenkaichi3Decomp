@@ -1688,6 +1688,16 @@ void EftShotMgr_Init(EftTask *task) {
     c->task = BtlTaskList_AddTail(gEftShot->list, gEftShotCharClass, &arg[0]);
     c = gEftShot->chr + 1;
     c->task = BtlTaskList_AddTail(gEftShot->list, gEftShotCharClass, &arg[1]);
+#ifdef PORT
+    if (gEftShot->count >= 3) {
+        /* The third-fighter experiment: the original makes the tasks of characters 0 and 1 by name. Without its
+           task the third fighter had no shot data, and its first skill wrote through an empty entry. */
+        s32 third = 2;
+
+        c = gEftShot->chr + 2;
+        c->task = BtlTaskList_AddTail(gEftShot->list, gEftShotCharClass, &third);
+    }
+#endif
 }
 
 /* Shot layer term callback: frees the blocks and empties pools 3, 4 and 5. */
@@ -1699,6 +1709,9 @@ void EftShotMgr_Term(void) {
     BtlPool_Reset(3);
     BtlPool_Reset(4);
     BtlPool_Reset(5);
+#ifdef PORT
+    BtlPool_Reset(9);
+#endif
 }
 
 /* Shot layer update callback: nothing. */
@@ -1750,6 +1763,11 @@ void EftShot_SetCharPool(s32 chr) {
     } else {
         pool = 5;
     }
+#ifdef PORT
+    if (chr >= 2) { /* (the third fighter's own: side 2's is emptied when side 2 changes its model) */
+        pool = 9;
+    }
+#endif
     BtlPool_SetCurrent(pool);
 }
 
@@ -1762,6 +1780,11 @@ void EftShot_ResetCharPool(s32 chr) {
     } else {
         pool = 5;
     }
+#ifdef PORT
+    if (chr >= 2) { /* (the third fighter's own: side 2's is emptied when side 2 changes its model) */
+        pool = 9;
+    }
+#endif
     BtlPool_Reset(pool);
 }
 

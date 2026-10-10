@@ -443,6 +443,10 @@ int Port_ThirdFighter(void) {
     }
     return id;
 }
+int Port_ThirdLevel(void) {
+    int v = getenv("BT3_THIRD_LEVEL") != NULL ? atoi(getenv("BT3_THIRD_LEVEL")) : -1;
+    return v > 29 ? 29 : v;
+}
 int Port_ThirdAi(void) {
     return !(getenv("BT3_THIRD_AI") != NULL && atoi(getenv("BT3_THIRD_AI")) == 0);
 }

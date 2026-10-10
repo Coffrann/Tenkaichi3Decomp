@@ -24,6 +24,9 @@ void BtlPool_Init(s32 arg) {
     gBtlPool = Heap_Alloc(sizeof(BtlPool), 0x20, 0, HEAP_ANY);
     memset(gBtlPool, 0, sizeof(BtlPool));
     gBtlPool->arenaMask = 0x3FE;
+#ifdef PORT
+    gBtlPool->arenaMask |= BTL_POOL_ARENA_BIT(9) | BTL_POOL_ARENA_BIT(10);
+#endif
     size = BtlPool_CalcArenaSize();
     if (size > 0) {
         ARENA_MEM = Heap_Alloc(size, 0x20, 0, HEAP_ANY);
@@ -126,6 +129,9 @@ s32 BtlPool_CalcArenaSize(void) {
     if (gBtlPool->arenaMask & BTL_POOL_ARENA_BIT(8)) {
         total += BtlPool_AlignUp32(0x19000);
     }
+#ifdef PORT
+    total += 2 * BtlPool_AlignUp32(0x19000);
+#endif
     return total;
 }
 
@@ -160,6 +166,10 @@ void BtlPool_CarveArenas(void) {
     if (gBtlPool->arenaMask & BTL_POOL_ARENA_BIT(7)) {
         mem = BtlPool_InitSlot(&gBtlPool->slots[8], BtlPool_AlignUp32(0x19000), mem);
     }
+#ifdef PORT
+    mem = BtlPool_InitSlot(&gBtlPool->slots[9], BtlPool_AlignUp32(0x19000), mem);
+    mem = BtlPool_InitSlot(&gBtlPool->slots[10], BtlPool_AlignUp32(0x19000), mem);
+#endif
 }
 
 /* Points a slot at its arena memory and returns the address just past it. */

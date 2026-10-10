@@ -732,6 +732,11 @@ extern void *gEftCharKindClass[11];  /* 0x2C3BE0: manager class of each kind */
 extern u8 gEftKiBombMgrClass[0x18];          /* manager class used for kind 2 when the fighter has a type 3 ki blast */
 extern u8 D_002C3E00[0x18];          /* manager class used for kind 1 when the fighter has a type 2 ki blast */
 
+#ifdef PORT /* (the third fighter's own pool) */
+#define PORT_CHAR_POOL(chr) ((chr) == 0 ? 7 : (chr) >= 2 ? 10 : 8)
+#else
+#define PORT_CHAR_POOL(chr) ((chr) == 0 ? 7 : 8)
+#endif
 void EftChar_SetPool(s32 chr);
 void EftChar_ResetPool(s32 chr);
 void EftChar_CreateKind(s32 chr, s32 kind, s32 mode);
@@ -765,6 +770,9 @@ void EftCharRoot_Term(EftQTask *task) {
     BtlPool_Reset(6);
     BtlPool_Reset(7);
     BtlPool_Reset(8);
+#ifdef PORT
+    BtlPool_Reset(10);
+#endif
 }
 
 /* Root update: nothing. */
@@ -830,12 +838,12 @@ void EftChar_Update(EftQTask *task) {
 
 /* Makes the character's pool (7 for character 0, 8 for the others) the current one. */
 void EftChar_SetPool(s32 chr) {
-    BtlPool_SetCurrent(chr == 0 ? 7 : 8);
+    BtlPool_SetCurrent(PORT_CHAR_POOL(chr));
 }
 
 /* Empties the character's pool. */
 void EftChar_ResetPool(s32 chr) {
-    BtlPool_Reset(chr == 0 ? 7 : 8);
+    BtlPool_Reset(PORT_CHAR_POOL(chr));
 }
 
 /* Creates the manager task of one kind for a character; its init gets {character, kind}. */
