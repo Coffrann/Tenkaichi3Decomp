@@ -992,8 +992,9 @@ void EftDet_FighterPass(void) {
                 extern s32 gPortTarget[];             /* btl_char_flag_opp.c */
                 extern s32 Port_IsEnemy(s32 a, s32 b);
                 extern s32 BtlChar_GetCount(void);
-                if (Port_FighterObjId(2) >= 0) {
-                    /* (Teams: the shot is tried on its owner's target, then on its other enemies; never on a
+                if (Port_FighterObjId(2) >= 0 && (u32)list->rec[i].objId < (u32)BtlChar_GetCount()) {
+                    /* (Teams; a shot owned by an object that is not a fighter keeps the game's own rule.
+                       Teams: the shot is tried on its owner's target, then on its other enemies; never on a
                        friend. Roster indices and object ids are the same numbers for the three.) */
                     s32 owner = list->rec[i].objId;
                     s32 who = (u32)owner < 4 ? gPortTarget[owner] : 0;

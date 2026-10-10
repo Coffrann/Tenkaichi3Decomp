@@ -70,7 +70,10 @@ s32 Port_IsEnemy(s32 a, s32 b) {
    attacker and the fighter it hit, and the effects of it ask "the opponent" all the way through (a rush on the
    third fighter stopped the game in EftShotTech_UpdateSubs when the target changed under it). */
 void Port_TargetHit(s32 attacker, s32 victim) {
-    if ((u32)attacker < PORT_FIGHTERS && (u32)victim < PORT_FIGHTERS && victim < BtlChar_GetCount() &&
+    /* (Both must be fighters: a shot's owner can be another object, a partner's, with an id past the roster.
+       Player 2's target became 3 through here and its AI read a controller that is not there: a crash in
+       BtlAiSense_IsBehindOpponent, seen by the user.) */
+    if ((u32)attacker < (u32)BtlChar_GetCount() && (u32)victim < (u32)BtlChar_GetCount() &&
         Port_IsEnemy(attacker, victim)) {
         gPortTarget[attacker] = victim;
         sPortTargetHold[attacker] = 120;

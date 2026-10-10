@@ -193,12 +193,19 @@ typedef struct AiThData {
 } AiThData; /* size 0x148; the sections follow */
 
 /* The manager block. */
+#ifndef AITH_SIDES
+#ifdef PORT /* (the third-fighter experiment: as BTLAI_SIDES of btl_ai.h, the same block seen by another file) */
+#define AITH_SIDES 3
+#else
+#define AITH_SIDES 2
+#endif
+#endif
 typedef struct AiThMgr {
     /* 0x000 */ AiThData *data;     /* (m) */
     /* 0x004 */ f32 distance;       /* (m) */
     /* 0x008 */ f32 radiusSum;      /* (m) */
     /* 0x00C */ s32 sight;
-    /* 0x010 */ AiThWork work[2];   /* (m) */
+    /* 0x010 */ AiThWork work[AITH_SIDES];   /* (m) */
     /* 0xA50 */ s32 frame;          /* (m) */
     /* 0xA54 */ s32 own;            /* (m) bit 0: data is a heap block owned by the manager */
     /* 0xA58 */ s32 unkA58[2];

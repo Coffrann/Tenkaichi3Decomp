@@ -135,12 +135,19 @@ typedef struct AiActData {
     /* 0xC8 */ u8 *typeTbl[32];       /* (m) per aiType; bytes +0x2AD / +0x56D are read here */
 } AiActData;
 
+#ifndef AITH_SIDES
+#ifdef PORT /* (the third-fighter experiment: as BTLAI_SIDES of btl_ai.h, the same block seen by another file) */
+#define AITH_SIDES 3
+#else
+#define AITH_SIDES 2
+#endif
+#endif
 typedef struct AiActMgr {
     /* 0x000 */ AiActData *data;      /* (m) */
     /* 0x004 */ f32 dist;             /* (m) distance between the fighters */
     /* 0x008 */ f32 radiusSum;
     /* 0x00C */ s32 sight;            /* (m) bit 0: the stage blocks the line between the fighters */
-    /* 0x010 */ AiActSide side[2];    /* (m) */
+    /* 0x010 */ AiActSide side[AITH_SIDES];    /* (m) */
     /* 0xA50 */ s32 frame;
     /* 0xA54 */ s32 flags;
     /* 0xA58 */ u8 padA58[8];
