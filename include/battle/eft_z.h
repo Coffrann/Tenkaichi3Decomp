@@ -249,8 +249,13 @@ typedef struct EftGndDustWork {
     /* 0x62B4 */ s32 count;               /* live particles */
     /* 0x62B8 */ u8 unk62B8[8];
     /* 0x62C0 */ EftGndDustArg tmpl;         /* the stage's debris dust */
+#ifdef PORT /* (the third-fighter experiment: object ids past 1; the block is allocated by its size) */
+    /* 0x6330 */ EftZTask *slide[4];      /* per fighter object id */
+    /* 0x6338 */ EftZTask *dash[4];
+#else
     /* 0x6330 */ EftZTask *slide[2];      /* per fighter object id */
     /* 0x6338 */ EftZTask *dash[2];
+#endif
 } EftGndDustWork; /* size 0x6340 */
 
 /* Stage dust record (BtlStage_GetList68). */
