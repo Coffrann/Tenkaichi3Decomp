@@ -410,6 +410,11 @@ void Port_Dbg2(const char *what, int a, int b) {
         fprintf(stderr, "bt3: dbg: %s %d %d\n", what, a, b);
     }
 }
+void Port_Dbg3(const char *what, int a, int b, int c, int d) {
+    if (getenv("BT3_HEAPCHK") != NULL) {
+        fprintf(stderr, "bt3: dbg: %s: %d %#x %#x %d\n", what, a, b, c, d);
+    }
+}
 int Port_HeapCheck(const char *where) {
     static int on = -1, said;
     PortHeapBlock *b, *prev = NULL;

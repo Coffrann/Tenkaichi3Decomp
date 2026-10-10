@@ -1447,6 +1447,21 @@ void BtlChars_UpdateMain(void) {
 
 #ifdef PORT
     Port_UpdateTarget();
+    {
+        /* (the experiment's tool, BT3_HEAPCHK: what each fighter is doing, every five seconds) */
+        extern void Port_Dbg3(const char *what, int a, int b, int c, int d);
+        extern s32 BtlAct_GetCurrent(BtlMgrChr *chr);
+        extern s32 BtlAnim_GetId(BtlMgrChr *chr);
+        extern s32 gPortTarget0;
+        static s32 n;
+        if (++n % 150 == 0) {
+            for (i = 0; i < BtlChar_GetCount(); i++) {
+                BtlMgrChr *c = BtlChar_Get(i);
+                Port_Dbg3("fighter / action / animation / frozen", i, BtlAct_GetCurrent(c), BtlAnim_GetId(c), BtlChar_IsFrozen(c));
+            }
+            Port_Dbg3("target / time stopped", gPortTarget0, BtlChars_IsTimeStopped(), 0, 0);
+        }
+    }
 #endif
     if (Battle_GetWork()->flags & BATTLE_FLAG_PAUSE) {
         return;

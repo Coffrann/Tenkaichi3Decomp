@@ -71,6 +71,14 @@ void Port_UpdateTarget(void) {
     b = BtlChar_Get(2);
     aDead = BtlChar_IsDead(a);
     bDead = BtlChar_IsDead(b);
+    /* A technique (a beam, a rush, an ultimate: actions 0x105..0x132) is between player 1 and its victim for as
+       long as it lasts, which can be far longer than the two seconds a hit holds the target: a Spirit Bomb on the
+       third fighter went back to fighter 2 half way and waited for ever on a fighter that was doing nothing
+       (seen by the user; reproduced from a recording). The target stays for the whole of it, and two seconds on. */
+    if (BtlAct_IsTechniqueId(BtlAct_GetCurrent(BtlChar_Get(0))) || BtlAct_GetCurrent(BtlChar_Get(gPortTarget0)) >= 0x133) {
+        sPortTargetHold = 120;
+        return;
+    }
     if (sPortTargetHold > 0) {
         sPortTargetHold--;
         return;
