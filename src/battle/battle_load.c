@@ -478,6 +478,7 @@ s32 BtlLoad_StepChara(BtlJob *job) {
                reset or side 2 streamed in; the third fighter's files stay as they are). */
             if (job->side == 1 && gPortThirdObj == 2 && !sPortThirdScene) {
                 BtlScene_CreateChar(gPortThirdObj);
+                BtlAiMgr_ResetSide(gPortThirdObj); /* (and its controller, as side 2's just above) */
                 sPortThirdScene = 1;
             }
 #endif

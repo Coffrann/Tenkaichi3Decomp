@@ -1,9 +1,22 @@
 #include "common.h"
+
+#ifndef AI_OTHER
+#ifdef PORT
+/* The third-fighter experiment: "the other fighter" of object id n. The AI writes it as n ^ 1 (about forty
+   places), which for the third fighter (id 2) is an object that is not there. Player 1's is its opponent of the
+   moment; anyone else's is player 1. */
+extern s32 gPortTarget0; /* btl_char_flag_opp.c: 1 without a third fighter */
+#define AI_OTHER(n) ((n) == 0 ? gPortTarget0 : 0)
+#else
+#define AI_OTHER(n) ((n) ^ 1)
+#endif
+#endif
 #include "battle/btl_ai_mgr.h"
 #include "battle/battle.h"
 #include "battle/btl_seq.h"
 #include "sys/heap.h"
 #include "sys/rand.h"
+
 
 /*
  * CPU opponent manager and the "move" action: 0x1BB128..0x1BC8A8.
@@ -107,7 +120,7 @@ void BtlAiMgr_Reset(void) {
             gBtlAi->data = NULL;
         }
     }
-    for (s = gBtlAi->work; s != &gBtlAi->work[2]; s++) {
+    for (s = gBtlAi->work; s != &gBtlAi->work[BTLAI_SIDES]; s++) {
         if (s->flags & 1) {
             if (s->param != NULL) {
                 Heap_Free(s->param);
@@ -119,6 +132,11 @@ void BtlAiMgr_Reset(void) {
     for (i = 0; i < 2; i++) {
         AiThink_ResetSide(i, 0);
     }
+#ifdef PORT
+    if (BtlChar_GetCount() >= 3) { /* (the third fighter's controller, from its fighter as the others') */
+        AiThink_ResetSide(2, 0);
+    }
+#endif
 }
 
 /* Resets one side's controller from its fighter. */
@@ -129,7 +147,7 @@ void BtlAiMgr_ResetSide(s32 side) {
 /* Allocates the manager block if needed and resets it. */
 void BtlAiMgr_Init(void) {
     if (gBtlAi == NULL) {
-        memset(gBtlAi = Heap_Alloc(0xA60, 0x20, 0, 2), 0, 0xA60);
+        memset(gBtlAi = Heap_Alloc(sizeof(BtlAi), 0x20, 0, 2), 0, sizeof(BtlAi));
     }
     BtlAiMgr_Reset();
 }
@@ -144,7 +162,7 @@ void BtlAiMgr_Term(void) {
             gBtlAi->data = NULL;
         }
     }
-    for (s = gBtlAi->work; s != &gBtlAi->work[2]; s++) {
+    for (s = gBtlAi->work; s != &gBtlAi->work[BTLAI_SIDES]; s++) {
         if (s->flags & 1) {
             if (s->param != NULL) {
                 Heap_Free(s->param);
@@ -240,6 +258,32 @@ void BtlAiMgr_UpdateSight(void) {
     }
 }
 
+#ifdef PORT
+/* BtlAiMgr_UpdateSight for the pair of fighters a and b (object ids). */
+void Port_AiMeasure(s32 ia, s32 ib) {
+    BtlAiVec a;
+    BtlAiVec b;
+    BtlAiVec d;
+    BtlAiSegment seg;
+
+    BtlCharApi_GetPos(ia, &a);
+    a.y -= BtlCharApi_GetHeight(ia) * 0.5f;
+    BtlCharApi_GetPos(ib, &b);
+    b.y -= BtlCharApi_GetHeight(ib) * 0.5f;
+    Vec3_Sub(&d, &a, &b);
+    gBtlAi->dist = Vec3_Length(&d);
+    seg.from = a;
+    seg.to = b;
+    gBtlAi->sight = 0;
+    if (StgCol_TraceSegment(&seg)) {
+        gBtlAi->sight |= BTLAI_SIGHT_BLOCKED;
+        if (StgCol_GetHit()->id != -1) {
+            gBtlAi->sight |= BTLAI_SIGHT_BLOCKED_ID;
+        }
+    }
+}
+#endif
+
 /* Returns the number of frames the AI has run. */
 s32 BtlAiMgr_GetFrame(void) {
     return gBtlAi->frame;
@@ -266,8 +310,18 @@ void BtlAiMgr_Update(void) {
     }
     BtlAiMgr_UpdateSight();
     gBtlAi->frame++;
-    for (i = 0; i < BtlChar_GetCount() && i < 2; i++) {
+    for (i = 0; i < BtlChar_GetCount() && i < BTLAI_SIDES; i++) {
         BtlAiWork *s = &gBtlAi->work[i];
+
+#ifdef PORT
+        if (BtlChar_GetCount() >= 3) {
+            /* The third-fighter experiment: the distance and the line of sight are kept once, "between the two
+               fighters". Each controller is given its own pair before it thinks: player 1 and its opponent of
+               the moment, or the fighter of side 2 and player 1. */
+            extern s32 gPortTarget0;
+            Port_AiMeasure(0, i == 0 ? gPortTarget0 : i);
+        }
+#endif
 
         if (BtlCharApi_IsInputInjected(i) && s->param != NULL) {
             BtlAiSense_Update(s);
@@ -296,7 +350,7 @@ s32 BtlAiMove_PickDir(BtlAiWork *s, s32 mode) {
     f32 rad = BtlStage_GetInnerRadius() - 100.0f;
 
     BtlCharApi_GetPos(s->objId, &pos);
-    BtlCharApi_GetPos(s->objId ^ 1, &opp);
+    BtlCharApi_GetPos(AI_OTHER(s->objId), &opp);
     list = &cand;
     list->v[0] = 0;
     if (mode == 2) {
@@ -304,7 +358,7 @@ s32 BtlAiMove_PickDir(BtlAiWork *s, s32 mode) {
             cand.v[1] = 1;
             n = 2;
         }
-        if (pos.y < BtlCharApi_GetGroundY(s->objId) - 20.0f || opp.y < BtlCharApi_GetGroundY(s->objId ^ 1) - 20.0f) {
+        if (pos.y < BtlCharApi_GetGroundY(s->objId) - 20.0f || opp.y < BtlCharApi_GetGroundY(AI_OTHER(s->objId)) - 20.0f) {
             list->v[n++] = 2;
         }
     }
@@ -354,7 +408,7 @@ void BtlAiMove_CalcTarget(BtlAiWork *s) {
 
     BtlCharApi_GetPos(s->objId, &pos);
     a = pos;
-    BtlCharApi_GetPos(s->objId ^ 1, &opp);
+    BtlCharApi_GetPos(AI_OTHER(s->objId), &opp);
     a.y = pos.y;
     Vec3_Sub(&dir, &a, &opp);
     Vec3_Normalize(&dir, &dir);
@@ -487,7 +541,7 @@ s32 BtlAiMove_Check(BtlAiWork *s) {
             m->remain = Vec3_Length(&d);
         }
         if (m->pathTimer == 0) {
-            BtlCharApi_GetPos(s->objId ^ 1, &opp);
+            BtlCharApi_GetPos(AI_OTHER(s->objId), &opp);
             Vec3_Sub(&d, &opp, (BtlAiVec *)path);
             if (50.0f < Vec3_Length(&d)) {
                 if (BtlAiMove_BuildPath(s)) {
@@ -542,7 +596,7 @@ void BtlAiMove_Steer(BtlAiWork *s, BtlAiVec *to, s32 kind) {
     cls = tbl->actClass[BtlCharApi_GetUnk974(side)];
     fly = BtlCharApi_TestFlag0F(s->objId);
     BtlCharApi_GetPos(s->objId, &pos);
-    BtlCharApi_GetPos(s->objId ^ 1, &opp);
+    BtlCharApi_GetPos(AI_OTHER(s->objId), &opp);
     dy = to->y - pos.y;
     Vec3_Sub(&d, to, &pos);
     d.y = d.w = 0.0f;
@@ -586,7 +640,7 @@ void BtlAiMove_Steer(BtlAiWork *s, BtlAiVec *to, s32 kind) {
     if (cls == 11) {
         press &= ~BTLAI_BTN_DASH;
     }
-    if (BtlCharApi_TestFlag0F(s->objId) && !BtlCharApi_TestFlag0F(s->objId ^ 1)) {
+    if (BtlCharApi_TestFlag0F(s->objId) && !BtlCharApi_TestFlag0F(AI_OTHER(s->objId))) {
         if (pos.y > opp.y) {
             hold |= BTLAI_BTN_ASCEND;
         }

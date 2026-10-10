@@ -1,6 +1,19 @@
 #include "common.h"
+
+#ifndef AI_OTHER
+#ifdef PORT
+/* The third-fighter experiment: "the other fighter" of object id n. The AI writes it as n ^ 1 (about forty
+   places), which for the third fighter (id 2) is an object that is not there. Player 1's is its opponent of the
+   moment; anyone else's is player 1. */
+extern s32 gPortTarget0; /* btl_char_flag_opp.c: 1 without a third fighter */
+#define AI_OTHER(n) ((n) == 0 ? gPortTarget0 : 0)
+#else
+#define AI_OTHER(n) ((n) ^ 1)
+#endif
+#endif
 #include "battle/btl_ai_int.h"
 #include "battle/btl_ai_seq_a.h"
+
 
 /*
  * CPU player, first object: 0x1B4140..0x1B6D50 (the former btl_ai_seq_a.c, 0x1B4140..0x1B6008, merged at
@@ -148,7 +161,7 @@ s32 BtlAiSeq_CheckStageAbort(BtlAiWork *ai, s32 id) {
     BtlAiVec pos;
 
     pose[0] = BtlCharApi_TestPoseBit80(ai->objId, 1);
-    pose[1] = BtlCharApi_TestPoseBit80(ai->objId ^ 1, 1);
+    pose[1] = BtlCharApi_TestPoseBit80(AI_OTHER(ai->objId), 1);
     BtlCharApi_GetPos(ai->objId, &pos);
     switch (id) {
     case 9:
@@ -320,7 +333,7 @@ void BtlAiSeq_PhaseRun(BtlAiWork *ai) {
     s8 cls[2];
 
     state[0] = BtlCharApi_GetUnk974(ai->objId);
-    state[1] = BtlCharApi_GetUnk974(ai->objId ^ 1);
+    state[1] = BtlCharApi_GetUnk974(AI_OTHER(ai->objId));
     cls[0] = body->stateClass[state[0]];
     cls[1] = body->stateClass[state[1]];
     step = &step[seq->step];
@@ -886,6 +899,7 @@ s32 BtlAiStep_ReachClass(BtlAiWork *ai) {
     return cls == step->cls;
 }
 
+
 /* Step handler 1 (ki charge): finished when ki has reached the step parameter in percent of 100000 (101: when
  * the powered-up mode is on), or as soon as BtlAiSense_IsBehindOpponent is true for the opponent's side, i.e. this
  * fighter is turned away from the opponent. */
@@ -894,7 +908,7 @@ s32 BtlAiStep_ChargeKi(BtlAiWork *ai) {
     s32 ki = BtlSide_GetKi(ai->objId);
     s32 want = (f32)seq->timer / 100.0f * 100000.0f;
 
-    if (BtlAiSense_IsBehindOpponent(&gBtlAi->work[ai->objId ^ 1]) != 0) {
+    if (BtlAiSense_IsBehindOpponent(&gBtlAi->work[AI_OTHER(ai->objId)]) != 0) {
         return 1;
     }
     if (seq->timer == 101) {
@@ -1022,9 +1036,9 @@ s32 BtlAiStep_Charged(BtlAiWork *ai) {
 s32 BtlAiStep_GuardUntilSafe(BtlAiWork *ai) {
     BtlAiSeqA *seq = SEQA(ai);
     BtlAiSeqActTable *act = AI_DATA->act;
-    s32 state = BtlCharApi_GetUnk974(ai->objId ^ 1);
+    s32 state = BtlCharApi_GetUnk974(AI_OTHER(ai->objId));
     s8 cls = act->body.stateClass[state];
-    s32 attacking = BtlCharApi_CheckUnkCAC(ai->objId ^ 1);
+    s32 attacking = BtlCharApi_CheckUnkCAC(AI_OTHER(ai->objId));
     s32 passing = BtlCharApi_IsBlastPassing(ai->objId);
     BtlAiSeqEntry *top = &SEQ_TOP(seq);
     u8 flags = act->body.stateFlags[state];
@@ -1063,8 +1077,8 @@ s32 BtlAiStep_GuardUntilSafe(BtlAiWork *ai) {
  * state has flag bit 1. With no attack at all it ends when the step parameter has been counted below 0. */
 s32 BtlAiStep_GuardCountdown(BtlAiWork *ai) {
     BtlAiSeqA *seq = SEQA(ai);
-    u8 flags = AI_DATA->act->body.stateFlags[BtlCharApi_GetUnk974(ai->objId ^ 1)];
-    s32 attacking = BtlCharApi_CheckUnkCAC(ai->objId ^ 1);
+    u8 flags = AI_DATA->act->body.stateFlags[BtlCharApi_GetUnk974(AI_OTHER(ai->objId))];
+    s32 attacking = BtlCharApi_CheckUnkCAC(AI_OTHER(ai->objId));
 
     if (flags & 2) {
         return 0;
@@ -1124,7 +1138,7 @@ s32 BtlAiStep_FacingOpponent(BtlAiWork *ai) {
     seq->dirZ = face.z;
     seq->dirX = face.x;
     BtlCharApi_GetPos(ai->objId, &pos);
-    BtlCharApi_GetPos(ai->objId ^ 1, &opp);
+    BtlCharApi_GetPos(AI_OTHER(ai->objId), &opp);
     Vec3_Sub(&rot, &opp, &pos);
     rot.y = 0.0f;
     Vec3_Normalize(&dir, &rot);
@@ -1175,13 +1189,13 @@ s32 BtlAiStep_Unk14(BtlAiWork *ai) {
         a = BtlAi_ScaleByLevel(ai->level, lo[4], hi[4]);
         b = BtlAi_ScaleByLevel(ai->level, lo[3], hi[3]);
         val[0] = BtlCharApi_GetClashCountB(ai->objId);
-        val[1] = BtlCharApi_GetClashCountB(ai->objId ^ 1);
+        val[1] = BtlCharApi_GetClashCountB(AI_OTHER(ai->objId));
         break;
     case 2:
         a = BtlAi_ScaleByLevel(ai->level, lo[6], hi[6]);
         b = BtlAi_ScaleByLevel(ai->level, lo[5], hi[5]);
         val[0] = BtlCharApi_GetClashCountA(ai->objId);
-        val[1] = BtlCharApi_GetClashCountA(ai->objId ^ 1);
+        val[1] = BtlCharApi_GetClashCountA(AI_OTHER(ai->objId));
         break;
     default:
         return 1;
@@ -1289,7 +1303,7 @@ s32 BtlAiStep_FireSkill(BtlAiWork *ai) {
         return 1;
     }
     action[0] = BtlCharApi_GetUnk974(ai->objId);
-    action[1] = BtlCharApi_GetUnk974(ai->objId ^ 1);
+    action[1] = BtlCharApi_GetUnk974(AI_OTHER(ai->objId));
     tbl = (BtlAiActBody *)((u8 *)act + 8);
     cls[0] = tbl->actClass[action[0]];
     cls[1] = tbl->actClass[action[1]];

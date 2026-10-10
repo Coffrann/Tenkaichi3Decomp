@@ -329,6 +329,14 @@ void BtlChar_Reset(BtlMgrChr *chr) {
     BtlInput_Init(chr);
     BtlAct_ClearQueue(chr);
     chr->injectOn = BattleSide_IsCpu(side);
+#ifdef PORT
+    {
+        extern int Port_ThirdAi(void); /* port/src/plat_stub.c: BT3_THIRD_AI, 1 unless set to 0 */
+        if (side >= 2) { /* (the experiment's third fighter is the computer's, whoever has side 2) */
+            chr->injectOn = Port_ThirdAi();
+        }
+    }
+#endif
     BtlChar_PlaceAtStart(chr);
     BtlReplay_Rewind(chr);
     BtlChar_ResetLook(chr);

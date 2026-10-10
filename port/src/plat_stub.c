@@ -443,6 +443,9 @@ int Port_ThirdFighter(void) {
     }
     return id;
 }
+int Port_ThirdAi(void) {
+    return !(getenv("BT3_THIRD_AI") != NULL && atoi(getenv("BT3_THIRD_AI")) == 0);
+}
 int Port_IsWide(void) {
     return Port_AspectMilli() > 1340;
 }
