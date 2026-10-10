@@ -386,6 +386,15 @@ int Port_AspectMilli(void) {
 void Port_SetAspectMilli(int milli) {
     sAspectMilli = milli < 1333 ? 1333 : milli > 4000 ? 4000 : milli;
 }
+/* BT3_THIRD=<character id> (an experiment, src/battle/btl_char_fx_c.c): a third body in a fight. -1 = not asked. */
+int Port_ThirdChara(void) {
+    static int id = -2;
+    if (id == -2) {
+        id = getenv("BT3_THIRD") != NULL ? atoi(getenv("BT3_THIRD")) : -1;
+        if (id > 160) { id = -1; }
+    }
+    return id;
+}
 int Port_IsWide(void) {
     return Port_AspectMilli() > 1340;
 }

@@ -703,16 +703,88 @@ void BtlPartner_Release(FxChr *chr) {
 }
 
 /* Manager pass (stage 6): puts the partner on the fighter and runs its animation and pose passes. */
+#ifdef PORT
+/* AN EXPERIMENT (BT3_THIRD=<character id>): a third body in an ordinary fight, to see what loading and drawing one
+   costs. The game's own way of putting an extra body on the field is used, the partner of a fusion: a request for
+   an object, which the loader serves into a spare model buffer, attached to player 1's fighter. It stands beside
+   that fighter and plays one of its model's own animations. It is a body only: no fighter of its own (no state
+   machine, no hits, no input). */
+extern int Port_ThirdChara(void); /* port/src/plat_stub.c: BT3_THIRD, or -1 */
+extern void BtlChange_RequestObject(s32 player, s32 id, s32 costume, s32 variant, s32 slot);
+extern s32 BtlChange_IsLoadedFor(s32 player);
+extern void BtlChange_SetReady(s32 player);
+extern void BtlChange_SetDone(s32 player);
+void BtlPartner_PlayAnim(FxChr *chr, s32 anim);
+s32 BtlPartner_StepAnim(FxChr *chr);
+static s32 sThirdState, sThirdWait;
+static void Port_ThirdBody(FxChr *chr) {
+    FxPartner *p = &chr->partner;
+    s32 chara = Port_ThirdChara();
+
+    if (chara < 0 || chr->player != 1) {
+        return;
+    }
+    if (sThirdState == 3 && !p->active) { /* (a new fight released it) */
+        sThirdState = 0;
+        sThirdWait = 0;
+    }
+    switch (sThirdState) {
+    case 0:
+        if (++sThirdWait > 90) {
+            BtlChange_RequestObject(1, chara, 0, 0, 2);
+            sThirdState = 1;
+        }
+        break;
+    case 1:
+        if (BtlChange_IsLoadedFor(1)) {
+            BtlChange_SetReady(1);
+            sThirdState = 2;
+        }
+        break;
+    case 2:
+        if (p->active) {
+            BtlChange_SetDone(1);
+            BtlPartner_PlayAnim(chr, 0x1A2);
+            sThirdState = 3;
+        }
+        break;
+    case 3:
+        if (BtlPartner_StepAnim(chr)) {
+            BtlPartner_PlayAnim(chr, 0x1A2); /* (again from its start) */
+        }
+        break;
+    }
+    if (sThirdState == 3 && p->active) {
+        /* (a partner is shown and hidden by events of its animation, and a model without that animation stays
+           hidden: shown here whatever it does) */
+        FxObj *body = BtlObj_Get(p->objId);
+        if (body != NULL) {
+            body->flags |= 2;
+        }
+    }
+}
+#endif
+
 void BtlPartner_Update(FxChr *chr) {
     FxPartner *p = &chr->partner;
     FxObj *obj;
     FxObj *partner;
     Vec4 *pos;
 
+#ifdef PORT
+    Port_ThirdBody(chr);
+#endif
     if (p->active) {
         obj = BtlChar_GetObj(chr);
         pos = &obj->pos;
         partner = BtlObj_Get(p->objId);
+#ifdef PORT
+        if (Port_ThirdChara() >= 0 && chr->player == 1 && sThirdState >= 2) {
+            Vec4 beside = *pos; /* (two metres to the side, not inside the fighter) */
+            beside.x += 200.0f;
+            BtlFxObj_Place(partner, &beside, &obj->rot);
+        } else
+#endif
         BtlFxObj_Place(partner, pos, &obj->rot);
         BtlObj_SaveNodePositions(partner, 0);
         BtlObjAnim_SamplePose(partner);
