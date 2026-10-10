@@ -301,6 +301,11 @@ void MapBgm_FadeOutStep(void) {
 
 /* Plays line `line` of character `chara` on voice player `voice`, from the voice set chosen in the options. */
 void Voice_PlayCharaEx(s32 voice, s32 chara, s32 line, s32 vol, s32 pan) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return;
+    }
+#endif
     s32 id;
 
     if (gSaveData->flags & SAVE_FLAG_ALT_VOICE) {
@@ -313,95 +318,190 @@ void Voice_PlayCharaEx(s32 voice, s32 chara, s32 line, s32 vol, s32 pan) {
 
 /* Plays a character voice line at full volume, centred. */
 void Voice_PlayChara(s32 voice, s32 chara, s32 line) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return;
+    }
+#endif
     Voice_PlayCharaEx(voice, chara, line, ADX_VOL_MAX, 0);
 }
 
 /* Plays file `id` on voice player `voice` (0 or 1). */
 void Voice_Play(s32 voice, s32 id, s32 vol, s32 pan) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return;
+    }
+#endif
     Adx_Play(voice + ADX_CH_VOICE0, id, vol, pan);
 }
 
 /* Plays file `id` on a voice player at full volume, centred. */
 void Voice_PlayDefault(s32 voice, s32 id) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return;
+    }
+#endif
     Voice_Play(voice, id, ADX_VOL_MAX, 0);
 }
 
 /* Starts file `id` on a voice player in the paused state. */
 void Voice_PlayPaused(s32 voice, s32 id, s32 vol, s32 pan) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return;
+    }
+#endif
     Adx_PlayPaused(voice + ADX_CH_VOICE0, id, vol, pan);
 }
 
 /* Starts file `id` paused on a voice player at full volume, centred. */
 void Voice_PlayPausedDefault(s32 voice, s32 id) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return;
+    }
+#endif
     Voice_PlayPaused(voice, id, ADX_VOL_MAX, 0);
 }
 
 /* Takes a voice player out of pause. */
 void Voice_Resume(s32 voice) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return;
+    }
+#endif
     Adx_Resume(voice + ADX_CH_VOICE0);
 }
 
 /* Stops a voice player. */
 void Voice_Stop(s32 voice) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return;
+    }
+#endif
     Adx_Stop(voice + ADX_CH_VOICE0);
 }
 
 /* ADXT status of a voice player. */
 s32 Voice_GetStat(s32 voice) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return 0;
+    }
+#endif
     return Adx_GetStat(voice + ADX_CH_VOICE0);
 }
 
 /* Returns 1 when a voice player is stopped or finished. */
 s32 Voice_IsStopped(s32 voice) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return 1;
+    }
+#endif
     return Adx_IsStopped(voice + ADX_CH_VOICE0);
 }
 
 /* One fade-out step of a voice player. */
 void Voice_FadeOutStep(s32 voice) {
+#ifdef PORT /* (the third-fighter experiment: there is a voice player for each of two fighters) */
+    if (voice >= 2) {
+        return;
+    }
+#endif
     Adx_FadeOutStep(voice + ADX_CH_VOICE0);
 }
 
 /* Plays file `id` on streamed-SE player `se` (0 or 1). */
 void StreamSe_Play(s32 se, s32 id, s32 vol, s32 pan) {
+#ifdef PORT /* (the third-fighter experiment: a stream player for each of two fighters) */
+    if (se >= 2) {
+        return;
+    }
+#endif
     Adx_Play(se + ADX_CH_SE0, id, vol, pan);
 }
 
 /* Plays file `id` on a streamed-SE player at volume 0x40, centred. */
 void StreamSe_PlayDefault(s32 se, s32 id) {
+#ifdef PORT /* (the third-fighter experiment: a stream player for each of two fighters) */
+    if (se >= 2) {
+        return;
+    }
+#endif
     StreamSe_Play(se, id, 0x40, 0);
 }
 
 /* Starts file `id` on a streamed-SE player in the paused state. */
 void StreamSe_PlayPaused(s32 se, s32 id, s32 vol, s32 pan) {
+#ifdef PORT /* (the third-fighter experiment: a stream player for each of two fighters) */
+    if (se >= 2) {
+        return;
+    }
+#endif
     Adx_PlayPaused(se + ADX_CH_SE0, id, vol, pan);
 }
 
 /* Starts file `id` paused on a streamed-SE player at volume 0x40, centred. */
 void StreamSe_PlayPausedDefault(s32 se, s32 id) {
+#ifdef PORT /* (the third-fighter experiment: a stream player for each of two fighters) */
+    if (se >= 2) {
+        return;
+    }
+#endif
     StreamSe_PlayPaused(se, id, 0x40, 0);
 }
 
 /* Takes a streamed-SE player out of pause. */
 void StreamSe_Resume(s32 se) {
+#ifdef PORT /* (the third-fighter experiment: a stream player for each of two fighters) */
+    if (se >= 2) {
+        return;
+    }
+#endif
     Adx_Resume(se + ADX_CH_SE0);
 }
 
 /* Stops a streamed-SE player. */
 void StreamSe_Stop(s32 se) {
+#ifdef PORT /* (the third-fighter experiment: a stream player for each of two fighters) */
+    if (se >= 2) {
+        return;
+    }
+#endif
     Adx_Stop(se + ADX_CH_SE0);
 }
 
 /* ADXT status of a streamed-SE player. */
 s32 StreamSe_GetStat(s32 se) {
+#ifdef PORT /* (the third-fighter experiment: a stream player for each of two fighters) */
+    if (se >= 2) {
+        return 0;
+    }
+#endif
     return Adx_GetStat(se + ADX_CH_SE0);
 }
 
 /* Returns 1 when a streamed-SE player is stopped or finished. */
 s32 StreamSe_IsStopped(s32 se) {
+#ifdef PORT /* (the third-fighter experiment: a stream player for each of two fighters) */
+    if (se >= 2) {
+        return 1;
+    }
+#endif
     return Adx_IsStopped(se + ADX_CH_SE0);
 }
 
 /* One fade-out step of a streamed-SE player. */
 void StreamSe_FadeOutStep(s32 se) {
+#ifdef PORT /* (the third-fighter experiment: a stream player for each of two fighters) */
+    if (se >= 2) {
+        return;
+    }
+#endif
     Adx_FadeOutStep(se + ADX_CH_SE0);
 }
