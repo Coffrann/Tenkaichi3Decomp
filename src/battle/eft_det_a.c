@@ -976,6 +976,31 @@ void EftDet_FighterPass(void) {
             } else {
                 obj = BtlObj_Get(BattleSide_GetObjId(1));
             }
+#ifdef PORT
+            {
+                /* The third-fighter experiment. A shot is tested against "the other fighter" (its owner's id with
+                   the low bit turned). With a third fighter (object 2, of side 2): a shot of side 2's is for
+                   player 1; a shot of player 1's is tried on the fighter it is aimed at and, if it misses that
+                   one, on the other of side 2 (beams went through the third fighter: seen by the user). */
+                extern s32 Port_FighterObjId(s32 i); /* btl_char_mgr.c */
+                extern s32 gPortTarget0;             /* btl_char_flag_opp.c */
+                if (Port_FighterObjId(2) >= 0) {
+                    if (list->rec[i].objId != BattleSide_GetObjId(0)) {
+                        target = BattleSide_GetObjId(0);
+                        obj = BtlObj_Get(target);
+                    } else {
+                        s32 who = gPortTarget0; /* (a roster index; `target` is an object id) */
+                        target = Port_FighterObjId(who);
+                        obj = BtlObj_Get(target);
+                        if (!test[list->rec[i].shape.type](obj, &rec->shape)) {
+                            who = who == 1 ? 2 : 1;
+                            target = Port_FighterObjId(who);
+                            obj = BtlObj_Get(target);
+                        }
+                    }
+                }
+            }
+#endif
             if (test[list->rec[i].shape.type](obj, &rec->shape)) {
                 ok = 0;
                 if (!(list->rec[i].shape.hitFlags & EFT_DET_HIT_STAGE) ||
