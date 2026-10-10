@@ -366,6 +366,18 @@ void BtlCam_UpdateView(s32 side) {
     if (Battle_IsSplitScreen()) {
         BtlCam_SetLayout(1, 0);
     }
+#ifdef PORT
+    {
+        /* The third-fighter experiment: a view shows its side's fighter, and the screen goes to the view whose
+           camera asks for it (a technique's cut-in, where everyone else is hidden). The third fighter had no
+           view to ask through: the screen stayed on a hidden player 1. Side 2's view is the third's while the
+           third's camera asks and side 2's own does not. */
+        extern s32 gPortThirdObj;
+        if (side == 1 && gPortThirdObj == 2 && BtlCharApi_HasCamPriority(2) > BtlCharApi_HasCamPriority(objId)) {
+            objId = 2;
+        }
+    }
+#endif
     BtlCharApi_GetCamPose(objId, &view->pos, &view->rot);
     view->priority = BtlCharApi_HasCamPriority(objId);
     BtlCam_BuildView(view, 1);

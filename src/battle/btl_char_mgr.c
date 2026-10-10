@@ -580,7 +580,11 @@ void BtlChar_ResetObjWork(BtlMgrChr *chr) {
 
 /* Decides which fighters are frozen (hit-stop) and counts the freeze timers down. */
 void BtlChars_UpdateFreeze(void) {
+#ifdef PORT
+    s32 level[4]; /* (the third-fighter experiment: one per fighter; the third's was written past the two) */
+#else
     s32 level[2];
+#endif
     s32 i;
     s32 max;
     u8 *bytes;
