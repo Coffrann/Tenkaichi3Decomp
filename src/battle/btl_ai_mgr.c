@@ -3,10 +3,9 @@
 #ifndef AI_OTHER
 #ifdef PORT
 /* The third-fighter experiment: "the other fighter" of object id n. The AI writes it as n ^ 1 (about forty
-   places), which for the third fighter (id 2) is an object that is not there. Player 1's is its opponent of the
-   moment; anyone else's is player 1. */
-extern s32 gPortTarget0; /* btl_char_flag_opp.c: 1 without a third fighter */
-#define AI_OTHER(n) ((n) == 0 ? gPortTarget0 : 0)
+   places), which for the third fighter (id 2) is an object that is not there. It is the fighter's target (btl_char_flag_opp.c). */
+extern s32 gPortTarget[]; /* btl_char_flag_opp.c: 1 without a third fighter */
+#define AI_OTHER(n) (gPortTarget[n])
 #else
 #define AI_OTHER(n) ((n) ^ 1)
 #endif
@@ -318,8 +317,8 @@ void BtlAiMgr_Update(void) {
             /* The third-fighter experiment: the distance and the line of sight are kept once, "between the two
                fighters". Each controller is given its own pair before it thinks: player 1 and its opponent of
                the moment, or the fighter of side 2 and player 1. */
-            extern s32 gPortTarget0;
-            Port_AiMeasure(0, i == 0 ? gPortTarget0 : i);
+            extern s32 gPortTarget[];
+            Port_AiMeasure(i, gPortTarget[i]);
         }
 #endif
 

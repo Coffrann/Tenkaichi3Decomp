@@ -186,17 +186,21 @@ void BtlChars_UpdateSightFlag(void) {
            punch him near cliffs", seen by the user). Player 1's line is to its opponent of the moment; the other
            fighter of side 2 has a line of its own to player 1. */
         extern s32 BtlChar_GetCount(void);
-        extern s32 gPortTarget0; /* btl_char_flag_opp.c */
+        extern s32 gPortTarget[]; /* btl_char_flag_opp.c */
         if (BtlChar_GetCount() >= 3) {
-            BtlFlagChr *other = BtlChar_Get(gPortTarget0 == 1 ? 2 : 1);
-            chr1 = BtlChar_Get(gPortTarget0);
-            BtlChar_ClearFlag(other, 0xBA);
-            BtlCharApi_GetNodePos(chr0->objId, 0x2F, &a);
-            BtlCharApi_GetNodePos(other->objId, 0x2F, &b);
-            ColSeg_Set(seg, &a, &b);
-            if (StgCol_TraceSegment(seg)) {
-                BtlChar_SetHeldFlag(other, 0xBA);
+            /* (Teams: each fighter's line is to its own target.) */
+            s32 k;
+            for (k = 0; k < BtlChar_GetCount(); k++) {
+                BtlFlagChr *c = BtlChar_Get(k);
+                BtlChar_ClearFlag(c, 0xBA);
+                BtlCharApi_GetNodePos(c->objId, 0x2F, &a);
+                BtlCharApi_GetNodePos(BtlChar_Get(gPortTarget[k])->objId, 0x2F, &b);
+                ColSeg_Set(seg, &a, &b);
+                if (StgCol_TraceSegment(seg)) {
+                    BtlChar_SetHeldFlag(c, 0xBA);
+                }
             }
+            return;
         }
     }
 #endif

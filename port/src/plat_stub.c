@@ -447,6 +447,10 @@ int Port_ThirdLevel(void) {
     int v = getenv("BT3_THIRD_LEVEL") != NULL ? atoi(getenv("BT3_THIRD_LEVEL")) : -1;
     return v > 29 ? 29 : v;
 }
+int Port_ThirdTeam(void) { /* BT3_THIRD_TEAM: 1 with player 2 (default), 0 with player 1, 2 on its own */
+    int v = getenv("BT3_THIRD_TEAM") != NULL ? atoi(getenv("BT3_THIRD_TEAM")) : 1;
+    return v < 0 || v > 2 ? 1 : v;
+}
 int Port_ThirdAi(void) {
     return !(getenv("BT3_THIRD_AI") != NULL && atoi(getenv("BT3_THIRD_AI")) == 0);
 }

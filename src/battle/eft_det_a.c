@@ -724,12 +724,18 @@ void BtlBodyHit_Update(void) {
            The test marks WHICH object was touched (a bit for each object id), so nothing else has to change
            here. */
         extern s32 Port_FighterObjId(s32 i); /* btl_char_mgr.c */
+        extern s32 BtlChar_GetCount(void);
         s32 third = Port_FighterObjId(2);
         if (third >= 0) {
-            a = BtlObj_Get(BattleSide_GetObjId(0));
-            BtlBodyHit_Test(a, BtlObj_Get(third));
-            a = BtlObj_Get(third);
-            BtlBodyHit_Test(a, BtlObj_Get(BattleSide_GetObjId(0)));
+            /* (Every pair with the third, friends too: bodies do not pass through each other, and whether a
+               touch is a HIT is decided by who the attacker's enemies are, in BtlHit_TestHit.) */
+            s32 k;
+            for (k = 0; k < 2; k++) {
+                a = BtlObj_Get(BattleSide_GetObjId(k));
+                BtlBodyHit_Test(a, BtlObj_Get(third));
+                a = BtlObj_Get(third);
+                BtlBodyHit_Test(a, BtlObj_Get(BattleSide_GetObjId(k)));
+            }
         }
     }
 #endif
@@ -983,19 +989,26 @@ void EftDet_FighterPass(void) {
                    player 1; a shot of player 1's is tried on the fighter it is aimed at and, if it misses that
                    one, on the other of side 2 (beams went through the third fighter: seen by the user). */
                 extern s32 Port_FighterObjId(s32 i); /* btl_char_mgr.c */
-                extern s32 gPortTarget0;             /* btl_char_flag_opp.c */
+                extern s32 gPortTarget[];             /* btl_char_flag_opp.c */
+                extern s32 Port_IsEnemy(s32 a, s32 b);
+                extern s32 BtlChar_GetCount(void);
                 if (Port_FighterObjId(2) >= 0) {
-                    if (list->rec[i].objId != BattleSide_GetObjId(0)) {
-                        target = BattleSide_GetObjId(0);
-                        obj = BtlObj_Get(target);
-                    } else {
-                        s32 who = gPortTarget0; /* (a roster index; `target` is an object id) */
-                        target = Port_FighterObjId(who);
-                        obj = BtlObj_Get(target);
-                        if (!test[list->rec[i].shape.type](obj, &rec->shape)) {
-                            who = who == 1 ? 2 : 1;
-                            target = Port_FighterObjId(who);
-                            obj = BtlObj_Get(target);
+                    /* (Teams: the shot is tried on its owner's target, then on its other enemies; never on a
+                       friend. Roster indices and object ids are the same numbers for the three.) */
+                    s32 owner = list->rec[i].objId;
+                    s32 who = (u32)owner < 4 ? gPortTarget[owner] : 0;
+                    s32 k;
+
+                    target = Port_FighterObjId(who);
+                    obj = BtlObj_Get(target);
+                    if (!test[list->rec[i].shape.type](obj, &rec->shape)) {
+                        for (k = 0; k < BtlChar_GetCount(); k++) {
+                            if (k != who && Port_IsEnemy(owner, k) &&
+                                test[list->rec[i].shape.type](BtlObj_Get(Port_FighterObjId(k)), &rec->shape)) {
+                                target = Port_FighterObjId(k);
+                                obj = BtlObj_Get(target);
+                                break;
+                            }
                         }
                     }
                 }
@@ -1010,6 +1023,15 @@ void EftDet_FighterPass(void) {
                 if (ok) {
                     list->rec[i].shape.hitFlags |= EFT_DET_HIT_FIGHTER;
                     EftHit_MarkLastHit(rec);
+#ifdef PORT
+                    {
+                        extern void Port_TargetHit(s32 attacker, s32 victim); /* btl_char_flag_opp.c */
+                        extern s32 Port_FighterObjId(s32 i);
+                        if (Port_FighterObjId(2) >= 0) { /* (teams: the pair of this hit, before it is dealt) */
+                            Port_TargetHit(list->rec[i].objId, target);
+                        }
+                    }
+#endif
                     if (BtlColl_TryDodge(target, rec)) {
                         continue;
                     }

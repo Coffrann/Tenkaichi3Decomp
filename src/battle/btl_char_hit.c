@@ -1046,21 +1046,28 @@ void BtlHit_TestHit(HitChr *chr) {
            lands on whichever fighter of side 2 it touched, the one it is aimed at first; one it is not aimed at
            is hit whatever way the attacker faces. */
         s32 other = 0;
-        if (chr->player == 0 && BtlChar_GetCount() >= 3) {
-            extern void Port_TargetHit(s32 victim); /* btl_char_flag_opp.c */
+        if (BtlChar_GetCount() >= 3) {
+            extern void Port_TargetHit(s32 attacker, s32 victim); /* btl_char_flag_opp.c */
+            extern s32 Port_IsEnemy(s32 a, s32 b);
             s32 k;
-            if (!(obj->work->unk18020 & (1 << (0x18 + opp->objId)))) {
-                for (k = 1; k < 3; k++) {
+            s32 hit = (obj->work->unk18020 & (1 << (0x18 + opp->objId))) != 0;
+            if (!hit) {
+                for (k = 0; k < BtlChar_GetCount(); k++) {
                     HitChr *c = BtlChar_Get(k);
-                    if (k != oppIdx && (obj->work->unk18020 & (1 << (0x18 + c->objId)))) {
+                    if (k != oppIdx && Port_IsEnemy(chr->player, k) && (obj->work->unk18020 & (1 << (0x18 + c->objId)))) {
                         oppIdx = k;
                         opp = c;
                         other = 1;
+                        hit = 1;
                         break;
                     }
                 }
             }
-            Port_TargetHit(oppIdx); /* (the one touched is the opponent from here on, and for a while) */
+            if (!hit && !BtlChar_TestFlag(chr, 0x65)) {
+                other = -1; /* (it touched a friend only: no hit) */
+            } else {
+                Port_TargetHit(chr->player, oppIdx); /* (the one touched is the opponent from here on, a while) */
+            }
         }
 #endif
 
@@ -1072,7 +1079,7 @@ void BtlHit_TestHit(HitChr *chr) {
         }
 #ifdef PORT
         if (other) {
-            ok = 1;
+            ok = other > 0;
         }
 #endif
         if (ok) {

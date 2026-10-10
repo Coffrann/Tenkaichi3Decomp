@@ -38,66 +38,118 @@ extern s32 BtlParam_GetUnk2(BtlFlagChr *chr);                        /* s8 at +2
 extern f32 BtlParam_GetUnkC7Scale(BtlFlagChr *chr);
 
 #ifdef PORT
-/* The experiment of a third fighter (roster index 2, of side 2). Everyone but player 1 has player 1 for an
-   opponent, as in the game. Player 1's is the nearer of the two fighters of side 2 that still stand, kept until
-   the other is clearly nearer (three quarters of the distance) so that it does not flip from frame to frame:
-   everything the game does "towards the opponent" (facing, the camera's lock, the distance rules, 230 calls)
-   follows it. Chosen once a frame (Port_UpdateTarget, from BtlChars_UpdateMain). */
+/* Teams (the third-fighter experiment, and what a team battle or a free-for-all would stand on).
+ *
+ * The game has two fighters and "the opponent" is the other one (230 BtlOpp_* calls, the AI's 48 "other
+ * fighter"s, the shots' and the punches' victim). Here every fighter has a TEAM, an enemy is a fighter of another
+ * team, and each fighter has a TARGET: the enemy everything it does "towards the opponent" is about.
+ *
+ *   Port_Team(i)          the team of roster index i: 0 for player 1, 1 for player 2, and the third fighter's is
+ *                         BT3_THIRD_TEAM: 1 (with player 2: two against one, the default), 0 (with player 1: an
+ *                         ally) or 2 (its own: a free-for-all)
+ *   Port_IsEnemy(a, b)    fighters of different teams
+ *   gPortTarget[i]        the fighter's target, chosen once a frame (Port_UpdateTarget, from BtlChars_UpdateMain):
+ *                         the nearest enemy that still stands, kept until another is clearly nearer (three
+ *                         quarters of the distance) so that it does not flip from frame to frame
+ *   Port_TargetHit(a, v)  a hit: v is a's target from here on, held for two seconds
+ *
+ * There is no friendly fire: a shot or a punch is only tried on enemies. With two fighters all of this gives
+ * the game's own answer (each one's target is the other). */
 extern s32 BtlChar_GetCount(void);
-s32 gPortTarget0 = 1;
-/* While player 1 is busy with one of them the target stays: a rush or a throw is a sequence between the attacker
-   and the fighter it hit, and the effects of it ask "the opponent" all the way through (a rush on the third
-   fighter stopped the game in EftShotTech_UpdateSubs when the target changed under it). A hit makes its victim the
-   target and holds it for two seconds (Port_TargetHit, from BtlHit_TestHit). */
-static s32 sPortTargetHold;
-void Port_TargetHit(s32 victim) {
-    if (victim == 1 || victim == 2) {
-        gPortTarget0 = victim;
-        sPortTargetHold = 120;
+extern int Port_ThirdTeam(void); /* port/src/plat_stub.c */
+#define PORT_FIGHTERS 4
+s32 gPortTarget[PORT_FIGHTERS] = { 1, 0, 0, 0 };
+static s32 sPortTargetHold[PORT_FIGHTERS];
+s32 Port_Team(s32 i) {
+    return i < 2 ? i : Port_ThirdTeam();
+}
+s32 Port_IsEnemy(s32 a, s32 b) {
+    return a != b && Port_Team(a) != Port_Team(b);
+}
+/* While a fighter is busy with one of its enemies the target stays: a rush or a throw is a sequence between the
+   attacker and the fighter it hit, and the effects of it ask "the opponent" all the way through (a rush on the
+   third fighter stopped the game in EftShotTech_UpdateSubs when the target changed under it). */
+void Port_TargetHit(s32 attacker, s32 victim) {
+    if ((u32)attacker < PORT_FIGHTERS && (u32)victim < PORT_FIGHTERS && victim < BtlChar_GetCount() &&
+        Port_IsEnemy(attacker, victim)) {
+        gPortTarget[attacker] = victim;
+        sPortTargetHold[attacker] = 120;
+        /* The victim's too: what a hit does to it is worked out against "its opponent" (which way it is thrown,
+           the pair of a rush or an ultimate), and that has to be the one who hit it. With an ally in the fight an
+           ultimate of player 1's on player 2 never ended: player 2's opponent was the ally. */
+        gPortTarget[victim] = attacker;
+        sPortTargetHold[victim] = 60;
     }
 }
 void Port_UpdateTarget(void) {
-    BtlFlagChr *me, *a, *b;
-    Vec4 d;
-    f32 da, db;
-    s32 aDead, bDead;
+    s32 count = BtlChar_GetCount();
+    s32 i, k;
 
-    if (BtlChar_GetCount() < 3) {
-        gPortTarget0 = 1;
+    if (count < 3) {
+        gPortTarget[0] = 1;
+        gPortTarget[1] = 0;
         return;
     }
-    me = BtlChar_Get(0);
-    a = BtlChar_Get(1);
-    b = BtlChar_Get(2);
-    aDead = BtlChar_IsDead(a);
-    bDead = BtlChar_IsDead(b);
-    /* A technique (a beam, a rush, an ultimate: actions 0x105..0x132) is between player 1 and its victim for as
-       long as it lasts, which can be far longer than the two seconds a hit holds the target: a Spirit Bomb on the
-       third fighter went back to fighter 2 half way and waited for ever on a fighter that was doing nothing
-       (seen by the user; reproduced from a recording). The target stays for the whole of it, and two seconds on. */
-    if (BtlAct_IsTechniqueId(BtlAct_GetCurrent(BtlChar_Get(0))) || BtlAct_GetCurrent(BtlChar_Get(gPortTarget0)) >= 0x133) {
-        sPortTargetHold = 120;
-        return;
-    }
-    if (sPortTargetHold > 0) {
-        sPortTargetHold--;
-        return;
-    }
-    if (aDead != bDead) {
-        gPortTarget0 = aDead ? 2 : 1;
-        return;
-    }
-    Vec4_Sub(&d, &BtlChar_GetPos(a)->pos, &BtlChar_GetPos(me)->pos);
-    da = Vec3_Length(&d);
-    Vec4_Sub(&d, &BtlChar_GetPos(b)->pos, &BtlChar_GetPos(me)->pos);
-    db = Vec3_Length(&d);
-    if (gPortTarget0 == 1 && db < da * 0.75f) {
-        gPortTarget0 = 2;
-    } else if (gPortTarget0 == 2 && da < db * 0.75f) {
-        gPortTarget0 = 1;
+    for (i = 0; i < count && i < PORT_FIGHTERS; i++) {
+        BtlFlagChr *me = BtlChar_Get(i);
+        s32 cur = gPortTarget[i];
+        s32 best = -1;
+        f32 bestDist = 0.0f, curDist = -1.0f;
+        Vec4 d;
+
+        if (cur >= count || !Port_IsEnemy(i, cur)) {
+            cur = -1;
+        }
+        /* A technique (a beam, a rush, an ultimate: actions 0x105..0x132) is between the fighter and its victim
+           for as long as it lasts, which can be far longer than the two seconds a hit holds the target: a Spirit
+           Bomb on the third fighter went back to fighter 2 half way (seen by the user; reproduced from a
+           recording). The target stays for the whole of it, and two seconds on. */
+        /* And a victim's reaction is ABOUT its attacker ("the opponent" all through it): a fighter in a sequence
+           as the victim (actions from 0x133 up) keeps the target the hit gave it. */
+        if (cur >= 0 && (BtlAct_IsTechniqueId(BtlAct_GetCurrent(me)) || BtlAct_GetCurrent(BtlChar_Get(cur)) >= 0x133 ||
+                         BtlAct_GetCurrent(me) >= 0x133)) {
+            sPortTargetHold[i] = 120;
+            continue;
+        }
+        if (cur >= 0 && sPortTargetHold[i] > 0) {
+            sPortTargetHold[i]--;
+            continue;
+        }
+        for (k = 0; k < count; k++) {
+            f32 dist;
+
+            if (!Port_IsEnemy(i, k) || BtlChar_IsDead(BtlChar_Get(k))) {
+                continue;
+            }
+            Vec4_Sub(&d, &BtlChar_GetPos(BtlChar_Get(k))->pos, &BtlChar_GetPos(me)->pos);
+            dist = Vec3_Length(&d);
+            if (k == cur) {
+                curDist = dist;
+            }
+            if (best < 0 || dist < bestDist) {
+                best = k;
+                bestDist = dist;
+            }
+        }
+        if (best < 0) {
+            /* No enemy stands: the one it had, or any enemy, or (a team alone) anyone else; never itself. */
+            if (cur < 0) {
+                for (k = 0; k < count; k++) {
+                    if (Port_IsEnemy(i, k)) {
+                        cur = k;
+                        break;
+                    }
+                }
+                gPortTarget[i] = cur >= 0 ? cur : (i == 0 ? 1 : 0);
+            }
+            continue;
+        }
+        if (curDist < 0.0f || bestDist < curDist * 0.75f) {
+            gPortTarget[i] = best;
+        }
     }
 }
-#define OPPONENT(chr) ((chr)->player == 0 ? BtlChar_Get(gPortTarget0) : BtlChar_Get(0))
+#define OPPONENT(chr) BtlChar_Get(gPortTarget[(chr)->player])
 #else
 #define OPPONENT(chr) ((chr)->player == 0 ? BtlChar_Get(1) : BtlChar_Get(0))
 #endif

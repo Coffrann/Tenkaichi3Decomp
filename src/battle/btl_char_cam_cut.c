@@ -9,8 +9,8 @@
 /* The third-fighter experiment: a cut is framed on the two fighters of it, which the game takes for fighters 0
    and 1. The second is player 1's opponent of the moment (the camera of a throw or an ultimate on the third
    fighter looked at the other one: seen by the user). */
-extern s32 gPortTarget0; /* btl_char_flag_opp.c: 1 without a third fighter */
-#define CUT_FIGHTER(i) BtlChar_Get((i) == 1 ? gPortTarget0 : (i))
+extern s32 gPortTarget[]; /* btl_char_flag_opp.c: 1 without a third fighter */
+#define CUT_FIGHTER(i) BtlChar_Get((i) == 1 ? gPortTarget[0] : (i))
 #else
 #define CUT_FIGHTER(i) BtlChar_Get(i)
 #endif

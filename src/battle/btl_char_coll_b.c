@@ -924,6 +924,12 @@ s32 BtlColl_StartRushCatch(BtlCollChr *chr, BtlCollChr *atk, BtlCollHit *hit, s3
     if (!BtlChar_TestFlag(atk, 3)) {
         return 0;
     }
+#ifdef PORT
+    {
+        extern void Port_Dbg3(const char *what, int a, int b, int c, int d);
+        Port_Dbg3("rush catch: victim / attacker / reaction / -", *(s32 *)chr, *(s32 *)atk, react, 0);
+    }
+#endif
     alt = (hit->flags >> 4) & 1;
     r->id = react;
     r->unk18 = 0;

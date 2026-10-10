@@ -1464,14 +1464,14 @@ void BtlChars_UpdateMain(void) {
         extern void Port_Dbg3(const char *what, int a, int b, int c, int d);
         extern s32 BtlAct_GetCurrent(BtlMgrChr *chr);
         extern s32 BtlAnim_GetId(BtlMgrChr *chr);
-        extern s32 gPortTarget0;
+        extern s32 gPortTarget[];
         static s32 n;
         if (++n % 150 == 0) {
             for (i = 0; i < BtlChar_GetCount(); i++) {
                 BtlMgrChr *c = BtlChar_Get(i);
                 Port_Dbg3("fighter / action / animation / frozen", i, BtlAct_GetCurrent(c), BtlAnim_GetId(c), BtlChar_IsFrozen(c));
             }
-            Port_Dbg3("target / time stopped", gPortTarget0, BtlChars_IsTimeStopped(), 0, 0);
+            Port_Dbg3("targets of 0, 1, 2 / time stopped", gPortTarget[0], gPortTarget[1], gPortTarget[2], BtlChars_IsTimeStopped());
         }
     }
 #endif
