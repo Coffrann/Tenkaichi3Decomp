@@ -178,6 +178,28 @@ void BtlChars_UpdateSightFlag(void) {
     BtlFlagChr *chr0 = BtlChar_Get(0);
     BtlFlagChr *chr1 = BtlChar_Get(1);
 
+#ifdef PORT
+    {
+        /* The third-fighter experiment. This is the line of sight between THE two fighters: scenery between them
+           marks both, and a marked fighter's punches are void (BtlHit_IsVoid). With a third fighter player 1 was
+           marked whenever a cliff stood between it and fighter 2, wherever the one it was punching stood ("cannot
+           punch him near cliffs", seen by the user). Player 1's line is to its opponent of the moment; the other
+           fighter of side 2 has a line of its own to player 1. */
+        extern s32 BtlChar_GetCount(void);
+        extern s32 gPortTarget0; /* btl_char_flag_opp.c */
+        if (BtlChar_GetCount() >= 3) {
+            BtlFlagChr *other = BtlChar_Get(gPortTarget0 == 1 ? 2 : 1);
+            chr1 = BtlChar_Get(gPortTarget0);
+            BtlChar_ClearFlag(other, 0xBA);
+            BtlCharApi_GetNodePos(chr0->objId, 0x2F, &a);
+            BtlCharApi_GetNodePos(other->objId, 0x2F, &b);
+            ColSeg_Set(seg, &a, &b);
+            if (StgCol_TraceSegment(seg)) {
+                BtlChar_SetHeldFlag(other, 0xBA);
+            }
+        }
+    }
+#endif
     BtlChar_ClearFlag(chr0, 0xBA);
     BtlChar_ClearFlag(chr1, 0xBA);
     BtlCharApi_GetNodePos(chr0->objId, 0x2F, &a);
