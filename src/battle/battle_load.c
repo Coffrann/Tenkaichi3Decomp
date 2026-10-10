@@ -18,6 +18,8 @@
 /* (70000: past the end of the second archive, which has 65,201 files. It was 30000, taken for free; those are
    the training mode's guide voice lines, and with n stages added the first n of them were replaced by stage
    files. Found 2026-10-08 while listing the file ids for added characters.) */
+extern int Port_ThirdFighter(void); /* port/src/plat_stub.c: the experiment of a third fighter */
+extern int gPortThirdSlot, gPortThirdObj;
 #define PORT_ADDED_STAGE_FILE(stage) (0xD48 + 70000 + ((stage) - 0x24))
 #define BTL_STAGE_MODEL(stage) ((stage) >= 0x24 ? PORT_ADDED_STAGE_FILE(stage) : (stage) + BTL_FILE_STAGE)
 #define BTL_STAGE_BANK(stage) (((stage) >= 0x24 ? 0 : (stage)) + BTL_FILE_SND_STAGE)
@@ -534,6 +536,15 @@ s32 BtlLoad_StepInitial(BtlJob *job) {
     case 4:
         BattleSide_SetModelSlot(0, BtlObj_RequestCharaModel(0, BattleSide_GetStartChara(0), BattleSide_GetStartCostume(0), BattleSide_GetStartVariant(0)));
         BattleSide_SetModelSlot(1, BtlObj_RequestCharaModel(1, BattleSide_GetStartChara(1), BattleSide_GetStartCostume(1), BattleSide_GetStartVariant(1)));
+#ifdef PORT
+        /* The experiment's third fighter: its model and its two animation files into a slot of the heap's (the
+           two fixed slots are the sides'), read with the rest of this step. */
+        gPortThirdSlot = gPortThirdObj = -1;
+        if (Port_ThirdFighter() >= 0) {
+            s32 c = Port_ThirdFighter();
+            gPortThirdSlot = BtlRes_Request(0, c * 10 + 0x590, c * 10 + 0x598, c * 10 + 0x599);
+        }
+#endif
 #ifdef PORT
         {
             /* PC build: the buffer is the game's own size unless a stage added from outside the disc is larger
@@ -1057,6 +1068,12 @@ void ItemSet_GetStats(BattleItemSet *items, s32 *stats, s32 *ability, s32 chara)
  */
 static inline BattleSide *Side(s32 n) {
     BattleSetup *setup = SETUP();
+
+#ifdef PORT /* (the experiment's third fighter, roster index 2, is of side 1: its team, its pad, its rules) */
+    if (n >= 2) {
+        n = 1;
+    }
+#endif
 
     return &setup->sides[n];
 }

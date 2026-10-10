@@ -28,6 +28,11 @@ extern s32 gBtlReplayHudMode;
 void BtlReplay_Rewind(BtlReplayChr *chr) {
     BtlReplayTrack *trk = &BattleReplay_GetData()->track[chr->player];
 
+#ifdef PORT /* (the experiment's third fighter: a replay has two tracks; it is not recorded and plays nothing) */
+    if (chr->player >= 2) {
+        return;
+    }
+#endif
     trk->pos = 0;
     if (!BattleReplay_IsActive()) {
         trk->count = 0;
@@ -39,6 +44,11 @@ void BtlReplay_Record(BtlReplayChr *chr, u32 buttons, u32 commands, u8 *stick) {
     BtlReplayTracks *data = BattleReplay_GetData();
     BtlReplayTrack *trk = &data->track[chr->player];
 
+#ifdef PORT
+    if (chr->player >= 2) {
+        return;
+    }
+#endif
     if (trk->count >= BTL_REPLAY_FRAMES) {
         data->flags |= BTL_REPLAY_END;
         return;
@@ -54,6 +64,13 @@ void BtlReplay_Play(BtlReplayChr *chr, u32 *buttons, u8 *stick) {
     BtlReplayTracks *data = BattleReplay_GetData();
     BtlReplayTrack *trk = &data->track[chr->player];
 
+#ifdef PORT
+    if (chr->player >= 2) {
+        *buttons = 0;
+        stick[1] = stick[0] = 0x7F;
+        return;
+    }
+#endif
     if (trk->pos >= trk->count) {
         data->flags |= BTL_REPLAY_END;
         *buttons = 0;

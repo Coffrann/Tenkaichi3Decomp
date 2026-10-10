@@ -241,6 +241,11 @@ void BtlCharSnd_PlayRequests(void) {
         if (BtlChar_TestMemberUnk70(chr)) {
             chara = 0x56;
         }
+#ifdef PORT /* (the experiment's third fighter: the streamed voices have a player for each of two fighters) */
+        if (owner >= 2 && req->p.kind >= 4 && req->p.kind <= 7) {
+            continue;
+        }
+#endif
         switch (req->p.kind) {
         case 4:
             BtlCharSnd_CalcVolPan(&req->pos, &vol, &pan, req->p.near, req->p.far);

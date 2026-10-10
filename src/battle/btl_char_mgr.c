@@ -245,6 +245,14 @@ void BtlChar_BindObject(BtlMgrChr *chr) {
     s32 i;
 
     chr->objId = BattleSide_GetObjId(chr->side);
+#ifdef PORT
+    {
+        extern int gPortThirdObj;
+        if (chr->side >= 2) { /* (the experiment's third fighter has an object of its own) */
+            chr->objId = gPortThirdObj;
+        }
+    }
+#endif
     obj = BtlChar_GetObj(chr);
     chr->unk980 = -1;
     for (i = 0; i < 3; i++) {
@@ -1334,6 +1342,14 @@ void BtlChar_ResetAll(void) {
         pad = BattleSide_GetPad(i);
         chr->index = i;
         chr->pad = pad;
+#ifdef PORT
+        if (i >= 2) {
+            /* The experiment's third fighter. The second number of a fighter is the VIEW it belongs to (the
+               screen's half in split screen; the screen filters, the radial blur and the like are kept per
+               view, two of them): it has no view of its own and is given its side's. */
+            chr->index = 1;
+        }
+#endif
         BtlChar_BindObject(chr);
         BtlChar_Reset(chr);
     }

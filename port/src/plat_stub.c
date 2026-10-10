@@ -395,6 +395,49 @@ int Port_ThirdChara(void) {
     }
     return id;
 }
+/* BT3_THIRD_FIGHTER=<character id> (an experiment): a third fighter of its own beside player 2's (src/battle:
+   battle.c, battle_load.c, battle_work.c, btl_char_mgr.c). -1 = not asked. gPortThirdSlot / gPortThirdObj: its
+   resource slot and battle object, set by the loader. */
+int gPortThirdSlot = -1, gPortThirdObj = -1;
+/* (the experiment's tool) Walks the game's heap and says where its chain of blocks first breaks: the block before
+   the break is the one that was written past its end. Called with a label from points of a fight's set-up and
+   frame (BT3_HEAPCHK=1); says each fault once. */
+typedef struct { uint32_t magic; int32_t used, fromTail; uint32_t align; int32_t size; uint32_t data; int32_t dataSize, unk1C; } PortHeapBlock;
+extern uint32_t gHeapStart[], gHeapEnd[]; /* (the game's pointers are 32 bits wide) */
+void Port_Dbg2(const char *what, int a, int b) {
+    static int count;
+    if (getenv("BT3_HEAPCHK") != NULL && count++ < 12) {
+        fprintf(stderr, "bt3: dbg: %s %d %d\n", what, a, b);
+    }
+}
+int Port_HeapCheck(const char *where) {
+    static int on = -1, said;
+    PortHeapBlock *b, *prev = NULL;
+    if (on < 0) { on = getenv("BT3_HEAPCHK") != NULL; }
+    if (!on || said) { return 1; }
+    for (b = (PortHeapBlock *)(uintptr_t)gHeapStart[0]; b != NULL && (uintptr_t)b != gHeapEnd[0]; b = (PortHeapBlock *)((char *)b + b->size)) {
+        if (b->magic != ((PortHeapBlock *)(uintptr_t)gHeapStart[0])->magic) { break; }
+        if (b->size < 0x20 || (uintptr_t)b + (uintptr_t)b->size > gHeapEnd[0] || *(int32_t *)((char *)b + b->size - 4) != b->size) { break; }
+        prev = b;
+    }
+    if ((uintptr_t)b == gHeapEnd[0] || b == NULL) { return 1; }
+    said = 1;
+    fprintf(stderr, "bt3: HEAP BROKEN at \"%s\": the block at %p is not a block", where, (void *)b);
+    if (prev != NULL) {
+        fprintf(stderr, "; the one before it: data %#x, %d bytes asked (block %d), used %d\n", prev->data, prev->dataSize, prev->size, prev->used);
+    } else {
+        fprintf(stderr, " (the first)\n");
+    }
+    return 0;
+}
+int Port_ThirdFighter(void) {
+    static int id = -2;
+    if (id == -2) {
+        id = getenv("BT3_THIRD_FIGHTER") != NULL ? atoi(getenv("BT3_THIRD_FIGHTER")) : -1;
+        if (id > 160) { id = -1; }
+    }
+    return id;
+}
 int Port_IsWide(void) {
     return Port_AspectMilli() > 1340;
 }

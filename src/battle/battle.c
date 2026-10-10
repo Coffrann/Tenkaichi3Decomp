@@ -133,32 +133,67 @@ extern void BtlObj_FinishVisibility(s32 split);
 extern void Gsc_Update(void);
 extern void BtlScript_Update(void);
 /* Puts every battle subsystem back to the start of a match (first start and rematch) and fades in over 1 s. */
+#ifdef PORT
+extern int Port_HeapCheck(const char *where); /* port/src/plat_stub.c (the third-fighter experiment's tool) */
+#define PORT_HEAPCHK(w) Port_HeapCheck(w)
+#else
+#define PORT_HEAPCHK(w)
+#endif
 s32 Battle_Restart(void) {
     Snd_StopBankAndResume(0x3C);
+    PORT_HEAPCHK("after Snd_StopBankAndResume");
     Battle_ResetWork();
+    PORT_HEAPCHK("after Battle_ResetWork");
     BtlScene_Reset(0);
+    PORT_HEAPCHK("after BtlScene_Reset");
     StgFx_Reset();
+    PORT_HEAPCHK("after StgFx_Reset");
     BtlGame_Reset();
+    PORT_HEAPCHK("after BtlGame_Reset");
     BtlStage_Reset();
+    PORT_HEAPCHK("after BtlStage_Reset");
     BtlChar_ResetAll();
+    PORT_HEAPCHK("after BtlChar_ResetAll");
     Fade_ResetAll();
+    PORT_HEAPCHK("after Fade_ResetAll");
     Fade_Start(0, 1, 1.0f);
+    PORT_HEAPCHK("after Fade_Start");
     return 0;
 }
 
 /* Loads the battle data, creates every battle subsystem, then starts the first match. */
 s32 Battle_Init(void) {
     Battle_Load();
+    PORT_HEAPCHK("after Battle_Load");
     StgFx_Init();
+    PORT_HEAPCHK("after StgFx_Init");
     StgModel_InitStage();
+    PORT_HEAPCHK("after StgModel_InitStage");
+#ifdef PORT
+    PORT_HEAPCHK("before BtlChar_AllocAll");
+    {
+        extern int Port_ThirdFighter(void);
+        extern int gPortThirdObj;
+        BtlChar_AllocAll(Port_ThirdFighter() >= 0 && gPortThirdObj >= 0 ? 3 : 2); /* (the experiment's third fighter) */
+    }
+#else
     BtlChar_AllocAll(2);
+    PORT_HEAPCHK("after BtlChar_AllocAll");
+#endif
     BtlAiMgr_Init();
+    PORT_HEAPCHK("after BtlAiMgr_Init");
     BtlCam_Init();
+    PORT_HEAPCHK("after BtlCam_Init");
     StgNav_Init();
+    PORT_HEAPCHK("after StgNav_Init");
     BtlGame_Init();
+    PORT_HEAPCHK("after BtlGame_Init");
     Ot_Init();
+    PORT_HEAPCHK("after Ot_Init");
     BtlScene_Init(0);
+    PORT_HEAPCHK("after BtlScene_Init");
     Battle_Restart();
+    PORT_HEAPCHK("after Battle_Restart");
     return 0;
 }
 
@@ -188,34 +223,58 @@ s32 Battle_Update(void) {
     s32 singleView;
 
     BtlChars_UpdateInput();
+
+    PORT_HEAPCHK("update: after BtlChars_UpdateInput");
     BtlChars_UpdateMain();
+    PORT_HEAPCHK("update: after BtlChars_UpdateMain");
     BtlScene_Update();
+    PORT_HEAPCHK("update: after BtlScene_Update");
     EftDet_Update();
+    PORT_HEAPCHK("update: after EftDet_Update");
     BtlScene_PostUpdate();
+    PORT_HEAPCHK("update: after BtlScene_PostUpdate");
     BtlChars_PostScene();
+    PORT_HEAPCHK("update: after BtlChars_PostScene");
     BtlScene_CheckStageChange();
+    PORT_HEAPCHK("update: after BtlScene_CheckStageChange");
     BtlLoad_PollCharaRequest();
+    PORT_HEAPCHK("update: after BtlLoad_PollCharaRequest");
     BtlLoad_PollObjectRequest();
+    PORT_HEAPCHK("update: after BtlLoad_PollObjectRequest");
     BtlStage_Update();
+    PORT_HEAPCHK("update: after BtlStage_Update");
     BtlCam_SelectView(0);
+    PORT_HEAPCHK("update: after BtlCam_SelectView");
     BtlCam_UpdateView(0);
+    PORT_HEAPCHK("update: after BtlCam_UpdateView");
     BtlCam_SelectView(1);
+    PORT_HEAPCHK("update: after BtlCam_SelectView");
     BtlCam_UpdateView(1);
+    PORT_HEAPCHK("update: after BtlCam_UpdateView");
     singleView = BtlCam_UpdateOverride();
     BtlChars_EndFrame();
+    PORT_HEAPCHK("update: after BtlChars_EndFrame");
     BtlObj_UpdateAll();
+    PORT_HEAPCHK("update: after BtlObj_UpdateAll");
     if (Battle_IsSplitScreen() && !singleView) {
         for (i = 0; i < 2; i++) {
             BtlCam_SelectView(i);
+            PORT_HEAPCHK("update: after BtlCam_SelectView");
             BtlCam_ApplyView(0);
+            PORT_HEAPCHK("update: after BtlCam_ApplyView");
             BtlObj_UpdateVisibility(i);
+            PORT_HEAPCHK("update: after BtlObj_UpdateVisibility");
         }
         BtlObj_FinishVisibility(1);
+        PORT_HEAPCHK("update: after BtlObj_FinishVisibility");
     } else {
         BtlObj_UpdateVisibility(0);
+        PORT_HEAPCHK("update: after BtlObj_UpdateVisibility");
         BtlObj_FinishVisibility(0);
+        PORT_HEAPCHK("update: after BtlObj_FinishVisibility");
     }
     BtlScene_SetSingleView(singleView);
+    PORT_HEAPCHK("update: after BtlScene_SetSingleView");
     return singleView == 0;
 }
 

@@ -105,6 +105,15 @@ s32 Battle_Load(void) {
     Load_RunBlocking();
     BattleSide_SetObjId(0, BtlObj_CreateChara(BattleSide_GetModelSlot(0)));
     BattleSide_SetObjId(1, BtlObj_CreateChara(BattleSide_GetModelSlot(1)));
+#ifdef PORT
+    {
+        extern int Port_ThirdFighter(void);
+        extern int gPortThirdSlot, gPortThirdObj;
+        if (Port_ThirdFighter() >= 0 && gPortThirdSlot >= 0) { /* (the experiment's third fighter: its object) */
+            gPortThirdObj = BtlObj_CreateChara(gPortThirdSlot);
+        }
+    }
+#endif
     return 1;
 }
 

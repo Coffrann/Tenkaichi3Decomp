@@ -1237,12 +1237,18 @@ void BtlSeq_JudgeByHealth(BattleResult *result) {
  *   file is split, the call goes through a second declaration of the same symbol. */
 extern s32 BtlSeq_TickClocksExt(void) __asm__("BtlSeq_TickClocks");
 
+#ifdef PORT
+extern void Port_Dbg2(const char *what, int a, int b); /* port/src/plat_stub.c (the experiment's tool) */
+#define PORT_ENDDBG(n) Port_Dbg2("the fight ends by rule", n, (int)result->reason)
+#else
+#define PORT_ENDDBG(n)
+#endif
 s32 BtlSeq_CheckBattleEnd(void) {
     BattleResult *result = Battle_GetResult();
     s32 timeUp;
 
     if (result->winner & 0x1F) {
-        return 1;
+        { PORT_ENDDBG(1); return 1; }
     }
     if (BtlSeq_GetEndCheckOff()) {
         return 0;
@@ -1263,37 +1269,37 @@ s32 BtlSeq_CheckBattleEnd(void) {
     if (timeUp) {
         result->reason = BTL_REASON_TIME_UP;
         BtlSeq_JudgeByHealth(result);
-        return 1;
+        { PORT_ENDDBG(2); return 1; }
     }
     if (BtlCtrl_TestFlag7(0) && BtlCtrl_TestFlag7(1)) {
         result->reason = BTL_REASON_FLAG7;
         BtlSeq_JudgeByHealth(result);
-        return 1;
+        { PORT_ENDDBG(3); return 1; }
     }
     if (BtlCtrl_TestFlag7(1)) {
         result->winner = BTL_RESULT_WIN_P1;
         result->reason = BTL_REASON_FLAG7;
-        return 1;
+        { PORT_ENDDBG(4); return 1; }
     }
     if (BtlCtrl_TestFlag7(0)) {
         result->winner = BTL_RESULT_WIN_P2;
         result->reason = BTL_REASON_FLAG7;
-        return 1;
+        { PORT_ENDDBG(5); return 1; }
     }
     if (BtlCtrl_IsTeamDead(0) && BtlCtrl_IsTeamDead(1)) {
         result->reason = BTL_REASON_KO;
         BtlSeq_JudgeByHealth(result);
-        return 1;
+        { PORT_ENDDBG(6); return 1; }
     }
     if (BtlCtrl_IsTeamDead(1)) {
         result->winner = BTL_RESULT_WIN_P1;
         result->reason = BTL_REASON_KO;
-        return 1;
+        { PORT_ENDDBG(7); return 1; }
     }
     if (BtlCtrl_IsTeamDead(0)) {
         result->winner = BTL_RESULT_WIN_P2;
         result->reason = BTL_REASON_KO;
-        return 1;
+        { PORT_ENDDBG(8); return 1; }
     }
     if (!BattleReplay_IsActive()) {
         return 0;
@@ -1303,7 +1309,7 @@ s32 BtlSeq_CheckBattleEnd(void) {
     }
     result->winner = BTL_RESULT_OTHER;
     result->reason = BTL_REASON_BIT18;
-    return 1;
+    { PORT_ENDDBG(9); return 1; }
 }
 
 /* State 3 enter: releases the fighters (clears the demo and ready flags); mode 8 shows the HUD. */
