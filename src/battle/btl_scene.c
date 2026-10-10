@@ -129,7 +129,17 @@ void BtlScene_Init(s32 layerMask) {
     if (layerMask == 0) {
         gBtlScene->layerMask = BTL_SCENE_LAYER_ALL;
     }
+#ifdef PORT
+    {
+        /* The third-fighter experiment: the effect scene keeps its per-fighter tables (the technique events, the
+           shots, the glow, the auras, the bolts: eight modules) by this count, indexed by object id. Three with
+           a third fighter, whose object is the third made (id 2). */
+        extern int gPortThirdObj;
+        BtlScene_SetCharCount(gPortThirdObj == 2 ? 3 : 2);
+    }
+#else
     BtlScene_SetCharCount(2);
+#endif
     if (Battle_IsSplitScreen()) {
         BtlScene_SetSingleView(0);
     } else {

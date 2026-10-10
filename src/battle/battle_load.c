@@ -20,6 +20,7 @@
    files. Found 2026-10-08 while listing the file ids for added characters.) */
 extern int Port_ThirdFighter(void); /* port/src/plat_stub.c: the experiment of a third fighter */
 extern int gPortThirdSlot, gPortThirdObj;
+static int sPortThirdScene; /* the third fighter's effect set exists in the scene of now */
 #define PORT_ADDED_STAGE_FILE(stage) (0xD48 + 70000 + ((stage) - 0x24))
 #define BTL_STAGE_MODEL(stage) ((stage) >= 0x24 ? PORT_ADDED_STAGE_FILE(stage) : (stage) + BTL_FILE_STAGE)
 #define BTL_STAGE_BANK(stage) (((stage) >= 0x24 ? 0 : (stage)) + BTL_FILE_SND_STAGE)
@@ -472,6 +473,14 @@ s32 BtlLoad_StepChara(BtlJob *job) {
         if (job->modelOnly == 0) {
             BtlAiMgr_ResetSide(job->side);
             BtlScene_CreateChar(job->side);
+#ifdef PORT
+            /* The third-fighter experiment: its effect set is made when side 2's is (the scene has just been
+               reset or side 2 streamed in; the third fighter's files stay as they are). */
+            if (job->side == 1 && gPortThirdObj == 2 && !sPortThirdScene) {
+                BtlScene_CreateChar(gPortThirdObj);
+                sPortThirdScene = 1;
+            }
+#endif
             if (!BtlCtrl_IsSwitching(job->side)) {
                 m = BattleSide_GetMember(job->side, BtlSide_GetActiveMember(job->side));
                 if (m != NULL) {
@@ -540,6 +549,7 @@ s32 BtlLoad_StepInitial(BtlJob *job) {
         /* The experiment's third fighter: its model and its two animation files into a slot of the heap's (the
            two fixed slots are the sides'), read with the rest of this step. */
         gPortThirdSlot = gPortThirdObj = -1;
+        sPortThirdScene = 0;
         if (Port_ThirdFighter() >= 0) {
             s32 c = Port_ThirdFighter();
             gPortThirdSlot = BtlRes_Request(0, c * 10 + 0x590, c * 10 + 0x598, c * 10 + 0x599);
@@ -794,6 +804,12 @@ void BtlLoad_Reload(void) {
             job->modelOnly = 0;
             job->initial = 1;
             BtlScene_FreeChar(side);
+#ifdef PORT
+            if (side == 1 && gPortThirdObj == 2 && sPortThirdScene) { /* (the third fighter's set goes and comes with side 2's) */
+                BtlScene_FreeChar(gPortThirdObj);
+                sPortThirdScene = 0;
+            }
+#endif
             Job_Push((Job *)job);
         } else {
             BtlObj_Rebind(BattleSide_GetObjId(side), BattleSide_GetModelSlot(side));
