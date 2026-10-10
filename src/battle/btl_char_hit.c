@@ -1047,6 +1047,7 @@ void BtlHit_TestHit(HitChr *chr) {
            is hit whatever way the attacker faces. */
         s32 other = 0;
         if (chr->player == 0 && BtlChar_GetCount() >= 3) {
+            extern void Port_TargetHit(s32 victim); /* btl_char_flag_opp.c */
             s32 k;
             if (!(obj->work->unk18020 & (1 << (0x18 + opp->objId)))) {
                 for (k = 1; k < 3; k++) {
@@ -1059,6 +1060,7 @@ void BtlHit_TestHit(HitChr *chr) {
                     }
                 }
             }
+            Port_TargetHit(oppIdx); /* (the one touched is the opponent from here on, and for a while) */
         }
 #endif
 

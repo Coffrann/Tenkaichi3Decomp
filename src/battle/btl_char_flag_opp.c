@@ -45,6 +45,17 @@ extern f32 BtlParam_GetUnkC7Scale(BtlFlagChr *chr);
    follows it. Chosen once a frame (Port_UpdateTarget, from BtlChars_UpdateMain). */
 extern s32 BtlChar_GetCount(void);
 s32 gPortTarget0 = 1;
+/* While player 1 is busy with one of them the target stays: a rush or a throw is a sequence between the attacker
+   and the fighter it hit, and the effects of it ask "the opponent" all the way through (a rush on the third
+   fighter stopped the game in EftShotTech_UpdateSubs when the target changed under it). A hit makes its victim the
+   target and holds it for two seconds (Port_TargetHit, from BtlHit_TestHit). */
+static s32 sPortTargetHold;
+void Port_TargetHit(s32 victim) {
+    if (victim == 1 || victim == 2) {
+        gPortTarget0 = victim;
+        sPortTargetHold = 120;
+    }
+}
 void Port_UpdateTarget(void) {
     BtlFlagChr *me, *a, *b;
     Vec4 d;
@@ -60,6 +71,10 @@ void Port_UpdateTarget(void) {
     b = BtlChar_Get(2);
     aDead = BtlChar_IsDead(a);
     bDead = BtlChar_IsDead(b);
+    if (sPortTargetHold > 0) {
+        sPortTargetHold--;
+        return;
+    }
     if (aDead != bDead) {
         gPortTarget0 = aDead ? 2 : 1;
         return;
