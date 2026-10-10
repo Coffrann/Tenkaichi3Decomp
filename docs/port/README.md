@@ -1376,3 +1376,34 @@ Windows program through the session on Vulkan under Wine (fight values as always
 Not done, in the order of what is left in the profile (Vulkan): the per-pixel loop that writes an uploaded
 texture into GS memory (`Gs_Gif`, 7%); `draw_state` (4%); `feclearexcept` in libm, 2%, caller not found; the copy
 of the vertices into the transfer buffer could be saved by recording straight into it.
+
+## Is the data the original disc's? (2026-10-10)
+
+- Why: a report of a broken skeleton turned out to come from a modified disc image (a romhack), which nothing on
+  the screen said. The installer checks the two programs only; modified DATA installs and runs.
+- `port/src/plat_verify.c`: at start a background thread compares every data file (the three archives' 68,601
+  entries and the four streams of DATA/) with `port/src/plat_verify_tab.h` (size and CRC-32 of the original's,
+  made by `port/tools/make_verify.py <disc image>`; checksums only). A file in `<root>/mods/` counts as replaced.
+  When something differs: a log line with the numbers and the first four names, the window title becomes
+  `Tenkaichi3Decomp [modified game data]`, the notice line is shown once, and a crash report carries the line.
+- The result is kept in `<root>/.verified` with a signature of every file's size and time; a later start only
+  looks at those. Measured here: under 4 s for the full pass (files in the system's cache), under 1 s after.
+- A quick pass first: sizes only, no reading. A replaced, missing or resized file is reported at once ("at least
+  N files") and nothing is read; a romhack's data stopped the game in its first seconds, before the full pass
+  would have ended. A crash report written while the check runs says "not checked yet".
+- Texture packs, added songs, stages and characters are outside the data folder and do not count.
+- `BT3_VERIFY=0` turns it off; without a window (`BT3_GS=none`) it runs only with `BT3_VERIFY=1`.
+- Checked: the original data (clean); a copy with one byte changed in a file, another file longer and a third
+  missing (3 of 68,605 named, both on the full pass and from the cache); the replay check unchanged. NOT seen:
+  the title and the notice on a real window (screenshots of the offscreen renderer are taken under the overlay).
+
+## In-between pictures: a shiny model's reflection flickered (2026-10-11)
+
+- Seen by the user on characters with a reflection (Perfect Cell's black parts) with "interp" on; reproduced from
+  a pad recording in the offscreen renderer, pictures written one by one (`BT3_SHOT=1`).
+- The reflection is program 1's layer 1 (`misc.w == 5`), drawn over the same triangles as layer 0. In
+  `interp_build` layers 0 and 1 got `interp_bone` (axes given back their length, the place moved around the
+  camera) and every other layer the plain average of the matrices, so in the in-between pictures the reflection's
+  triangles were not where the layer under them was: depth fighting, the shine there in one picture and gone or
+  in shreds in the next. Layer 5 goes through `interp_bone` now.
+- Checked: the same six consecutive pictures before and after; after, the shine is whole and the same in each.
