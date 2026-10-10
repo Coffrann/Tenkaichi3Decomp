@@ -32,7 +32,11 @@
 
 #define BTL_OBJ_MAX 12
 #define BTL_OBJ_VIEW_MAX 2
+#ifdef PORT
+#define BTL_OBJ_WORK_SIZE sizeof(BtlObjWork) /* (it holds a third fighter's work block: see charaWork) */
+#else
 #define BTL_OBJ_WORK_SIZE 0x6B740
+#endif
 
 /* BtlObj.type */
 #define BTL_OBJ_TYPE_CHARA 0 /* a fighter: gets a charaWork buffer, is drawn last in its own view */
@@ -239,7 +243,15 @@ typedef struct BtlObjTable {
     /* 0x10E00 */ List freeObjs;
     /* 0x10E0C */ List usedObjs;
     /* 0x10E18 */ u8 unk10E18[0x28];
+#ifdef PORT
+    /* The third-fighter experiment. BtlObj_GetCharaWork() hands this out to objects 0, 1 AND 2 (`id < 3`), and
+       there are two: the third fighter's work block was the memory after them, the rest of this table and the
+       pools behind it (its contacts with the stage and its hit bits live there: it could not be punched near
+       a cliff and broke no scenery). Three here; the whole block is allocated by its size (BTL_OBJ_WORK_SIZE). */
+    /* 0x10E40 */ u8 charaWork[3][0x1A0C0];
+#else
     /* 0x10E40 */ u8 charaWork[2][0x1A0C0];
+#endif
     /* 0x44FC0 */ s32 unk44FC0;
     /* 0x44FC4 */ f32 unk44FC4;
     /* 0x44FC8 */ u8 unk44FC8[0x38];
