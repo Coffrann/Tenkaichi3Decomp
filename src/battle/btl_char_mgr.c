@@ -1434,9 +1434,20 @@ void BtlChars_UpdateInput(void) {
 }
 
 /* Phase 4: the simulation proper, as seven passes over the roster. */
+#ifdef PORT
+extern void Port_UpdateTarget(void); /* btl_char_flag_opp.c: the third-fighter experiment, player 1's target */
+/* (for the code that tests fighter against fighter: the object of roster entry i, -1 past the roster) */
+s32 Port_FighterObjId(s32 i) {
+    return i >= 0 && i < BtlChar_GetCount() ? BtlChar_Get(i)->objId : -1;
+}
+#endif
+
 void BtlChars_UpdateMain(void) {
     s32 i;
 
+#ifdef PORT
+    Port_UpdateTarget();
+#endif
     if (Battle_GetWork()->flags & BATTLE_FLAG_PAUSE) {
         return;
     }

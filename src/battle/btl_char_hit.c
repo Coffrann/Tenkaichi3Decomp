@@ -1041,6 +1041,26 @@ void BtlHit_TestHit(HitChr *chr) {
         s32 ok = 0;
         s32 oppIdx = BtlOpp_GetPlayer(chr);
         HitChr *opp = BtlChar_Get(oppIdx);
+#ifdef PORT
+        /* The third-fighter experiment: who was touched is in the bits (0x18 + the object's id). Player 1's attack
+           lands on whichever fighter of side 2 it touched, the one it is aimed at first; one it is not aimed at
+           is hit whatever way the attacker faces. */
+        s32 other = 0;
+        if (chr->player == 0 && BtlChar_GetCount() >= 3) {
+            s32 k;
+            if (!(obj->work->unk18020 & (1 << (0x18 + opp->objId)))) {
+                for (k = 1; k < 3; k++) {
+                    HitChr *c = BtlChar_Get(k);
+                    if (k != oppIdx && (obj->work->unk18020 & (1 << (0x18 + c->objId)))) {
+                        oppIdx = k;
+                        opp = c;
+                        other = 1;
+                        break;
+                    }
+                }
+            }
+        }
+#endif
 
         if (__builtin_fabsf(BtlOpp_GetYawFromFacing(chr)) < 1.5707963f) {
             ok = 1;
@@ -1048,6 +1068,11 @@ void BtlHit_TestHit(HitChr *chr) {
         if (BtlAtk_GetFlags(chr) & 8) {
             ok = 1;
         }
+#ifdef PORT
+        if (other) {
+            ok = 1;
+        }
+#endif
         if (ok) {
             BtlChar_SetHeldFlag(chr, 0x60);
             if (BtlHit_IsVoid(chr, opp) || BtlHit_CheckDodge(chr, opp) || BtlHit_CheckArmor(chr, opp) ||

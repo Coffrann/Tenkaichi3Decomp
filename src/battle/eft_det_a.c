@@ -718,6 +718,21 @@ void BtlBodyHit_Update(void) {
     BtlBodyHit_Test(a, BtlObj_Get(BattleSide_GetObjId(1)));
     a = BtlObj_Get(BattleSide_GetObjId(1));
     BtlBodyHit_Test(a, BtlObj_Get(BattleSide_GetObjId(0)));
+#ifdef PORT
+    {
+        /* The experiment's third fighter (of side 2): against player 1's fighter and back, as the pair above.
+           The test marks WHICH object was touched (a bit for each object id), so nothing else has to change
+           here. */
+        extern s32 Port_FighterObjId(s32 i); /* btl_char_mgr.c */
+        s32 third = Port_FighterObjId(2);
+        if (third >= 0) {
+            a = BtlObj_Get(BattleSide_GetObjId(0));
+            BtlBodyHit_Test(a, BtlObj_Get(third));
+            a = BtlObj_Get(third);
+            BtlBodyHit_Test(a, BtlObj_Get(BattleSide_GetObjId(0)));
+        }
+    }
+#endif
 }
 
 /* Shape type 0: bounds of the sweep from sphere b to sphere a, its movement and direction, and the zone. */

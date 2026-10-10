@@ -37,7 +37,47 @@ extern s32 BtlParam_GetUnk0(BtlFlagChr *chr);                        /* u16 at +
 extern s32 BtlParam_GetUnk2(BtlFlagChr *chr);                        /* s8 at +2 of the object's parameter block */
 extern f32 BtlParam_GetUnkC7Scale(BtlFlagChr *chr);
 
+#ifdef PORT
+/* The experiment of a third fighter (roster index 2, of side 2). Everyone but player 1 has player 1 for an
+   opponent, as in the game. Player 1's is the nearer of the two fighters of side 2 that still stand, kept until
+   the other is clearly nearer (three quarters of the distance) so that it does not flip from frame to frame:
+   everything the game does "towards the opponent" (facing, the camera's lock, the distance rules, 230 calls)
+   follows it. Chosen once a frame (Port_UpdateTarget, from BtlChars_UpdateMain). */
+extern s32 BtlChar_GetCount(void);
+s32 gPortTarget0 = 1;
+void Port_UpdateTarget(void) {
+    BtlFlagChr *me, *a, *b;
+    Vec4 d;
+    f32 da, db;
+    s32 aDead, bDead;
+
+    if (BtlChar_GetCount() < 3) {
+        gPortTarget0 = 1;
+        return;
+    }
+    me = BtlChar_Get(0);
+    a = BtlChar_Get(1);
+    b = BtlChar_Get(2);
+    aDead = BtlChar_IsDead(a);
+    bDead = BtlChar_IsDead(b);
+    if (aDead != bDead) {
+        gPortTarget0 = aDead ? 2 : 1;
+        return;
+    }
+    Vec4_Sub(&d, &BtlChar_GetPos(a)->pos, &BtlChar_GetPos(me)->pos);
+    da = Vec3_Length(&d);
+    Vec4_Sub(&d, &BtlChar_GetPos(b)->pos, &BtlChar_GetPos(me)->pos);
+    db = Vec3_Length(&d);
+    if (gPortTarget0 == 1 && db < da * 0.75f) {
+        gPortTarget0 = 2;
+    } else if (gPortTarget0 == 2 && da < db * 0.75f) {
+        gPortTarget0 = 1;
+    }
+}
+#define OPPONENT(chr) ((chr)->player == 0 ? BtlChar_Get(gPortTarget0) : BtlChar_Get(0))
+#else
 #define OPPONENT(chr) ((chr)->player == 0 ? BtlChar_Get(1) : BtlChar_Get(0))
+#endif
 
 /* Where to aim at the opponent: its override position 6 when set, else its position. */
 void BtlOpp_GetTargetPos(BtlFlagChr *chr, Vec4 *out) {
