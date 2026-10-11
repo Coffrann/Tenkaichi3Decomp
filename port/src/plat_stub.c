@@ -451,6 +451,17 @@ int Port_ThirdTeam(void) { /* BT3_THIRD_TEAM: 1 with player 2 (default), 0 with 
     int v = getenv("BT3_THIRD_TEAM") != NULL ? atoi(getenv("BT3_THIRD_TEAM")) : 1;
     return v < 0 || v > 2 ? 1 : v;
 }
+int Port_TestHp(int i) { /* BT3_TEST_HP=<a>,<b>,<c>: starting health of fighters 0..2 (0 = as it is) */
+    const char *p = getenv("BT3_TEST_HP");
+    int v = 0;
+    for (; p != NULL && i >= 0; i--) {
+        v = atoi(p);
+        p = strchr(p, ',');
+        p = p != NULL ? p + 1 : NULL;
+        if (p == NULL && i > 0) { v = 0; }
+    }
+    return v;
+}
 int Port_ThirdAi(void) {
     return !(getenv("BT3_THIRD_AI") != NULL && atoi(getenv("BT3_THIRD_AI")) == 0);
 }

@@ -2164,6 +2164,22 @@ s32 BtlCtrl_IsTeamDead(s32 player) {
     return 0;
 }
 
+#ifdef PORT
+/* (the experiment's tool) BT3_TEST_HP=<a>,<b>,<c>: the health the fighters start the fight with (0 or nothing =
+   left as it is), to reach each ending of a three-fighter fight quickly. */
+void Port_TestHealth(void) {
+    extern int Port_TestHp(int i); /* port/src/plat_stub.c */
+    s32 i;
+
+    for (i = 0; i < 3; i++) {
+        BtlCapiBChr *chr = BtlChar_Get(i);
+        if (Port_TestHp(i) > 0 && chr != NULL) {
+            BtlMember_GetActiveGauge(chr)->hp = Port_TestHp(i);
+        }
+    }
+}
+#endif
+
 /* Fighter flag 7 (ring out: the end-of-battle check gives the other side the win). */
 s32 BtlCtrl_TestFlag7(s32 player) {
     BtlCapiBChr *chr = BtlChar_Get(player);

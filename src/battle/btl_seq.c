@@ -1239,6 +1239,8 @@ extern s32 BtlSeq_TickClocksExt(void) __asm__("BtlSeq_TickClocks");
 
 #ifdef PORT
 extern void Port_Dbg2(const char *what, int a, int b); /* port/src/plat_stub.c (the experiment's tool) */
+extern s32 BtlChar_GetCount(void);
+extern s32 Port_Team(s32 i); /* btl_char_flag_opp.c */
 #define PORT_ENDDBG(n) Port_Dbg2("the fight ends by rule", n, (int)result->reason)
 #else
 #define PORT_ENDDBG(n)
@@ -1286,6 +1288,30 @@ s32 BtlSeq_CheckBattleEnd(void) {
         result->reason = BTL_REASON_FLAG7;
         { PORT_ENDDBG(5); return 1; }
     }
+#ifdef PORT
+    /* The experiment's third fighter: a knock-out ends the fight when one team is left (teams:
+       btl_char_flag_opp.c). The result only knows two sides: player 1's team left = player 1 wins, any other
+       team left = player 2 wins. */
+    if (BtlChar_GetCount() > 2) {
+        s32 alive[3] = { 0, 0, 0 }, i, teams;
+        for (i = 0; i < 3; i++) {
+            if (!BtlCtrl_IsTeamDead(i)) {
+                alive[Port_Team(i)] = 1;
+            }
+        }
+        teams = alive[0] + alive[1] + alive[2];
+        if (teams == 0) {
+            result->reason = BTL_REASON_KO;
+            BtlSeq_JudgeByHealth(result);
+            { PORT_ENDDBG(10); return 1; }
+        }
+        if (teams == 1) {
+            result->winner = alive[0] ? BTL_RESULT_WIN_P1 : BTL_RESULT_WIN_P2;
+            result->reason = BTL_REASON_KO;
+            { PORT_ENDDBG(11); return 1; }
+        }
+    } else {
+#endif
     if (BtlCtrl_IsTeamDead(0) && BtlCtrl_IsTeamDead(1)) {
         result->reason = BTL_REASON_KO;
         BtlSeq_JudgeByHealth(result);
@@ -1301,6 +1327,9 @@ s32 BtlSeq_CheckBattleEnd(void) {
         result->reason = BTL_REASON_KO;
         { PORT_ENDDBG(8); return 1; }
     }
+#ifdef PORT
+    }
+#endif
     if (!BattleReplay_IsActive()) {
         return 0;
     }
@@ -1316,6 +1345,12 @@ s32 BtlSeq_CheckBattleEnd(void) {
 s32 BtlSeqFight_Enter(BtlSeqWaitCtx *ctx) {
     Battle_GetWork()->flags &= ~BATTLE_FLAG_DEMO;
     Battle_GetWork()->flags &= ~BATTLE_FLAG_READY;
+#ifdef PORT
+    {
+        extern void Port_TestHealth(void); /* btl_capi_b.c (the experiment's tool) */
+        Port_TestHealth();
+    }
+#endif
     if (Battle_GetMode() == 8) {
         Hud_ShowAll(1);
     }
