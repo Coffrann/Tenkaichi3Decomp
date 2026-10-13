@@ -57,9 +57,114 @@ typedef struct BtlClashProgress {
 } BtlClashProgress;
 extern BtlClashProgress *gProgress;
 
+#ifdef PORT
+/* The pair of a clash (the third-fighter experiment, and what more fighters would stand on).
+ *
+ * The game runs a clash for fighters 0 and 1: every function of this file names them by number. Here the two are
+ * a PAIR of roster indices, the lower one first (it takes fighter 0's part: the camera's side, the first voice,
+ * "the lead is positive when it is ahead"), found from the fighters themselves: two enemies that are in the same
+ * clash action at once (Port_ClashFind, when no sequence runs). The code that puts two fighters into a clash
+ * (BtlHit_CheckClash for blows, EftDet_ClashPass for beams) names the pair a few frames earlier with
+ * Port_ClashPair, so that the two are each other's opponent from the first frame on.
+ *
+ * The state of a clash (roster +0x40..0x94: the sequence's step, the lead, the camera's point, the path) is ONE:
+ * one clash at a time. While one runs or is about to, another pair is refused (Port_ClashBusy), and a fighter
+ * found in a clash action without being of the pair is let out of it as the game lets out a fighter left alone.
+ * With two fighters the pair is 0 and 1 and none of this changes anything. */
+extern s32 BtlChar_GetCount(void);
+extern s32 Port_IsEnemy(s32 a, s32 b);                 /* btl_char_flag_opp.c */
+extern void Port_TargetHit(s32 attacker, s32 victim);  /* btl_char_flag_opp.c: each is the other's target */
+extern void Port_ClashPairLog(const char *what, int a, int b, int countA, int countB, int winner); /* port/src/plat_stub.c */
+extern int Port_ForceClash(int *a, int *b);            /* port/src/plat_stub.c: BT3_FORCE_CLASH, a test's tool */
+extern void Port_ForceClashDone(void);
+extern s32 BtlAct_IsTechniqueId(s32 action);           /* action is 0x105..0x132 */
+s32 gPortClash[2] = { 0, 1 };
+static s32 sPortClashPending; /* frames for which a named pair waits for its sequence to start */
+#define CLASH_P0 gPortClash[0]
+#define CLASH_P1 gPortClash[1]
+#define CLASH_P(n) gPortClash[n]
+
+/* 1 while a clash runs or a pair has just been named: no other pair may start one. */
+s32 Port_ClashBusy(void) {
+    return gBtlChars->clashState != 0 || sPortClashPending > 0;
+}
+
+/* Names the pair of the clash that is about to start. Returns 0 when another is in the way. */
+s32 Port_ClashPair(s32 a, s32 b) {
+    if (a == b || (u32)a >= (u32)BtlChar_GetCount() || (u32)b >= (u32)BtlChar_GetCount() || !Port_IsEnemy(a, b)) {
+        return 0;
+    }
+    if (Port_ClashBusy() && !((a == CLASH_P0 && b == CLASH_P1) || (a == CLASH_P1 && b == CLASH_P0))) {
+        return 0;
+    }
+    CLASH_P0 = a < b ? a : b;
+    CLASH_P1 = a < b ? b : a;
+    sPortClashPending = 10;
+    Port_TargetHit(a, b);
+    return 1;
+}
+
+/* The other fighter of the clash `i` is in or about to be in, or -1. */
+s32 Port_ClashPartner(s32 i) {
+    if (BtlChar_GetCount() > 2 && Port_ClashBusy()) {
+        if (i == CLASH_P0) {
+            return CLASH_P1;
+        }
+        if (i == CLASH_P1) {
+            return CLASH_P0;
+        }
+    }
+    return -1;
+}
+
+/* What kind of clash action a fighter is in: 1 the struggle (0x130..0x132), 6 the blows (0xFA), 9 the vanish
+   (0xFB); the numbers are the sequences' first steps. */
+static s32 Port_ClashKindOf(s32 i) {
+    s32 action = BtlAct_GetCurrent(BtlChar_Get(i));
+
+    if (BtlCharApi_IsInClashA(i)) {
+        return 1;
+    }
+    return action == 0xFA ? 6 : action == 0xFB ? 9 : 0;
+}
+
+/* No sequence runs: looks for two enemies in the same clash action and makes them the pair. */
+static void Port_ClashFind(void) {
+    s32 count = BtlChar_GetCount();
+    s32 i, k;
+
+    if (sPortClashPending > 0) {
+        sPortClashPending--;
+    }
+    if (count < 3) {
+        CLASH_P0 = 0;
+        CLASH_P1 = 1;
+        sPortClashPending = 0;
+        return;
+    }
+    if (sPortClashPending > 0 && Port_ClashKindOf(CLASH_P0) != 0 && Port_ClashKindOf(CLASH_P0) == Port_ClashKindOf(CLASH_P1)) {
+        return; /* (the named pair is there) */
+    }
+    for (i = 0; i < count; i++) {
+        for (k = i + 1; k < count; k++) {
+            if (Port_ClashKindOf(i) != 0 && Port_ClashKindOf(i) == Port_ClashKindOf(k) && Port_IsEnemy(i, k)) {
+                CLASH_P0 = i;
+                CLASH_P1 = k;
+                Port_TargetHit(i, k);
+                return;
+            }
+        }
+    }
+}
+#else
+#define CLASH_P0 0
+#define CLASH_P1 1
+#define CLASH_P(n) n
+#endif
+
 /* 1 while both fighters are in actions 0x130..0x132. */
 s32 BtlClash_BothInClashA(void) {
-    if (BtlCharApi_IsInClashA(0) && BtlCharApi_IsInClashA(1)) {
+    if (BtlCharApi_IsInClashA(CLASH_P0) && BtlCharApi_IsInClashA(CLASH_P1)) {
         return 1;
     }
     return 0;
@@ -74,12 +179,12 @@ void BtlClash_HoldClashA(s32 player) {
 
 /* 1 while both fighters are in action 0xFA. */
 s32 BtlClash_BothInActionFA(void) {
-    s32 action = BtlAct_GetCurrent(BtlChar_Get(0));
+    s32 action = BtlAct_GetCurrent(BtlChar_Get(CLASH_P0));
 
     if (action != 0xFA) {
         return 0;
     }
-    return BtlAct_GetCurrent(BtlChar_Get(1)) == action;
+    return BtlAct_GetCurrent(BtlChar_Get(CLASH_P1)) == action;
 }
 
 /* Raises flag 0xBF on a fighter still in action 0xFA (ends it). */
@@ -93,22 +198,22 @@ void BtlClash_EndActionFA(s32 player) {
 
 /* 1 while both fighters are in action 0xFB. */
 s32 BtlClash_BothInActionFB(void) {
-    s32 action = BtlAct_GetCurrent(BtlChar_Get(0));
+    s32 action = BtlAct_GetCurrent(BtlChar_Get(CLASH_P0));
 
     if (action != 0xFB) {
         return 0;
     }
-    return BtlAct_GetCurrent(BtlChar_Get(1)) == action;
+    return BtlAct_GetCurrent(BtlChar_Get(CLASH_P1)) == action;
 }
 
 /* 1 while both fighters are in action 0xFC. */
 s32 BtlClash_BothInActionFC(void) {
-    s32 action = BtlAct_GetCurrent(BtlChar_Get(0));
+    s32 action = BtlAct_GetCurrent(BtlChar_Get(CLASH_P0));
 
     if (action != 0xFC) {
         return 0;
     }
-    return BtlAct_GetCurrent(BtlChar_Get(1)) == action;
+    return BtlAct_GetCurrent(BtlChar_Get(CLASH_P1)) == action;
 }
 
 /* Raises flag 0xC6 on a fighter still in action 0xFC (ends it). */
@@ -138,7 +243,7 @@ void BtlClash_SetOrbitCut(s32 player, s32 type) {
     Vec3_Normalize(&d, &d);
     switch (type) {
     case 0:
-        if (player == 0) {
+        if (player == CLASH_P0) {
             dist = 2.4f;
         } else {
             dist = -2.4f;
@@ -149,7 +254,7 @@ void BtlClash_SetOrbitCut(s32 player, s32 type) {
         dist += EftStruggle_GetCamDist(player, type);
         break;
     case 1:
-        if (player == 0) {
+        if (player == CLASH_P0) {
             dist = 0.5f;
         } else {
             dist = -0.5f;
@@ -179,7 +284,7 @@ void BtlClash_SetMidCut(Vec4 *mid, f32 bias) {
     Vec4 look;
     Vec4 a;
     Vec4 b;
-    BtlFlagChr *chr = BtlChar_Get(0);
+    BtlFlagChr *chr = BtlChar_Get(CLASH_P0);
     f32 ang = 1.5707963f;
     f32 half;
     f32 base;
@@ -191,9 +296,9 @@ void BtlClash_SetMidCut(Vec4 *mid, f32 bias) {
     ang = bias * ang;
     base = 50.0f;
     Vec3_Normalize(&d, &d);
-    BtlCharApi_GetNodePos(0, 0x11, &a);
+    BtlCharApi_GetNodePos(CLASH_P0, 0x11, &a);
     ang = ang * half;
-    BtlCharApi_GetNodePos(1, 0x11, &b);
+    BtlCharApi_GetNodePos(CLASH_P1, 0x11, &b);
     Vec4_Lerp(&look, &b, &a, bias * 0.6f + half);
     ang = ang + -1.5707963f;
     yaw = BtlUtil_WrapAngle(atan2f(d.x, d.z) + ang);
@@ -220,7 +325,7 @@ void BtlClash_SetPathCut(s32 n) {
         look.y = pos.y - sinf(p[4]);
         look.z = pos.z + cosf(p[5]);
         look.w = 1.0f;
-        ChrCam_SetCut(BtlChar_Get(0), &pos, &D_002EC2A0, &pos, &D_002EC2A0, &look, &D_002EC2A0, -1, 0.0f, 0.0f, 0.0f,
+        ChrCam_SetCut(BtlChar_Get(CLASH_P0), &pos, &D_002EC2A0, &pos, &D_002EC2A0, &look, &D_002EC2A0, -1, 0.0f, 0.0f, 0.0f,
                       0.0f, 0.0f, 0.0f, -1, -1, -1, 1, 0x45);
     }
 }
@@ -237,8 +342,8 @@ s32 BtlClash_UpdateA(s32 state) {
     Vec4 a;
     Vec4 b;
     BtlFlagRoster *roster = gBtlChars;
-    BtlFlagChr *chr0 = BtlChar_Get(0);
-    BtlFlagChr *chr1 = BtlChar_Get(1);
+    BtlFlagChr *chr0 = BtlChar_Get(CLASH_P0);
+    BtlFlagChr *chr1 = BtlChar_Get(CLASH_P1);
     s32 count0 = chr0->clashCountA;
     BtlClashA *c = &roster->clashA;
     s32 count1 = chr1->clashCountA;
@@ -258,9 +363,9 @@ s32 BtlClash_UpdateA(s32 state) {
             BtlChar_PlayVoice(chr1, 0x14);
         }
         if (c->timer < 0x1E) {
-            BtlClash_SetOrbitCut(0, 0);
+            BtlClash_SetOrbitCut(CLASH_P0, 0);
         } else if (c->timer < 0x3C) {
-            BtlClash_SetOrbitCut(1, 0);
+            BtlClash_SetOrbitCut(CLASH_P1, 0);
         } else {
             if (count1 < count0) {
                 c->lead++;
@@ -269,9 +374,9 @@ s32 BtlClash_UpdateA(s32 state) {
                 c->lead--;
             }
             if (c->bias < -0.64f) {
-                BtlClash_SetOrbitCut(0, 1);
+                BtlClash_SetOrbitCut(CLASH_P0, 1);
             } else if (0.64f < c->bias) {
-                BtlClash_SetOrbitCut(1, 1);
+                BtlClash_SetOrbitCut(CLASH_P1, 1);
             } else {
                 BtlClash_SetMidCut(&c->mid, c->bias);
             }
@@ -294,9 +399,9 @@ s32 BtlClash_UpdateA(s32 state) {
             }
         }
         if (c->lead > 0) {
-            BtlClash_SetOrbitCut(0, 2);
+            BtlClash_SetOrbitCut(CLASH_P0, 2);
         } else {
-            BtlClash_SetOrbitCut(1, 2);
+            BtlClash_SetOrbitCut(CLASH_P1, 2);
         }
         c->timer++;
         if (c->timer >= 0x10) {
@@ -366,19 +471,22 @@ s32 BtlClash_UpdateA(s32 state) {
             }
             BtlChar_RaiseFirstClash(winner);
             c->winner = winner->player;
+#ifdef PORT
+            Port_ClashPairLog("struggle decided", CLASH_P0, CLASH_P1, count0, count1, winner->player);
+#endif
         }
-        if (c->winner == 0) {
-            BtlClash_SetOrbitCut(1, 0);
+        if (c->winner == CLASH_P0) {
+            BtlClash_SetOrbitCut(CLASH_P1, 0);
         } else {
-            BtlClash_SetOrbitCut(0, 0);
+            BtlClash_SetOrbitCut(CLASH_P0, 0);
         }
         c->lead = 0;
         state = 0;
         break;
     }
     c->bias = BtlClash_CalcBias(c->lead);
-    BtlCharApi_GetNodePos(0, 0x11, &a);
-    BtlCharApi_GetNodePos(1, 0x11, &b);
+    BtlCharApi_GetNodePos(CLASH_P0, 0x11, &a);
+    BtlCharApi_GetNodePos(CLASH_P1, 0x11, &b);
     Vec4_Lerp(&c->mid, &b, &a, c->bias * 0.5f + 0.5f);
     return state;
 }
@@ -386,8 +494,8 @@ s32 BtlClash_UpdateA(s32 state) {
 /* Clash B, one frame. Returns the next state (0 when it is over). */
 s32 BtlClash_UpdateB(s32 state) {
     BtlClashB *c = &gBtlChars->clashB;
-    BtlFlagChr *chr0 = BtlChar_Get(0);
-    BtlFlagChr *chr1 = BtlChar_Get(1);
+    BtlFlagChr *chr0 = BtlChar_Get(CLASH_P0);
+    BtlFlagChr *chr1 = BtlChar_Get(CLASH_P1);
 
     switch (state) {
     case 6:
@@ -409,8 +517,8 @@ s32 BtlClash_UpdateB(s32 state) {
         }
         if (!BtlClash_BothInActionFA()) {
             state = 0;
-            BtlClash_EndActionFA(0);
-            BtlClash_EndActionFA(1);
+            BtlClash_EndActionFA(CLASH_P0);
+            BtlClash_EndActionFA(CLASH_P1);
         }
         break;
     case 8:
@@ -428,14 +536,17 @@ s32 BtlClash_UpdateB(s32 state) {
                 win = BtlChar_FrameMod(2) == 0;
             }
             lose = !win;
-            winner = BtlChar_Get(win);
-            loser = BtlChar_Get(lose);
+            winner = BtlChar_Get(CLASH_P(win));
+            loser = BtlChar_Get(CLASH_P(lose));
             BtlChar_SetFlag(winner, 0xBF);
             BtlChar_SetFlag(loser, 0xC0);
             BtlChar_PlayVoice(winner, 0x19);
             BtlChar_RaiseFirstClash(winner);
             ChrCam_EndCut(chr0);
             c->winner = win;
+#ifdef PORT
+            Port_ClashPairLog("blows decided", CLASH_P0, CLASH_P1, chr0->clashCountB, chr1->clashCountB, winner->player);
+#endif
         }
         c->timer++;
         if (!BtlClash_BothInActionFA()) {
@@ -449,8 +560,8 @@ s32 BtlClash_UpdateB(s32 state) {
 /* Clash C, one frame: every exchange moves the pair to a random point of a random stage path. */
 s32 BtlClash_UpdateC(s32 state) {
     BtlClashC *c = &gBtlChars->clashC;
-    BtlFlagChr *chr0 = BtlChar_Get(0);
-    BtlFlagChr *chr1 = BtlChar_Get(1);
+    BtlFlagChr *chr0 = BtlChar_Get(CLASH_P0);
+    BtlFlagChr *chr1 = BtlChar_Get(CLASH_P1);
     BtlClashPath *path;
     BtlFlagChr *winner;
     BtlFlagChr *loser;
@@ -497,6 +608,9 @@ s32 BtlClash_UpdateC(s32 state) {
                 BtlChar_SetFlag(winner, 0xC7);
                 state++;
                 BtlChar_SetFlag(loser, 0xC8);
+#ifdef PORT
+                Port_ClashPairLog("vanish decided", CLASH_P0, CLASH_P1, chr0->clashCountB, chr1->clashCountB, winner->player);
+#endif
             } else {
                 c->hold--;
                 if (c->hold <= 0) {
@@ -532,8 +646,8 @@ s32 BtlClash_UpdateC(s32 state) {
         }
         if (!BtlClash_BothInActionFB() && !BtlClash_BothInActionFC()) {
             state = 0;
-            BtlClash_EndActionFC(0);
-            BtlClash_EndActionFC(1);
+            BtlClash_EndActionFC(CLASH_P0);
+            BtlClash_EndActionFC(CLASH_P1);
         }
         break;
     case 11:
@@ -548,6 +662,41 @@ s32 BtlClash_UpdateC(s32 state) {
 /* Runs the clash sequences: starts one when both fighters enter a clash action, then steps it. */
 void BtlClash_Update(void) {
     s32 *state = &gBtlChars->clashState;
+#ifdef PORT
+    s32 was = *state;
+
+    if (*state == 0) {
+        s32 a, b;
+        s32 kind = Port_ForceClash(&a, &b);
+
+        /* (the test's tool: the two are put into a clash as BtlHit_CheckClash does it, 1 the blows, 2 the vanish;
+           3: into the struggle, as EftDet_ClashPass does it, when both happen to be in a technique of a class
+           that has one. No beams have met then: the sequence runs without the struggle's effect.) */
+        if (kind == 3) {
+            if ((u32)a < (u32)BtlChar_GetCount() && (u32)b < (u32)BtlChar_GetCount() &&
+                BtlAct_IsTechniqueId(BtlAct_GetCurrent(BtlChar_Get(a))) &&
+                BtlAct_IsTechniqueId(BtlAct_GetCurrent(BtlChar_Get(b))) &&
+                (u32)(BtlAct_GetCurrentClass(BtlChar_Get(a)) - 2) < 3 &&
+                (u32)(BtlAct_GetCurrentClass(BtlChar_Get(b)) - 2) < 3 && !BtlCharApi_IsInClashA(a) &&
+                !BtlCharApi_IsInClashA(b) && !Port_ClashBusy() && Port_ClashPair(a, b)) {
+                BtlChar_SetHeldFlag(BtlChar_Get(a), 0xAA);
+                BtlChar_SetHeldFlag(BtlChar_Get(b), 0xAA);
+            }
+        } else if (kind != 0 && (u32)a < (u32)BtlChar_GetCount() && (u32)b < (u32)BtlChar_GetCount()) {
+            /* (only when the two are near each other, as two that touch are: within 30) */
+            Vec4 *pa = &BtlChar_GetPos(BtlChar_Get(a))->pos;
+            Vec4 *pb = &BtlChar_GetPos(BtlChar_Get(b))->pos;
+            f32 dx = pa->x - pb->x, dy = pa->y - pb->y, dz = pa->z - pb->z;
+
+            if (dx * dx + dy * dy + dz * dz < 30.0f * 30.0f && !Port_ClashBusy() && Port_ClashPair(a, b)) {
+                BtlChar_SetFlag(BtlChar_Get(a), kind == 2 ? 0x62 : 0x61);
+                BtlChar_SetFlag(BtlChar_Get(b), kind == 2 ? 0x62 : 0x61);
+                Port_ForceClashDone();
+            }
+        }
+        Port_ClashFind();
+    }
+#endif
 
     if (*state == 0) {
         if (BtlClash_BothInClashA()) {
@@ -562,10 +711,29 @@ void BtlClash_Update(void) {
     }
     switch (*state) {
     case 0:
+#ifdef PORT
+        /* (every fighter: one left alone in a clash action is let out of it, whatever its number. The third
+           fighter stayed in action 0xFA for ever. The exchange of clash C is only ended here with more than two
+           fighters: the game itself does not.) */
+        {
+            s32 i;
+
+            for (i = 0; i < BtlChar_GetCount(); i++) {
+                BtlClash_HoldClashA(i);
+            }
+            for (i = 0; i < BtlChar_GetCount(); i++) {
+                BtlClash_EndActionFA(i);
+                if (BtlChar_GetCount() > 2) {
+                    BtlClash_EndActionFC(i);
+                }
+            }
+        }
+#else
         BtlClash_HoldClashA(0);
         BtlClash_HoldClashA(1);
         BtlClash_EndActionFA(0);
         BtlClash_EndActionFA(1);
+#endif
         break;
     case 1:
     case 2:
@@ -574,8 +742,8 @@ void BtlClash_Update(void) {
     case 5:
         *state = BtlClash_UpdateA(*state);
         if (!BtlClash_BothInClashA()) {
-            BtlClash_HoldClashA(0);
-            BtlClash_HoldClashA(1);
+            BtlClash_HoldClashA(CLASH_P0);
+            BtlClash_HoldClashA(CLASH_P1);
             *state = 0;
         }
         break;
@@ -590,4 +758,25 @@ void BtlClash_Update(void) {
         *state = BtlClash_UpdateC(*state);
         break;
     }
+#ifdef PORT
+    if (BtlChar_GetCount() > 2 && *state != 0) {
+        /* (a fighter in a clash action that is not of the running clash: let out, as at step 0) */
+        s32 i;
+
+        for (i = 0; i < BtlChar_GetCount(); i++) {
+            if (i != CLASH_P0 && i != CLASH_P1) {
+                BtlClash_HoldClashA(i);
+                BtlClash_EndActionFA(i);
+                BtlClash_EndActionFC(i);
+            }
+        }
+    }
+    if (was == 0 && *state != 0) {
+        Port_ClashPairLog(*state < 6 ? "struggle starts" : *state < 9 ? "blows start" : "vanish starts", CLASH_P0, CLASH_P1,
+                          0, 0, -1);
+    }
+    if (was != 0 && *state == 0) {
+        Port_ClashPairLog(was < 6 ? "struggle over" : was < 9 ? "blows over" : "vanish over", CLASH_P0, CLASH_P1, 0, 0, -1);
+    }
+#endif
 }

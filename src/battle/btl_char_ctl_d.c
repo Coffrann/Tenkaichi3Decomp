@@ -224,6 +224,15 @@ void BtlChar_PlaceRelative(BtlCtlChr *chr) {
     }
 }
 
+#ifdef PORT
+/* The third-fighter experiment: the two of clash C stand on either side of the path's point, the first of the
+   pair (btl_char_flag_clash.c) where the game puts player 0. */
+extern s32 gPortClash[2];
+#define PATH_FIRST gPortClash[0]
+#else
+#define PATH_FIRST 0
+#endif
+
 /* Flag 0xF8: places the fighter beside a point of a stage path, player 0 on one side and the others opposite. */
 void BtlChar_PlaceOnPath(BtlCtlChr *chr) {
     Vec4 side;
@@ -264,7 +273,7 @@ void BtlChar_PlaceOnPath(BtlCtlChr *chr) {
             rot.y = 0.0f;
             rot.z = 0.0f;
             rot.w = 0.0f;
-            if (chr->player == 0) {
+            if (chr->player == PATH_FIRST) {
                 Vec4_Sub(&pos, &pos, &side);
                 rot.y = atan2f(side.x, side.z);
             } else {
