@@ -249,7 +249,7 @@ void EftStruggle_End(s32 winner) {
             layer = 2;
         }
 #ifdef PORT
-        /* (The effects are tagged "object 0's" or "not object 0's" where they are made, twenty places: every
+        /* (The effects are tagged "object 0's" or "not object 0's" where they are made, in more than twenty places: every
            fighter past the first shares layer 3. When neither of the pair is object 0 the loser's reset takes the
            winner's beam with it; the damage is dealt by the clash sequence, not by the beam.) */
         layer = loser == 0 ? 2 : 3;
