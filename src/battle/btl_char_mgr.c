@@ -604,6 +604,15 @@ void BtlChars_UpdateFreeze(void) {
             max = level[i];
         }
     }
+#ifdef PORT
+    {   /* (the experiment's tool) BT3_FREEZE_LOG=1: who holds the freeze, and what each fighter is doing */
+        extern void Port_FreezeLog(int i, int level, int action, int frozen, int count);
+        for (i = 0; i < BtlChar_GetCount(); i++) {
+            chr = BtlChar_Get(i);
+            Port_FreezeLog(i, level[i], chr->action, chr->freezeNext, BtlChar_GetCount());
+        }
+    }
+#endif
     if (max > 0) {
         for (i = 0; i < BtlChar_GetCount(); i++) {
             chr = BtlChar_Get(i);

@@ -1238,8 +1238,26 @@ void BtlEvent_Reset(void) {
     Battle_GetEventWork()->script = keep;
 }
 
+#ifdef PORT
+/* The third-fighter experiment: the events are kept for two sides, and a fighter past the second has none of its
+   own (a knock-out by the third fighter raised "the other side won" for side 2: the bit landed past the two sets,
+   in the battle's own flags, where bit 72 is "paused": the fight stood still for good). Its events are its
+   team's side's: player 1's team is side 0, any other team side 1, as the result counts them (btl_seq.c). */
+extern s32 Port_Team(s32 i); /* btl_char_flag_opp.c */
+static s32 BtlEvent_Side(s32 side) {
+    if (side >= 2) {
+        return Port_Team(side) == 0 ? 0 : 1;
+    }
+    return side < 0 ? 0 : side;
+}
+#define EVENT_SIDE(side) ((side) = BtlEvent_Side(side))
+#else
+#define EVENT_SIDE(side)
+#endif
+
 /* Raises event ev for a side; events 0x5A and 0x5B also notify the script module. */
 void BtlEvent_Raise(s32 side, s32 ev) {
+    EVENT_SIDE(side);
     BtlEvent_SetBit(Battle_GetEventWork()->set[side].now, ev);
     switch (ev) {
     case 0x5A:
@@ -1251,11 +1269,13 @@ void BtlEvent_Raise(s32 side, s32 ev) {
 
 /* BtlEventSet_IsNew on a side. */
 s32 BtlEvent_IsNew(s32 side, s32 ev) {
+    EVENT_SIDE(side);
     return BtlEventSet_IsNew(&Battle_GetEventWork()->set[side], ev);
 }
 
 /* BtlEventSet_WasRaised on a side. */
 s32 BtlEvent_WasRaised(s32 side, s32 ev) {
+    EVENT_SIDE(side);
     return BtlEventSet_WasRaised(&Battle_GetEventWork()->set[side], ev);
 }
 

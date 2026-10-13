@@ -824,6 +824,15 @@ s32 BtlHit_CheckClash(void) {
         HitChr *a = BtlChar_Get(i);
         HitChr *b = BtlChar_Get(BtlOpp_GetPlayer(a));
 
+#ifdef PORT
+        /* The third-fighter experiment: a clash (the two trading blows, or pushing) is run for fighters 0 and 1
+           and decided between them. With the third fighter in one, it entered the clash and nobody ended it: it
+           stayed in action 0xFA and the fight's clock stood still. Until the clash knows its pair, the third
+           fighter and whoever touches it do not clash: the blows land as ordinary hits. */
+        if (i >= 2 || BtlOpp_GetPlayer(a) >= 2) {
+            continue;
+        }
+#endif
         if (BtlChar_TestFlag(a, 3)) {
             s32 same = 0;
             s32 mixed;

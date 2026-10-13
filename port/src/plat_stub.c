@@ -630,3 +630,15 @@ void Port_Menus43Set(int on) {
 int Port_PageAspectMilli(void) {
     return gPortMenuMode && Port_Menus43() ? 1333 : Port_AspectMilli();
 }
+
+/* (the third-fighter experiment's tool) BT3_FREEZE_LOG=1: once every 120 updates, each fighter's freeze level
+   (2 or 1: it holds the others still), its action and whether it is frozen itself. */
+void Port_FreezeLog(int i, int level, int action, int frozen, int count) {
+    static int on = -1, calls;
+    if (on < 0) { on = getenv("BT3_FREEZE_LOG") != NULL; }
+    if (!on) { return; }
+    if (i == 0) { calls++; }
+    if (calls % 120 == 0) {
+        fprintf(stderr, "bt3: freeze %d: fighter %d of %d: level %d, action 0x%X, %s\n", calls, i, count, level, action, frozen ? "frozen" : "moving");
+    }
+}
