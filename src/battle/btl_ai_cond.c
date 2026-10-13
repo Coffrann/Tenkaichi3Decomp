@@ -2343,7 +2343,7 @@ void AiThink_ResetSide(s32 side, s32 owned) {
            the training mode, a second player: -1) is the weakest computer, which never uses a skill (seen by the
            user). BT3_THIRD_LEVEL=0..29 sets it (the game's five settings are 0, 6, 13, 21, 29); without that it
            is the side's level, or 13 where the side has none. */
-        extern int Port_ThirdLevel(void); /* port/src/plat_stub.c: -1 = not set */
+        extern int Port_ThirdLevel(void); /* port/src/plat_fighters.c: -1 = not set */
         s32 level = Port_ThirdLevel();
         if (level < 0) {
             level = BtlCharApi_GetCpuLevel(side) >= 0 ? BtlCharApi_GetCpuLevel(side) : 13;

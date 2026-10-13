@@ -18,7 +18,9 @@
 /* (70000: past the end of the second archive, which has 65,201 files. It was 30000, taken for free; those are
    the training mode's guide voice lines, and with n stages added the first n of them were replaced by stage
    files. Found 2026-10-08 while listing the file ids for added characters.) */
-extern int Port_ThirdFighter(void); /* port/src/plat_stub.c: the experiment of a third fighter */
+extern int Port_ThirdFighter(void); /* port/src/plat_fighters.c: the experiment of a third fighter */
+extern void Port_ExtraSetup(int mode, int members0, int members1, int split, int replay, int script);
+extern void Port_TargetReset(void); /* btl_char_flag_opp.c */
 extern int gPortThirdSlot, gPortThirdObj;
 static int sPortThirdScene; /* the third fighter's effect set exists in the scene of now */
 /* The experiment of more than two fighters, character changes (a transformation, the damaged costume). A side has
@@ -639,6 +641,11 @@ s32 BtlLoad_StepInitial(BtlJob *job) {
            the files themselves are in the port's memory: Port_ResRequest, btl_obj.c.) */
         gPortThirdSlot = gPortThirdObj = -1;
         sPortThirdScene = 0;
+        Port_TargetReset();
+        /* Whether this fight has one is decided here, once, for the whole of it (the settings may change while
+           it is fought; never in an online match, and from the settings only in a plain one against one). */
+        Port_ExtraSetup(Battle_GetMode(), BattleSide_GetMemberCount(0), BattleSide_GetMemberCount(1), Battle_IsSplitScreen(),
+                        BattleReplay_IsActive(), Battle_GetScript() >= 0);
         if (Port_ThirdFighter() >= 0) {
             s32 c = Port_ThirdFighter();
             gPortThirdSlot = Port_ResRequest(c * 10 + 0x590, c * 10 + 0x598, c * 10 + 0x599);
