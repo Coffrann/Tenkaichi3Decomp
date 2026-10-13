@@ -1508,7 +1508,6 @@ void Port_ResCommitAll(void) {
     }
 }
 #endif
-
 /* Loads one model into a caller-owned slot record (not one of the work block's). */
 void BtlRes_LoadSingle(s32 fromHeap, BtlResSlot *slot, s32 model) {
     if (model > 0) {
