@@ -533,9 +533,10 @@ int Port_ThirdChara(void) {
     }
     return id;
 }
-/* BT3_THIRD_FIGHTER=<character id> (an experiment): a third fighter of its own beside player 2's (src/battle:
-   battle.c, battle_load.c, battle_work.c, btl_char_mgr.c). -1 = not asked. gPortThirdSlot / gPortThirdObj: its
-   resource slot and battle object, set by the loader. */
+/* The experiment of a third fighter of its own beside player 2's (src/battle: battle.c, battle_load.c,
+   battle_work.c, btl_char_mgr.c). Who it is and whether a fight has it (BT3_THIRD_FIGHTER=<character id>, or the
+   settings): plat_fighters.c. gPortThirdSlot / gPortThirdObj: its resource slot and battle object, set by the
+   loader. */
 int gPortThirdSlot = -1, gPortThirdObj = -1;
 /* (the experiment's tool) Walks the game's heap and says where its chain of blocks first breaks: the block before
    the break is the one that was written past its end. Called with a label from points of a fight's set-up and
@@ -572,22 +573,6 @@ int Port_HeapCheck(const char *where) {
         fprintf(stderr, " (the first)\n");
     }
     return 0;
-}
-int Port_ThirdFighter(void) {
-    static int id = -2;
-    if (id == -2) {
-        id = getenv("BT3_THIRD_FIGHTER") != NULL ? atoi(getenv("BT3_THIRD_FIGHTER")) : -1;
-        if (id > 160) { id = -1; }
-    }
-    return id;
-}
-int Port_ThirdLevel(void) {
-    int v = getenv("BT3_THIRD_LEVEL") != NULL ? atoi(getenv("BT3_THIRD_LEVEL")) : -1;
-    return v > 29 ? 29 : v;
-}
-int Port_ThirdTeam(void) { /* BT3_THIRD_TEAM: 1 with player 2 (default), 0 with player 1, 2 on its own */
-    int v = getenv("BT3_THIRD_TEAM") != NULL ? atoi(getenv("BT3_THIRD_TEAM")) : 1;
-    return v < 0 || v > 2 ? 1 : v;
 }
 int Port_TestHp(int i) { /* BT3_TEST_HP=<a>,<b>,<c>: starting health of fighters 0..2 (0 = as it is) */
     const char *p = getenv("BT3_TEST_HP");

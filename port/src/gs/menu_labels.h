@@ -19,6 +19,10 @@ enum { MENU_LABELS_MADE = 0, MENU_LABELS_OTHER_DISC = 1, MENU_LABELS_FAILED = -1
    nothing of the game's memory, and may run in a thread of its own; not twice at a time. */
 int MenuLabels_Make(const char *dataDir, const char *outDir, int anyDisc, char *why, size_t whyLen);
 
+/* A compressed member of a menu archive (unpacked size and packed size first, then the game's byte-pair
+   compression) into out of size bytes, every read and write checked. Returns the bytes written, or -1. */
+long MenuLabels_Unpack(const unsigned char *data, size_t len, unsigned char *out, size_t size);
+
 #ifdef __cplusplus
 }
 #endif

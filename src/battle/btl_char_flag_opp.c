@@ -56,7 +56,7 @@ extern f32 BtlParam_GetUnkC7Scale(BtlFlagChr *chr);
  * There is no friendly fire: a shot or a punch is only tried on enemies. With two fighters all of this gives
  * the game's own answer (each one's target is the other). */
 extern s32 BtlChar_GetCount(void);
-extern int Port_ThirdTeam(void); /* port/src/plat_stub.c */
+extern int Port_ThirdTeam(void); /* port/src/plat_fighters.c: the fight's, from BT3_THIRD_TEAM or the settings */
 #define PORT_FIGHTERS 4
 s32 gPortTarget[PORT_FIGHTERS] = { 1, 0, 0, 0 };
 static s32 sPortTargetHold[PORT_FIGHTERS];
@@ -82,6 +82,17 @@ void Port_TargetHit(s32 attacker, s32 victim) {
            ultimate of player 1's on player 2 never ended: player 2's opponent was the ally. */
         gPortTarget[victim] = attacker;
         sPortTargetHold[victim] = 60;
+    }
+}
+/* A fight is being loaded: nobody has a target from the fight before. (They are asked before the first frame
+   chooses them, by the HUD for one: after a fight of three, a fight of two read player 1's target, the third
+   fighter, which is not there: a crash in BtlSide_IsComboHitNew.) */
+void Port_TargetReset(void) {
+    s32 i;
+
+    for (i = 0; i < PORT_FIGHTERS; i++) {
+        gPortTarget[i] = i == 0 ? 1 : 0;
+        sPortTargetHold[i] = 0;
     }
 }
 void Port_UpdateTarget(void) {

@@ -262,6 +262,11 @@ static long ml_unpack_bytes(const uint8_t *data, size_t len, uint8_t *out, size_
     return p == end ? (long)n : -1;
 }
 
+/* The same for other port code that reads a menu archive itself (plat_fighters.c: the characters' names). */
+long MenuLabels_Unpack(const unsigned char *data, size_t len, unsigned char *out, size_t size) {
+    return ml_unpack_bytes(data, len, out, size);
+}
+
 static int ml_unpack(MlCtx *c, MlBuf d, MlBuf *out) {
     uint32_t size, packed;
     uint8_t *buf;
