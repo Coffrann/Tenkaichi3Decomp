@@ -656,7 +656,7 @@ int Port_ThirdDamagedDue(int frame) {
     at = -1;
     fprintf(stderr, "bt3: the third fighter is told it was hit by a finishing technique at frame %d (picture %u)\n", frame, gGsFrame);
     return 1;
-
+}
 /* BT3_DEMO_HUD=1 (testing): the attract demo draws the fight HUD instead of its caption (src/battle/hud_a.c). */
 int Port_DemoHud(void) {
     static int on = -1;
