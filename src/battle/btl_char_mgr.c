@@ -1495,6 +1495,12 @@ void BtlChars_UpdateMain(void) {
                 Port_Dbg3("fighter / action / animation / frozen", i, BtlAct_GetCurrent(c), BtlAnim_GetId(c), BtlChar_IsFrozen(c));
             }
             Port_Dbg3("targets of 0, 1, 2 / time stopped", gPortTarget[0], gPortTarget[1], gPortTarget[2], BtlChars_IsTimeStopped());
+            {
+                extern int Port_HeapFree(int *largest); /* port/src/plat_stub.c */
+                s32 largest = 0;
+                s32 all = Port_HeapFree(&largest);
+                Port_Dbg3("the heap: fighters / free in all, bytes / the largest free block", BtlChar_GetCount(), all, largest, 0);
+            }
         }
     }
     {

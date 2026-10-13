@@ -36,6 +36,7 @@ static PortFighterForm sPortFighter[PORT_FIGHTER_MAX];
 extern s32 BtlChar_GetCount(void);
 extern s32 Port_FighterObjId(s32 i);            /* btl_char_mgr.c: the object of roster entry i */
 extern s32 Port_ResReload(s32 number, s32 model, s32 anim0, s32 anim1); /* btl_obj.c */
+extern s32 Port_ResRequest(s32 model, s32 anim0, s32 anim1);
 extern s32 Port_ResCommit(s32 number);
 extern void Port_ResReleaseOld(s32 number);
 extern void Port_ResCommitAll(void);
@@ -634,12 +635,13 @@ s32 BtlLoad_StepInitial(BtlJob *job) {
         BattleSide_SetModelSlot(1, BtlObj_RequestCharaModel(1, BattleSide_GetStartChara(1), BattleSide_GetStartCostume(1), BattleSide_GetStartVariant(1)));
 #ifdef PORT
         /* The experiment's third fighter: its model and its two animation files into a slot of the heap's (the
-           two fixed slots are the sides'), read with the rest of this step. */
+           two fixed slots are the sides'), read with the rest of this step. (The slot is of the heap's kind;
+           the files themselves are in the port's memory: Port_ResRequest, btl_obj.c.) */
         gPortThirdSlot = gPortThirdObj = -1;
         sPortThirdScene = 0;
         if (Port_ThirdFighter() >= 0) {
             s32 c = Port_ThirdFighter();
-            gPortThirdSlot = BtlRes_Request(0, c * 10 + 0x590, c * 10 + 0x598, c * 10 + 0x599);
+            gPortThirdSlot = Port_ResRequest(c * 10 + 0x590, c * 10 + 0x598, c * 10 + 0x599);
             memset(&sPortFighter[2], 0, sizeof(PortFighterForm)); /* (what a restart brings it back to) */
             sPortFighter[2].chara = sPortFighter[2].startChara = c;
         }
