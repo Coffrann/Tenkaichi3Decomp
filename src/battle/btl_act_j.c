@@ -252,6 +252,28 @@ s32 BtlAct_CheckTransformInput(BtlActJChr *chr) {
     if (BtlInput_TestAction(chr, 0x67, 1)) {
         index = 3;
     }
+#ifdef PORT
+    {
+        /* (the experiment's tool, BT3_THIRD_TRANSFORM=<frame>[,<frame>...], port/src/plat_stub.c: the third
+           fighter transforms here, where the game takes the button for it, at the first chance after each of
+           the frames given: its default transformation or else its first, whatever the gauge has) */
+        extern int Port_ThirdTransformDue(int frame);
+        extern void Port_ThirdTransformTaken(int frame, int index, int chara);
+        extern s32 BtlChar_FrameMod(s32 n);
+        s32 frame = BtlChar_FrameMod(0x7FFFFFFF);
+        s32 i;
+
+        if (chr->player >= 2 && Port_ThirdTransformDue(frame)) {
+            for (i = -1; i < 4; i++) {
+                s32 n = i < 0 ? def : i;
+                if (n >= 0 && BtlAct_CanTransform(chr, n, 0, 0)) {
+                    Port_ThirdTransformTaken(frame, n, BtlParam_GetSlotId(chr, n));
+                    return BtlAct_QueueTransform(chr, n);
+                }
+            }
+        }
+    }
+#endif
     if (index < 0) {
         return 0;
     }

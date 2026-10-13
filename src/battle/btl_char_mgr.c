@@ -359,6 +359,20 @@ void BtlChar_Reset(BtlMgrChr *chr) {
         mem->cpuLevel = BattleSide_GetMember(side, i)->cpuLevel;
         mem->aiType = BattleSide_GetMember(side, i)->aiType;
         m = BattleSide_GetMember(side, i);
+#ifdef PORT
+        if (side >= 2) {
+            /* The experiment of more than two fighters. A fighter that is not a side has no team in the battle
+               setup: it was given side 2's, and so took itself for side 2's character (that one's health and
+               gauge, and that one's model when it asked for its own again, the damaged costume). It is one
+               member, the character it was made from, in its first costume. */
+            extern int Port_ThirdFighter(void);
+            chr->memberCount = 1;
+            mem->chara = Port_ThirdFighter();
+            mem->costume = 0;
+            BtlMember_LoadParams(chr, i, 1, m->health, 0);
+            continue;
+        }
+#endif
         BtlMember_LoadParams(chr, i, 1, m->health, BattleSide_GetMemberVariant(side, i));
     }
     chr->unk99C = 0;

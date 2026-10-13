@@ -600,6 +600,53 @@ int Port_TestHp(int i) { /* BT3_TEST_HP=<a>,<b>,<c>: starting health of fighters
     }
     return v;
 }
+/* (the experiment's tool) How much of the game's heap is free, and the largest free block (what one allocation can
+   still get). The loader asks before it reads a fighter's new files into the heap; BT3_HEAPCHK prints it. */
+int Port_HeapFree(int *largest) {
+    PortHeapBlock *b;
+    int h, total = 0, big = 0;
+    for (h = 0; h < 2; h++) {
+        if (gHeapStart[h] == 0) { continue; }
+        for (b = (PortHeapBlock *)(uintptr_t)gHeapStart[h]; (uintptr_t)b != gHeapEnd[h]; b = (PortHeapBlock *)((char *)b + b->size)) {
+            if (b->magic != ((PortHeapBlock *)(uintptr_t)gHeapStart[h])->magic || b->size < 0x20) { break; }
+            if (!b->used) {
+                total += b->size;
+                if (b->size > big) { big = b->size; }
+            }
+        }
+    }
+    if (largest != NULL) { *largest = big; }
+    return total;
+}
+/* (the experiment's tool) BT3_THIRD_TRANSFORM=<frame>[,<frame>...]: the third fighter is made to transform at each
+   of these frames of the fight (src/battle/btl_act_j.c: at the first moment from then on at which the game would
+   take the button for it), without its cost. For showing a model change in a run without a window.
+   Port_ThirdTransformDue: 1 while a frame of the list has come and its transformation has not been started;
+   Port_ThirdTransformTaken: it has. */
+static int third_transform_next(int take) {
+    static const char *p;
+    static int at = -2;
+    int was = at;
+    if (at == -2 || take) {
+        if (at == -2) { p = getenv("BT3_THIRD_TRANSFORM"); }
+        at = p != NULL && *p != 0 ? atoi(p) : -1;
+        if (p != NULL) {
+            p = strchr(p, ',');
+            p = p != NULL ? p + 1 : NULL;
+        }
+        if (was == -2) { was = at; }
+    }
+    return take ? was : at;
+}
+int Port_ThirdTransformDue(int frame) {
+    int at = third_transform_next(0);
+    return at >= 0 && frame >= at;
+}
+void Port_ThirdTransformTaken(int frame, int index, int chara) {
+    extern unsigned gGsFrame; /* gs_core.c (the number BT3_SHOT_FROM / BT3_SHOT_TO go by) */
+    third_transform_next(1);
+    fprintf(stderr, "bt3: the third fighter is made to transform at frame %d (picture %u): transformation %d, into character %d\n", frame, gGsFrame, index, chara);
+}
 int Port_ThirdAi(void) {
     return !(getenv("BT3_THIRD_AI") != NULL && atoi(getenv("BT3_THIRD_AI")) == 0);
 }

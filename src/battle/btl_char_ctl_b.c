@@ -68,29 +68,6 @@ void BtlChange_Update(void) {
     }
 #endif
 
-#ifdef PORT
-    {
-        /* The third-fighter experiment. A fighter that changes its model (a transformation, the damaged costume
-           after an ultimate) queues a request and waits for the loader, which serves the two sides: a request of
-           the third fighter's was never taken, and time stood still on it for ever (a Spirit Bomb on the third
-           fighter: seen by the user, reproduced from a recording). Nothing is loaded for it: its request counts
-           as loaded at once, and when the fighter allows the swap it is told the model is there, with the model
-           it has. */
-        extern void BtlChars_OnModelLoaded(s32 side);
-        static BtlChangeReq *sTold;
-        if (q->cur != NULL && q->cur->player >= 2) {
-            if (q->state != BTL_CHANGE_DONE) {
-                q->loaded = 1;
-            }
-            if (q->state == BTL_CHANGE_READY && sTold != q->cur) {
-                sTold = q->cur;
-                BtlChars_OnModelLoaded(q->cur->player);
-            }
-        } else {
-            sTold = NULL;
-        }
-    }
-#endif
     if (q->state == BTL_CHANGE_DONE) {
         q->state = BTL_CHANGE_IDLE;
         q->loaded = 0;

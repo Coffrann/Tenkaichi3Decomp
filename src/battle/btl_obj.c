@@ -1218,6 +1218,17 @@ void BtlRes_Term(void) {
     BtlResSlot *slot;
     s32 i;
 
+#ifdef PORT
+    {
+        /* (the experiment of more than two fighters: what a change of a heap slot still holds, see Port_ResReload) */
+        extern void Port_ResCommitAll(void);
+        extern void Port_ResReleaseOld(s32 number);
+        Port_ResCommitAll();
+        for (i = 0; i < BTL_RES_FIXED_MAX + BTL_RES_SLOT_MAX; i++) {
+            Port_ResReleaseOld(i);
+        }
+    }
+#endif
     for (i = 0; i < BTL_RES_SLOT_MAX; i++) {
         BtlRes_Free(res->slots[i].number);
     }
@@ -1343,6 +1354,134 @@ void BtlRes_CommitReload2(void) {
         res->pending = -1;
     }
 }
+
+#ifdef PORT
+/*
+ * The experiment of more than two fighters: a character change for a fighter whose files are in a heap slot (the
+ * two fixed slots are the sides'; BtlRes_Reload refuses any other). The same in two steps as for a fixed slot,
+ * with one difference: every new file is read into a buffer of its own while the old ones stay as they are, and
+ * the commit puts the new ones in the slot (a fixed slot reads its animation files over the old ones: it has the
+ * room for one set). The old files are freed after the object has been bound again (Port_ResReleaseOld).
+ *
+ * The buffers come from the port's memory, not from the game's heap, which is sized for two fighters; they have
+ * the sizes of a fixed slot's buffers, which hold any character of the disc, so a freed one fits the next change
+ * (that memory hands a freed block out again by its size). Where the port has no such memory (the 32-bit
+ * program), the heap is asked, and only if it keeps room to spare: the change is refused otherwise and the
+ * fighter keeps its files (Port_ResReload returns 0).
+ *
+ * One record per slot number, so that any number of fighters can change.
+ */
+#define PORT_RES_HEAP_SPARE 0x200000 /* what the heap's largest free block must keep after a file read into it */
+static BtlResFile sPortResNext[BTL_RES_FIXED_MAX + BTL_RES_SLOT_MAX][3]; /* new files read, or old files to free */
+static u8 sPortResPending[BTL_RES_FIXED_MAX + BTL_RES_SLOT_MAX];         /* waiting for the commit: 1, 2 = refused */
+
+void Port_ResReleaseOld(s32 number);
+
+static void *Port_ResBuffer(s32 id, s32 room) {
+    extern unsigned Port_GameBigAlloc(int size); /* port/src/plat_mem.c */
+    extern int Port_HeapFree(int *largest);      /* port/src/plat_stub.c */
+    s32 size = File_GetSize(id);
+    s32 largest = 0;
+    void *buf;
+
+    if (room < size) {
+        room = size; /* (a file larger than the disc's largest: a buffer of its own size) */
+    }
+    buf = (void *)Port_GameBigAlloc(room);
+    if (buf != NULL) {
+        return File_Request3(id, buf, room);
+    }
+    Port_HeapFree(&largest);
+    if (largest < size + PORT_RES_HEAP_SPARE) {
+        return NULL;
+    }
+    return File_Request3(id, NULL, 0);
+}
+
+/* Queues new files for a heap slot (a file id of -1: that file stays). 0: no memory, nothing was queued. */
+s32 Port_ResReload(s32 number, s32 model, s32 anim0, s32 anim1) {
+    static const s32 room[3] = { BTL_RES_MODEL_SIZE, BTL_RES_ANIM0_SIZE, BTL_RES_ANIM1_SIZE };
+    BtlResSlot *slot = BtlRes_FindSlot(number);
+    BtlResFile *next;
+    s32 id[3];
+    s32 i;
+
+    if (slot == NULL || number < 0 || number >= BTL_RES_FIXED_MAX + BTL_RES_SLOT_MAX || sPortResPending[number]) {
+        return 0;
+    }
+    Port_ResReleaseOld(number);
+    next = sPortResNext[number];
+    id[0] = model;
+    id[1] = anim0;
+    id[2] = anim1;
+    for (i = 0; i < 3; i++) {
+        next[i].buf = NULL;
+        next[i].id = -1;
+        next[i].size = 0;
+        if (id[i] >= 0) {
+            next[i].buf = Port_ResBuffer(id[i], room[i]);
+            if (next[i].buf == NULL) {
+                /* (the files asked so far are read all the same, into buffers that the commit hands back) */
+                break;
+            }
+            next[i].id = id[i];
+            next[i].size = File_GetSize(id[i]);
+        }
+    }
+    sPortResPending[number] = i == 3 ? 1 : 2;
+    return i == 3;
+}
+
+/* After the files have been read: the new ones into the slot, the old ones kept aside until the object has let
+   go of them (it reads its old model once more when it is bound again). With a change that was refused half
+   way, the old ones stay and what was read is what is kept aside. Returns 1 if the slot has new files. */
+s32 Port_ResCommit(s32 number) {
+    BtlResSlot *slot = BtlRes_FindSlot(number);
+    s32 whole;
+    s32 i;
+
+    if (slot == NULL || number < 0 || number >= BTL_RES_FIXED_MAX + BTL_RES_SLOT_MAX || !sPortResPending[number]) {
+        return 0;
+    }
+    whole = sPortResPending[number] == 1;
+    sPortResPending[number] = 0;
+    for (i = 0; i < 3 && whole; i++) {
+        if (sPortResNext[number][i].buf != NULL) {
+            BtlRes_SwapFile(&slot->file[i], &sPortResNext[number][i]);
+        }
+    }
+    return whole;
+}
+
+/* The file id of the model a slot holds, -1 if there is no such slot (for the experiment's log). */
+s32 Port_ResModelFile(s32 number) {
+    BtlResSlot *slot = BtlRes_GetSlot(number);
+
+    return slot != NULL ? slot->file[0].id : -1;
+}
+
+/* Frees what Port_ResCommit kept aside. */
+void Port_ResReleaseOld(s32 number) {
+    s32 i;
+
+    if (number < 0 || number >= BTL_RES_FIXED_MAX + BTL_RES_SLOT_MAX || sPortResPending[number]) {
+        return;
+    }
+    for (i = 0; i < 3; i++) {
+        BtlRes_FreeFile(&sPortResNext[number][i]);
+    }
+}
+
+/* A restart drops the loader's jobs: a change that was on its way is committed, as BtlRes_CommitReload does for
+   a fixed slot. The caller binds the objects again and then releases the old files. */
+void Port_ResCommitAll(void) {
+    s32 n;
+
+    for (n = 0; n < BTL_RES_FIXED_MAX + BTL_RES_SLOT_MAX; n++) {
+        Port_ResCommit(n);
+    }
+}
+#endif
 
 /* Loads one model into a caller-owned slot record (not one of the work block's). */
 void BtlRes_LoadSingle(s32 fromHeap, BtlResSlot *slot, s32 model) {

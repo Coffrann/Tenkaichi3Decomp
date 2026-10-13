@@ -21,6 +21,39 @@
 extern int Port_ThirdFighter(void); /* port/src/plat_stub.c: the experiment of a third fighter */
 extern int gPortThirdSlot, gPortThirdObj;
 static int sPortThirdScene; /* the third fighter's effect set exists in the scene of now */
+/* The experiment of more than two fighters, character changes (a transformation, the damaged costume). A side has
+   a fixed resource slot, an object and a current form in the battle setup; a fighter past the second (roster
+   index 2 on) has a heap slot, an object of its own and its form here. The loader's change path asks through
+   these, so that it serves every fighter of the roster. One fighter of this kind exists today (the third:
+   gPortThirdSlot, gPortThirdObj); the table is sized for the ten the experiment aims at. */
+#define PORT_FIGHTER_MAX 10
+typedef struct PortFighterForm {
+    s32 chara, costume, variant;                /* the files it has now */
+    s32 startChara, startCostume, startVariant; /* the files it starts a fight with */
+    s32 whole;                                  /* its change in progress was given the memory it asked for */
+} PortFighterForm;
+static PortFighterForm sPortFighter[PORT_FIGHTER_MAX];
+extern s32 BtlChar_GetCount(void);
+extern s32 Port_FighterObjId(s32 i);            /* btl_char_mgr.c: the object of roster entry i */
+extern s32 Port_ResReload(s32 number, s32 model, s32 anim0, s32 anim1); /* btl_obj.c */
+extern s32 Port_ResCommit(s32 number);
+extern void Port_ResReleaseOld(s32 number);
+extern void Port_ResCommitAll(void);
+extern s32 Port_ResModelFile(s32 number);
+extern void Port_Dbg3(const char *what, int a, int b, int c, int d); /* port/src/plat_stub.c (BT3_HEAPCHK) */
+extern int Port_HeapFree(int *largest);
+/* The resource slot of roster entry i (2 on), -1 if it has none. */
+static s32 Port_FighterSlot(s32 i) {
+    return i == 2 ? gPortThirdSlot : -1;
+}
+/* How many fighters the loader serves: the two sides, and the roster's others once it exists. */
+static s32 Port_LoadFighters(void) {
+    return gPortThirdObj >= 0 ? BtlChar_GetCount() : 2;
+}
+/* The object of fighter i: a side's from the battle setup, another fighter's from the roster. */
+static s32 Port_LoadObj(s32 i) {
+    return i >= 2 ? Port_FighterObjId(i) : BattleSide_GetObjId(i);
+}
 #define PORT_ADDED_STAGE_FILE(stage) (0xD48 + 70000 + ((stage) - 0x24))
 #define BTL_STAGE_MODEL(stage) ((stage) >= 0x24 ? PORT_ADDED_STAGE_FILE(stage) : (stage) + BTL_FILE_STAGE)
 #define BTL_STAGE_BANK(stage) (((stage) >= 0x24 ? 0 : (stage)) + BTL_FILE_SND_STAGE)
@@ -405,6 +438,22 @@ s32 BtlLoad_StepChara(BtlJob *job) {
         } else {
             model = job->chara * 10 + job->costume + BTL_FILE_CHARA;
         }
+#ifdef PORT
+        if (job->side >= 2) {
+            /* The experiment of more than two fighters: the same files as for a side, into the fighter's heap
+               slot (Port_ResReload, btl_obj.c). Not asked for: the voice bank (the sound driver has a bank for
+               each of two fighters, and the third has none: it is silent) and the 0x1000-byte block of a team
+               member (the picture of the face on the screen; such a fighter has none there). */
+            s32 largest = 0;
+            s32 all;
+            file8 = job->modelOnly == 0 ? job->animChara * 10 + (BTL_FILE_CHARA + 8) : -1;
+            file9 = job->modelOnly == 0 ? job->unk1C * 10 + (BTL_FILE_CHARA + 9) : -1;
+            sPortFighter[job->side].whole = Port_ResReload(Port_FighterSlot(job->side), model, file8, file9);
+            all = Port_HeapFree(&largest);
+            Port_Dbg3("fighter change, files asked: fighter / model / animations / given the memory", job->side, model, file8, sPortFighter[job->side].whole);
+            Port_Dbg3("fighter change: the heap free in all, bytes / its largest block", job->side, all, largest, 0);
+        } else
+#endif
         if (job->modelOnly == 0) {
             file8 = job->animChara * 10 + (BTL_FILE_CHARA + 8);
             file9 = job->unk1C * 10 + (BTL_FILE_CHARA + 9);
@@ -453,6 +502,43 @@ s32 BtlLoad_StepChara(BtlJob *job) {
             break;
         }
         job->state++;
+#ifdef PORT
+        if (job->side >= 2) {
+            /* The experiment of more than two fighters: the swap for a fighter that is not a side's. Its new
+               files go into its slot, its object is bound to them, and only then are the old files freed (the
+               object reads its old model a last time when it is bound again). The rest is what a side gets
+               below, without the voice bank and the member block, which such a fighter does not have. */
+            s32 obj = Port_LoadObj(job->side);
+            s32 slot = Port_FighterSlot(job->side);
+            s32 got = Port_ResCommit(slot);
+
+            BtlObj_Rebind(obj, slot);
+            switch (job->kind) {
+            case 0:
+                BtlObjAnim_PlayAuto(BtlObj_Get(obj), 0, 2);
+                break;
+            case BTL_JOB_KIND_CHANGE:
+                BtlChars_OnModelLoaded(job->side);
+                break;
+            }
+            if (job->modelOnly == 0) {
+                BtlAiMgr_ResetSide(job->side);
+                /* (its effect set is made from its files: one that side 2's restart made in between is of the
+                   old ones) */
+                BtlScene_FreeChar(obj);
+                BtlScene_CreateChar(obj);
+                if (obj == gPortThirdObj) {
+                    sPortThirdScene = 1;
+                }
+            }
+            Port_ResReleaseOld(slot);
+            Port_Dbg3("fighter change, bound: fighter / model file of its slot now / only the model / new files", job->side,
+                      Port_ResModelFile(slot), job->modelOnly, got);
+            BtlJob_Free(job);
+            Battle_GetWork()->flags &= ~BATTLE_FLAG_LOAD_CHARA;
+            return 1;
+        }
+#endif
         BtlRes_CommitReload2();
         if (job->modelOnly == 0) {
             if (job->side == 0) {
@@ -554,6 +640,8 @@ s32 BtlLoad_StepInitial(BtlJob *job) {
         if (Port_ThirdFighter() >= 0) {
             s32 c = Port_ThirdFighter();
             gPortThirdSlot = BtlRes_Request(0, c * 10 + 0x590, c * 10 + 0x598, c * 10 + 0x599);
+            memset(&sPortFighter[2], 0, sizeof(PortFighterForm)); /* (what a restart brings it back to) */
+            sPortFighter[2].chara = sPortFighter[2].startChara = c;
         }
 #endif
 #ifdef PORT
@@ -703,7 +791,11 @@ void BtlLoad_PollObjectRequest(void) {
     s32 side;
     BtlJob *job;
 
+#ifdef PORT
+    for (side = 0; side < Port_LoadFighters(); side++) { /* (every fighter of the roster: an experiment) */
+#else
     for (side = 0; side < 2; side++) {
+#endif
         if (BtlChange_IsPendingType1(side)) {
             BtlChange_GetArgs(&id, &costume, &variant, NULL, NULL, NULL, &slot);
             job = BtlJob_Alloc();
@@ -733,7 +825,11 @@ void BtlLoad_PollCharaRequest(void) {
     s32 modelOnly;
     BtlJob *job;
 
+#ifdef PORT
+    for (side = 0; side < Port_LoadFighters(); side++) { /* (every fighter of the roster: an experiment) */
+#else
     for (side = 0; side < 2; side++) {
+#endif
         if (BtlChange_IsPendingType0(side)) {
             BtlChange_GetArgs(&chara, &costume, &variant, &animChara, &unk1C, &voiceChara, NULL);
             if (animChara < 0 && unk1C < 0 && voiceChara < 0) {
@@ -754,6 +850,21 @@ void BtlLoad_PollCharaRequest(void) {
             job->variant = variant;
             job->modelOnly = modelOnly;
             job->initial = 0;
+#ifdef PORT
+            if (side >= 2) {
+                /* The experiment of more than two fighters. The effect sets are kept by object, and the form
+                   of a fighter that is not a side is kept here (the setup would take it for side 2's). */
+                if (modelOnly == 0) {
+                    BtlScene_FreeChar(Port_LoadObj(side));
+                }
+                sPortFighter[side].chara = chara;
+                sPortFighter[side].costume = costume;
+                sPortFighter[side].variant = variant;
+                Job_Push((Job *)job);
+                BtlChange_NotifyTaken();
+                continue;
+            }
+#endif
             if (modelOnly == 0) {
                 BtlScene_FreeChar(side);
             }
@@ -816,6 +927,41 @@ void BtlLoad_Reload(void) {
             BtlObj_Rebind(BattleSide_GetObjId(side), BattleSide_GetModelSlot(side));
         }
     }
+#ifdef PORT
+    /* The experiment of more than two fighters: the same for a fighter that is not a side. A change that the
+       dropped jobs left half done is carried out first (its files are in its slot: the object is bound to them
+       and the old ones are freed); then, if it is not in the form it starts with, that form is loaded. */
+    Port_ResCommitAll();
+    for (side = 2; side < Port_LoadFighters(); side++) {
+        PortFighterForm *f = &sPortFighter[side];
+
+        if (Port_FighterSlot(side) < 0) {
+            continue;
+        }
+        BtlObj_Rebind(Port_LoadObj(side), Port_FighterSlot(side));
+        Port_ResReleaseOld(Port_FighterSlot(side));
+        if (f->chara != f->startChara || f->costume != f->startCostume || f->variant != f->startVariant) {
+            f->chara = f->startChara;
+            f->costume = f->startCostume;
+            f->variant = f->startVariant;
+            job = BtlJob_Alloc();
+            memset(job, 0, sizeof(BtlJob));
+            job->step = BtlLoad_StepChara;
+            job->side = side;
+            job->kind = BTL_JOB_KIND_RESTART;
+            job->chara = f->chara;
+            job->animChara = f->chara;
+            job->unk1C = f->chara;
+            job->voiceChara = f->chara;
+            job->costume = f->costume;
+            job->variant = f->variant;
+            job->modelOnly = 0;
+            job->initial = 1;
+            BtlScene_FreeChar(Port_LoadObj(side));
+            Job_Push((Job *)job);
+        }
+    }
+#endif
     if (BtlJob_GetFreeCount() != BTL_JOB_COUNT) {
         Load_RunBlocking();
     }
