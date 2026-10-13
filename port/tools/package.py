@@ -107,6 +107,11 @@ import_chara.py, in this folder, makes a package from a character of your own di
     python3 import_chara.py <disc image or gamedata folder> <character id> <output folder> --with-forms
     python3 import_chara.py <disc image or gamedata folder> <character id> <output folder> --replace
 
+It also turns a package's pictures (chip.bin, member_1p.bin, portrait.bin) into PNG files and back:
+
+    python3 import_chara.py --to-png portrait.bin portrait.png
+    python3 import_chara.py --from-png my_picture.png portrait.bin --like portrait.bin
+
 Up to 57 added characters at once (a transformation counts as one). Packages are not written to your save, and
 none is used in an online match (Dragon Net Battle): there the game is the original on both sides.
 """

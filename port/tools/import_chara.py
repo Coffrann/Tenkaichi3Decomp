@@ -37,6 +37,15 @@ number says what a file is (a costume, the animations, the effects, a voice bank
 looked at as well. Without --base the base character is the original whose model is most like this one (that needs
 --data, the game's data folder or disc image) or else the character whose place the number names.
 
+    port/tools/import_chara.py --to-png <chip.bin | member_1p.bin | portrait.bin> <picture.png>
+    port/tools/import_chara.py --from-png <picture.png> <new .bin> --like <a .bin of the same kind>
+
+The pictures of a package to a PNG and back. --to-png writes the picture of one of the three files. --from-png
+makes such a file from a PNG: the file named by --like (any chip, member block or portrait, for instance the one
+an import wrote) gives the kind and the size, and only its picture is replaced. The sizes are 64 x 64 (chip),
+64 x 32 (member block) and 256 x 512 (portrait); a PNG of another size is resized, and one with more than 256
+colours is brought down to 256. Transparency is kept. No game data is needed.
+
 <data folder> may also be a disc image (.iso): its two archives are read in place, nothing is unpacked. --all makes
 a folder for every character of the disc, forms inside (more than the port takes at once: a shelf to pick from).
 
@@ -67,6 +76,7 @@ the game's own art in it.
 import pathlib
 import struct
 import sys
+import zlib
 
 
 def bpe(src):
@@ -625,7 +635,295 @@ def import_stages(data, out, against):
     print("The game takes 26 added stages at once: copy the files wanted into `stages` and rename them as you like.")
 
 
+# ---- pictures: the game's menu textures (chip.bin, member_*.bin, portrait.bin) to and from PNG ----
+#
+# A picture file is a texture list: word 0 the count (1), word 1 the record's place in words; the record has the
+# places (in words) and sizes of two blocks, the pixels and the palette, and the texture's register (TEX0), whose
+# bits give the width and height. Each block is 0x80 bytes of upload commands and then the data: one byte a pixel
+# (an index into the palette), and 256 colours of four bytes (red, green, blue, alpha with 128 = opaque). Both
+# are stored the way the console's video memory holds them when written as 32-bit blocks: the pixels in its
+# column order, the palette with its entries 8..15 and 16..23 of every 32 exchanged. portrait.bin is such a file
+# packed with the game's byte pair coder (Bpe_Decode); the other two are plain.
+
+PIC_HEAD = 0x60
+
+
+def pic_parse(raw):
+    """(body, packed, width, height, pixels at, palette at) of a picture file."""
+    body, packed = raw, False
+    if len(raw) >= 8:
+        size, plen = struct.unpack_from("<ii", raw, 0)
+        if 0 < plen <= len(raw) - 8 and size > plen and struct.unpack_from("<I", raw, 0)[0] != 1:
+            body, packed = bpe(raw), True
+    if len(body) < 0x60 or struct.unpack_from("<I", body, 0)[0] != 1:
+        raise ValueError("not a picture file of the game (one texture with a palette)")
+    rec = struct.unpack_from("<I", body, 4)[0] * 4
+    pix, clut, pix_size, clut_size = struct.unpack_from("<IIii", body, rec)
+    tex0 = struct.unpack_from("<Q", body, rec + 0x30)[0]
+    psm, w, h = tex0 >> 20 & 0x3F, 1 << (tex0 >> 26 & 0xF), 1 << (tex0 >> 30 & 0xF)
+    pix, clut = pix * 4, clut * 4
+    if psm != 0x13 or pix_size != PIC_HEAD + w * h + 0x20 or clut_size != PIC_HEAD + 1024 + 0x20 or pix + pix_size > len(body) or clut + clut_size > len(body):
+        raise ValueError("a picture of a kind this tool does not know (not 8-bit with 256 colours)")
+    return body, packed, w, h, pix + PIC_HEAD, clut + PIC_HEAD
+
+
+def pic_place(x, y, w):
+    """Where pixel (x, y) of an 8-bit texture lies in its stored bytes."""
+    block = (y & ~0xF) * w + (x & ~0xF) * 2
+    swap = ((y + 2) >> 2 & 1) * 4
+    row = ((y & ~3) >> 1) + (y & 1) & 7
+    return block + row * w * 2 + ((x + swap) & 7) * 4 + (y >> 1 & 1) + (x >> 2 & 2)
+
+
+def pic_slot(i):
+    """Where colour i of the palette lies in its stored entries."""
+    return i ^ 0x18 if i & 0x18 in (8, 16) else i
+
+
+def png_write(path, w, h, rgba):
+    def chunk(tag, data):
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+    rows = b"".join(b"\0" + bytes(rgba[y * w * 4:(y + 1) * w * 4]) for y in range(h))
+    pathlib.Path(path).write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)) +
+                                   chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+
+
+def png_read(path):
+    """(width, height, RGBA bytes) of a PNG: 8 bits a channel (grey, colour, with or without alpha) or a palette."""
+    b = pathlib.Path(path).read_bytes()
+    if b[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError(f"{path} is not a PNG file")
+    at, idat, pal, trns, head = 8, b"", None, None, None
+    while at + 8 <= len(b):
+        n, tag = struct.unpack_from(">I4s", b, at)
+        data = b[at + 8:at + 8 + n]
+        at += 12 + n
+        if tag == b"IHDR":
+            head = struct.unpack(">IIBBBBB", data)
+        elif tag == b"IDAT":
+            idat += data
+        elif tag == b"PLTE":
+            pal = data
+        elif tag == b"tRNS":
+            trns = data
+    w, h, depth, kind, _, _, lace = head
+    if lace or kind not in (0, 2, 3, 4, 6) or (depth != 8 and not (kind == 3 and depth in (1, 2, 4))):
+        raise ValueError("this PNG is interlaced or has 16 bits a channel: save it as a plain 8-bit PNG")
+    chans = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[kind]
+    bpp = max(1, chans * depth // 8)
+    line = (w * chans * depth + 7) // 8
+    raw, out, prev = zlib.decompress(idat), bytearray(), bytearray(line)
+    for y in range(h):
+        f, cur = raw[y * (line + 1)], bytearray(raw[y * (line + 1) + 1:(y + 1) * (line + 1)])
+        for i in range(line):
+            a = cur[i - bpp] if i >= bpp else 0
+            up = prev[i]
+            c = prev[i - bpp] if i >= bpp else 0
+            if f == 1:
+                cur[i] = cur[i] + a & 255
+            elif f == 2:
+                cur[i] = cur[i] + up & 255
+            elif f == 3:
+                cur[i] = cur[i] + (a + up >> 1) & 255
+            elif f == 4:
+                p = a + up - c
+                pa, pb, pc = abs(p - a), abs(p - up), abs(p - c)
+                cur[i] = cur[i] + (a if pa <= pb and pa <= pc else up if pb <= pc else c) & 255
+        prev = cur
+        for x in range(w):
+            if kind == 3:
+                i = cur[x] if depth == 8 else cur[x * depth // 8] >> (8 - depth - x * depth % 8) & ((1 << depth) - 1)
+                out += pal[i * 3:i * 3 + 3] + bytes([trns[i] if trns is not None and i < len(trns) else 255])
+            elif kind == 0:
+                out += bytes([cur[x]] * 3 + [255])
+            elif kind == 4:
+                out += bytes([cur[x * 2]] * 3 + [cur[x * 2 + 1]])
+            elif kind == 2:
+                out += cur[x * 3:x * 3 + 3] + b"\xff"
+            else:
+                out += cur[x * 4:x * 4 + 4]
+    return w, h, bytes(out)
+
+
+def pic_resize(w, h, rgba, tw, th):
+    """The picture at another size: every new pixel the average of the old ones it covers (alpha weighs the colour)."""
+    if (w, h) == (tw, th):
+        return rgba
+    out = bytearray()
+    for y in range(th):
+        y0, y1 = y * h // th, max(y * h // th + 1, (y + 1) * h // th)
+        for x in range(tw):
+            x0, x1 = x * w // tw, max(x * w // tw + 1, (x + 1) * w // tw)
+            r = g = b = a = n = 0
+            for yy in range(y0, y1):
+                for xx in range(x0, x1):
+                    p = (yy * w + xx) * 4
+                    al = rgba[p + 3]
+                    r += rgba[p] * al
+                    g += rgba[p + 1] * al
+                    b += rgba[p + 2] * al
+                    a += al
+                    n += 1
+            out += bytes([r // a, g // a, b // a, a // n]) if a else b"\0\0\0\0"
+    return bytes(out)
+
+
+def pic_quantize(rgba):
+    """(256 colours, an index for each pixel): the picture's own colours if it has no more, else a median cut."""
+    px = [rgba[i:i + 4] if rgba[i + 3] else b"\0\0\0\0" for i in range(0, len(rgba), 4)]
+    count = {}
+    for p in px:
+        count[p] = count.get(p, 0) + 1
+    if len(count) <= 256:
+        pal = sorted(count)
+        at = {c: i for i, c in enumerate(pal)}
+        return pal + [b"\0\0\0\0"] * (256 - len(pal)), [at[p] for p in px]
+    boxes = [list(count)]
+    while len(boxes) < 256:
+        best, span, chan = -1, 0, 0
+        for i, box in enumerate(boxes):
+            if len(box) < 2:
+                continue
+            for ch in range(4):
+                lo, hi = min(c[ch] for c in box), max(c[ch] for c in box)
+                weight = (hi - lo) * (sum(count[c] for c in box) ** 0.5)
+                if weight > span:
+                    best, span, chan = i, weight, ch
+        if best < 0:
+            break
+        box = sorted(boxes.pop(best), key=lambda c: c[chan])
+        total, run, cut = sum(count[c] for c in box), 0, 1
+        for i, c in enumerate(box[:-1]):
+            run += count[c]
+            cut = i + 1
+            if run * 2 >= total:
+                break
+        boxes += [box[:cut], box[cut:]]
+    pal, at = [], {}
+    for i, box in enumerate(boxes):
+        n = sum(count[c] for c in box)
+        pal.append(bytes(sum(c[ch] * count[c] for c in box) // n for ch in range(4)))
+        for c in box:
+            at[c] = i
+    return pal + [b"\0\0\0\0"] * (256 - len(pal)), [at[p] for p in px]
+
+
+def bpe_pack(data, block=4096, chars=200):
+    """Bytes as Bpe_Decode reads them (the byte pair coder the game's packed files use)."""
+    out, at = bytearray(), 0
+    while at < len(data):
+        end, used = at, set()
+        while end < len(data) and end - at < block and (len(used) < chars or data[end] in used):
+            used.add(data[end])
+            end += 1
+        buf, left, right = list(data[at:end]), list(range(256)), [0] * 256
+        at = end
+        free = [c for c in range(255, -1, -1) if c not in used]
+        while free and len(buf) > 2:
+            pairs = {}
+            for i in range(len(buf) - 1):
+                k = buf[i] << 8 | buf[i + 1]
+                pairs[k] = pairs.get(k, 0) + 1
+            k = max(pairs, key=pairs.get)
+            if pairs[k] < 4:
+                break
+            c, a, b = free.pop(), k >> 8, k & 255
+            left[c], right[c] = a, b
+            new, i, n = [], 0, len(buf)
+            while i < n:
+                if i + 1 < n and buf[i] == a and buf[i + 1] == b:
+                    new.append(c)
+                    i += 2
+                else:
+                    new.append(buf[i])
+                    i += 1
+            buf = new
+        # the pair table: a run of bytes that stand for themselves is skipped (a count above 127, then one entry),
+        # the others are listed (a count, then that many entries and one more)
+        c = 0
+        while c < 256:
+            if left[c] == c:
+                n = 1
+                c += 1
+                while n < 127 and c < 256 and left[c] == c:
+                    n += 1
+                    c += 1
+                out.append(n + 127)
+                n = 0
+                if c == 256:
+                    break
+            else:
+                n = 0
+                c += 1
+                while n < 127 and c < 256 and left[c] != c:
+                    n += 1
+                    c += 1
+                out.append(n)
+                c -= n + 1
+            for _ in range(n + 1):
+                out.append(left[c])
+                if left[c] != c:
+                    out.append(right[c])
+                c += 1
+        out += bytes([len(buf) >> 8, len(buf) & 255]) + bytes(buf)
+    return struct.pack("<ii", len(data), len(out)) + bytes(out)
+
+
+def picture_to_png(src, dst):
+    body, packed, w, h, pix, clut = pic_parse(pathlib.Path(src).read_bytes())
+    rgba = bytearray()
+    for y in range(h):
+        for x in range(w):
+            c = body[clut + pic_slot(body[pix + pic_place(x, y, w)]) * 4:][:4]
+            rgba += c[:3] + bytes([min(255, c[3] * 2 - (c[3] >> 7))])
+    png_write(dst, w, h, rgba)
+    print(f"{dst}: {w} x {h}" + (" (the file is packed)" if packed else ""))
+
+
+def picture_from_png(png, dst, like):
+    raw = pathlib.Path(like).read_bytes()
+    body, packed, w, h, pix, clut = pic_parse(raw)
+    pw, ph, rgba = png_read(png)
+    if (pw, ph) != (w, h):
+        print(f"the PNG is {pw} x {ph}, the picture {w} x {h}: resized (a PNG of that size is taken as it is)")
+    pal, index = pic_quantize(pic_resize(pw, ph, rgba, w, h))
+    out = bytearray(body)
+    for y in range(h):
+        for x in range(w):
+            out[pix + pic_place(x, y, w)] = index[y * w + x]
+    for i, c in enumerate(pal):
+        out[clut + pic_slot(i) * 4:clut + pic_slot(i) * 4 + 4] = c[:3] + bytes([(c[3] + 1) >> 1])
+    data = bytes(out)
+    if packed:
+        data = bpe_pack(data)
+        if bpe(data) != bytes(out):
+            sys.exit("the packed file does not unpack to the picture: not written (a fault of this tool)")
+        if len(data) > 0x16800:
+            sys.exit(f"packed, this picture is {len(data)} bytes; the game reads a portrait into 92,160: not written. "
+                     "A picture with larger plain areas and fewer colours packs smaller.")
+    pathlib.Path(dst).write_bytes(data)
+    print(f"{dst}: {w} x {h}, {len(data)} bytes" + (" packed" if packed else ""))
+    return len(data)
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("--to-png", "--from-png"):
+        rest = sys.argv[2:]
+        like = None
+        if "--like" in rest:
+            at = rest.index("--like")
+            like = rest[at + 1]
+            del rest[at:at + 2]
+        try:
+            if sys.argv[1] == "--to-png" and len(rest) == 2 and like is None:
+                picture_to_png(rest[0], rest[1])
+            elif sys.argv[1] == "--from-png" and len(rest) == 2 and like is not None:
+                picture_from_png(rest[0], rest[1], like)
+            else:
+                sys.exit(__doc__)
+        except (ValueError, OSError, struct.error, zlib.error) as err:
+            sys.exit(str(err))
+        return
     flags = {f for f in ("--with-forms", "--with-fusions", "--all", "--stages", "--loose", "--replace", "--names") if f in sys.argv}
     args = [a for a in sys.argv[1:] if a not in flags]
     if "--names" in flags and len(args) == 1:

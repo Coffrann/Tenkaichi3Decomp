@@ -335,6 +335,31 @@ the ones you do not change**, so the package holds only your work.
 
 A package made this way holds the game's own data. It is for your own use. Pass on only what you made.
 
+### The pictures, from and to a PNG
+
+`chip.bin`, `member_1p.bin`, `member_2p.bin` and `portrait.bin` are textures of the game: one byte a pixel and a
+palette of 256 colours, in the order the console's video memory keeps them, with the commands that upload them;
+`portrait.bin` is packed as well. The same tool turns them into PNG files and back, with no game data needed:
+
+```
+python3 import_chara.py --to-png portrait.bin portrait.png
+python3 import_chara.py --from-png my_portrait.png portrait.bin --like portrait.bin
+```
+
+`--like` names any existing file of the same kind (the one an import wrote, or another package's): it gives the
+kind and the size, and only its picture is replaced. It may be the file that is written.
+
+| File | Size of the picture | Notes |
+|---|---|---|
+| `chip.bin` | 64 x 64 | the disc's chips keep the face in the middle and leave some rows at the top and the bottom empty: look at one with --to-png |
+| `member_1p.bin`, `member_2p.bin` | 64 x 32 | the team mate's small picture, for the left and the right side |
+| `portrait.bin` | 256 x 512 | stored squeezed: the menus show it about twice as wide, so draw it at 512 x 512 and scale the width down to 256 |
+
+A PNG of another size is resized to the picture's (best made at the right size, or a whole multiple of it). A PNG
+with more than 256 colours is brought down to 256. Transparency is kept: the console's alpha has 128 steps, so
+half-transparent edges come out a little coarser. A packed portrait has to stay within 92,160 bytes; a picture
+with a great deal of fine noise may not, and the tool then says so and writes nothing.
+
 ## 13. Testing a package
 
 Start the game from a terminal and read the lines that begin `bt3: characters:`. At start it lists what was
