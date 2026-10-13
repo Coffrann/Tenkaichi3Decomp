@@ -165,6 +165,18 @@ s32 EftCharaFx_Stop(s32 objId) {
 
 /* ---- beam struggle ------------------------------------------------------------------------------------------ */
 
+#ifdef PORT
+/* The third-fighter experiment: the struggle is between the two fighters of the clash (btl_char_flag_clash.c names
+   the pair, the lower roster index first), which the game takes for objects 0 and 1. Roster indices and object ids
+   are the same numbers for fighters. */
+extern s32 gPortClash[2];
+#define STRUGGLE_P0 gPortClash[0]
+#define STRUGGLE_P1 gPortClash[1]
+#else
+#define STRUGGLE_P0 0
+#define STRUGGLE_P1 1
+#endif
+
 /* Starts the struggle between two technique records that met head-on (called by the hit pass, 0x1B0910, after it
    set task flag 0x100 on both). The task gets copies of both records, object 0's first. Returns how far along the
    line between the two start points record 0 got. */
@@ -174,7 +186,7 @@ f32 EftStruggle_Start(EftRVec *pos, EftRRec *a, EftRRec *b) {
 
     memset(&arg, 0, sizeof(EftStruggleArg));
     Vec4_Copy(&arg.pos, pos);
-    if (a->objId == 0) {
+    if (a->objId == STRUGGLE_P0) {
         arg.rec[0] = *a;
         arg.rec[1] = *b;
     } else {
@@ -224,18 +236,24 @@ void EftStruggle_End(s32 winner) {
     }
     w->flags |= EFT_STRUGGLE_END;
     if (winner == -1) {
-        EftTechEvt_RequestExpire(0);
-        EftTechEvt_RequestExpire(1);
+        EftTechEvt_RequestExpire(STRUGGLE_P0);
+        EftTechEvt_RequestExpire(STRUGGLE_P1);
         BtlScene_Reset(2);
         BtlScene_Reset(3);
     } else {
-        if (winner == 0) {
-            loser = 1;
+        if (winner == STRUGGLE_P0) {
+            loser = STRUGGLE_P1;
             layer = 3;
         } else {
-            loser = 0;
+            loser = STRUGGLE_P0;
             layer = 2;
         }
+#ifdef PORT
+        /* (The effects are tagged "object 0's" or "not object 0's" where they are made, twenty places: every
+           fighter past the first shares layer 3. When neither of the pair is object 0 the loser's reset takes the
+           winner's beam with it; the damage is dealt by the clash sequence, not by the beam.) */
+        layer = loser == 0 ? 2 : 3;
+#endif
         EftTechEvt_RequestExpire(loser);
         BtlScene_Reset(layer);
     }
@@ -535,7 +553,7 @@ void EftStruggle_Step(EftRTask *task) {
     f32 tmp;
 
     w->frames++;
-    if (!BtlCharApi_IsInClashA(0) || !BtlCharApi_IsInClashA(1)) {
+    if (!BtlCharApi_IsInClashA(STRUGGLE_P0) || !BtlCharApi_IsInClashA(STRUGGLE_P1)) {
         w->flags |= EFT_STRUGGLE_END;
     }
     if (w->flags & EFT_STRUGGLE_END) {
