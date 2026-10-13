@@ -606,6 +606,16 @@ int Port_DemoHud(void) {
     if (on < 0) { on = getenv("BT3_DEMO_HUD") != NULL && atoi(getenv("BT3_DEMO_HUD")) != 0; }
     return on;
 }
+/* BT3_HUD_ROWS=<n> (testing): the row of each fighter past the two sides is drawn n times (src/battle/hud_b.c),
+   to see how a full stack of them lies under a side. */
+int Port_HudTestRows(void) {
+    static int n = -1;
+    if (n < 0) {
+        n = getenv("BT3_HUD_ROWS") != NULL ? atoi(getenv("BT3_HUD_ROWS")) : 1;
+        if (n < 1 || n > 8) { n = 1; }
+    }
+    return n;
+}
 int Port_ThirdAi(void) {
     return !(getenv("BT3_THIRD_AI") != NULL && atoi(getenv("BT3_THIRD_AI")) == 0);
 }

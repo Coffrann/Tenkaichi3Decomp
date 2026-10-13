@@ -1735,3 +1735,202 @@ void HudGauge_Init(HudBGroup **out, void *res) {
     grp->draw = NULL;
     *out = gHudGauge->grp;
 }
+
+#ifdef PORT
+/* The gauges of the fighters past the two sides (the third-fighter experiment; teams: btl_char_flag_opp.c).
+ *
+ * The part above is one tree shown twice and everything it keeps is a [2] array by side, so a fighter with roster
+ * index 2 or more has no place in it. Each of them gets a small row of its own instead, drawn from the same sheet
+ * with the same sprite library, under the gauge of the side it is teamed with (a fighter on a team of its own:
+ * under player 2's):
+ *
+ *     face (14 x 14)   health bar (80 x 8: the side's bar at half size)
+ *                      ki (five lamps of 20000 each)   one marker per health bar in reserve
+ *
+ * Health reads as the side's does: one bar is 10000, the colour says how many bars are under it, the trailing
+ * (damage) bar falls towards the health at the side's speeds. At no health the row is drawn dark and the bar is
+ * empty. Rows stack downwards, four to a column and two columns to a side, so eight fit under one side.
+ * Nothing here is drawn, and nothing is added to the frame, while the roster has two fighters. */
+#define PORT_FIGHTER_MAX 10 /* fighters a fight may have one day; the two sides are the first two */
+#define HUDX_ROWS 4         /* rows of a column */
+#define HUDX_SLOTS 8        /* rows under one side */
+#define HUDX_BAR_W 80      /* the health bar: half the side's 160 */
+#define HUDX_X 18          /* where the bars start: behind the face */
+
+extern s32 BtlChar_GetCount(void);
+extern s32 Port_Team(s32 i); /* btl_char_flag_opp.c */
+extern void *BtlChar_FindBySide(s32 side); /* (a number past the two sides is the roster index: btl_char_get.c; */
+extern s32 BtlSide_GetHp(s32 side);        /* so the by-side queries answer for any fighter) */
+extern s32 BtlSide_GetKi(s32 side);
+extern void HudNode_Draw(HudBGroup *node, s32 mirror);
+extern int Port_HudTestRows(void); /* port/src/plat_stub.c: 1 unless BT3_HUD_ROWS is set */
+
+static s32 sHudExtraShown[PORT_FIGHTER_MAX]; /* trailing health, by roster index */
+static s32 sHudExtraDrain[PORT_FIGHTER_MAX];
+static s32 sHudExtraFighter;                 /* the fighter whose row is being drawn */
+static s32 sHudExtraPlace;                   /* and the side of the screen it is on */
+static HudBGroup sHudExtraNode;
+
+/* One piece of the sheet: texture 8 with the palette of entry 8 + sub. */
+static void HudExtra_Tex(s32 sub, s32 x0, s32 x1, s32 y0, s32 y1, s32 u0, s32 u1, s32 v0, s32 v1, s32 lum) {
+    HudBSprite piece;
+
+    memset(&piece, 0, sizeof(piece));
+    HudSprite_InitTex(&piece, gHudGauge->res, 8, sub);
+    HudSprite_SetRect(&piece, x0, x1, y0, y1);
+    HudSprite_SetUv(&piece, u0, u1, v0, v1);
+    HudSprite_SetColor(&piece, lum, lum, lum, 0x80);
+    HudSprite_Draw(&piece, gHudGauge->res, 0);
+}
+
+/* An untextured rectangle. */
+static void HudExtra_Plain(s32 x0, s32 x1, s32 y0, s32 y1, s32 r, s32 g, s32 b, s32 a) {
+    HudBSprite piece;
+
+    memset(&piece, 0, sizeof(piece));
+    HudSprite_InitPlain(&piece, r, g, b, a);
+    HudSprite_SetRect(&piece, x0, x1, y0, y1);
+    HudSprite_Draw(&piece, gHudGauge->res, 0);
+}
+
+/* The palette of a health bar with `bars` full bars under it (the side's rule, HudGauge_UpdateHp). */
+static s32 HudExtra_HpSub(s32 bars) {
+    return bars >= 7 ? 5 : bars >= 2 ? 1 : bars > 0 ? 4 : 3;
+}
+
+/* Width of `rem` of a bar's 10000; health that is not zero shows at least two pixels. */
+static s32 HudExtra_HpWidth(s32 rem) {
+    s32 w = rem * HUDX_BAR_W / HUDG_HP_BAR;
+    return w < 2 && rem != 0 ? 2 : w;
+}
+
+/* Draw callback of the row's node. */
+static void HudExtra_DrawRow(void) {
+    s32 i = sHudExtraFighter;
+    s32 hp = BtlSide_GetHp(i);
+    s32 ki = BtlSide_GetKi(i);
+    s32 dead = hp <= 0 || BtlCtrl_IsActiveDead(i);
+    s32 lum = dead ? 0x30 : 0x80;
+    s32 shown, rem, bars, rem2, bars2, w, k;
+    HudBObj *obj = BtlCtrl_GetObj(i);
+
+    if (hp < 0) {
+        hp = 0;
+    }
+    /* (the trailing health: HudGauge_UpdateHpTrail's rule) */
+    if (!HUDG_PAUSED()) {
+        if (hp < sHudExtraShown[i]) {
+            s32 gap = sHudExtraShown[i] - hp;
+            s32 drain = gap > 20000 ? 200 : gap > 10000 ? 150 : gap > 5000 ? 120 : 100;
+            sHudExtraDrain[i] = HUDB_MAX(sHudExtraDrain[i], drain);
+            sHudExtraShown[i] -= sHudExtraDrain[i];
+            if (sHudExtraShown[i] < hp) {
+                sHudExtraShown[i] = hp;
+            }
+        } else {
+            sHudExtraShown[i] = hp;
+            sHudExtraDrain[i] = 100;
+        }
+    }
+    shown = sHudExtraShown[i] < hp ? hp : sHudExtraShown[i];
+    rem = shown % HUDG_HP_BAR;
+    bars = shown / HUDG_HP_BAR;
+    if (rem == 0 && bars != 0) {
+        rem = HUDG_HP_BAR;
+        bars--;
+    }
+    rem2 = hp % HUDG_HP_BAR;
+    bars2 = hp / HUDG_HP_BAR;
+    if (rem2 == 0 && bars2 != 0) {
+        rem2 = HUDG_HP_BAR;
+        bars2--;
+    }
+
+    /* the plate behind the row */
+    HudExtra_Plain(0, HUDX_X + HUDX_BAR_W + 2, 0, 16, 0x08, 0x0C, 0x20, 0x50);
+    /* the face: the picture of the fighter's own sheet that is drawn for this side of the screen */
+    if (obj != NULL && obj->faceRes != NULL) {
+        HudBSprite face;
+
+        memset(&face, 0, sizeof(face));
+        obj->faceRes->tex[sHudExtraPlace].mark = 0; /* (sent again: the side's face has used the same blocks) */
+        HudSprite_InitTex(&face, obj->faceRes, sHudExtraPlace, 0);
+        HudSprite_SetRect(&face, 1, 15, 1, 15);
+        HudSprite_SetColor(&face, lum, lum, lum, 0x80);
+        HudSprite_SetMirror(&face, sHudExtraPlace);
+        HudSprite_DrawAt(&face, obj->faceRes, 0, 0x2C00, 0x2CD0);
+    }
+    /* health: the bar's shape in the dark (an empty bar), the bar under the one on show, the trailing bar, the
+       bar */
+    HudExtra_Tex(1, HUDX_X, HUDX_X + HUDX_BAR_W, 1, 9, 0, 160, 0, 16, 0x14);
+    if (bars > 0) {
+        HudExtra_Tex(HudExtra_HpSub(bars - 1), HUDX_X, HUDX_X + HUDX_BAR_W, 1, 9, 0, 160, 0, 16, lum);
+    }
+    if (shown != hp) {
+        w = HudExtra_HpWidth(rem);
+        /* (that palette is one flat colour over the whole rectangle, which the side's bar cuts to shape with a
+           mask; here it is laid in two pieces: the bar is its lower half as far as the step at 64 of 160) */
+        HudExtra_Tex(2, HUDX_X, HUDX_X + (w < 32 ? w : 32), 5, 9, 0, 2, 8, 16, lum);
+        if (w > 32) {
+            HudExtra_Tex(2, HUDX_X + 32, HUDX_X + w, 1, 9, 64, w * 2, 0, 16, lum);
+        }
+    }
+    w = bars2 < bars ? 0 : HudExtra_HpWidth(rem2);
+    if (w != 0) {
+        HudExtra_Tex(HudExtra_HpSub(bars), HUDX_X, HUDX_X + w, 1, 9, 0, w * 2, 0, 16, lum);
+    }
+    /* ki: five lamps, the one being filled grows from its foot (HudGauge_UpdateKi) */
+    for (k = 0; k < 5; k++) {
+        s32 n = ki >= (k + 1) * HUDG_KI_BAR ? 14 : ki <= k * HUDG_KI_BAR ? 0 : (ki - k * HUDG_KI_BAR) * 14 / HUDG_KI_BAR;
+
+        HudExtra_Tex(0, HUDX_X + k * 5, HUDX_X + 7 + k * 5, 9, 16, 0x10, 0x1E, 0x10, 0x1E, 0x28);
+        if (n != 0) {
+            HudExtra_Tex(1, HUDX_X + k * 5, HUDX_X + 7 + k * 5, 16 - n / 2, 16, 0x10, 0x1E, 0x1E - n, 0x1E, lum);
+        }
+    }
+    /* the health bars in reserve (HudGauge_UpdateHpBarCount shows six at most) */
+    for (k = 0; k < bars && k < 6; k++) {
+        HudExtra_Tex(1, HUDX_X + 32 + k * 5, HUDX_X + 40 + k * 5, 9, 16, 0, 0x10, 0x11, 0x1F, lum);
+    }
+}
+
+/* Draws the rows; called by Hud_Draw behind the two passes of the gauge tree. */
+void HudGauge_DrawExtras(void) {
+    s32 used[2] = { 0, 0 }; /* rows taken, by side of the screen */
+    s32 count;
+    s32 i;
+
+    if (BtlChar_FindBySide(0) == NULL) {
+        return; /* (no roster yet) */
+    }
+    count = BtlChar_GetCount();
+    for (i = 2; i < count && i < PORT_FIGHTER_MAX; i++) {
+        s32 place = HUD_SCR(Port_Team(i) == 0 ? 0 : 1);
+        s32 n;
+
+        /* (one row a fighter; BT3_HUD_ROWS=<n>, testing, draws it n times to show a full stack) */
+        for (n = Port_HudTestRows(); n > 0 && used[place] < HUDX_SLOTS; n--) {
+            s32 slot = used[place]++;
+
+            sHudExtraFighter = i;
+            sHudExtraPlace = place;
+            sHudExtraNode.draw = HudExtra_DrawRow;
+            /* (left-hand coordinates: the right-hand rows are mirrored like the side's gauge; the rows leave the
+               screen with the whole part) */
+            HudNode_SetPos(&sHudExtraNode, 8 + slot / HUDX_ROWS * 106 + (s32)(gHudGauge->slideAll.value * -256.0f),
+                           68 + slot % HUDX_ROWS * 17 + (s32)(gHudGauge->slideAll.value * -224.0f));
+            Port_GsMarker(place ? PORT_2D_RIGHT : PORT_2D_LEFT);
+            HudNode_Draw(&sHudExtraNode, place);
+        }
+    }
+    if (count > 2) {
+        Port_GsMarker(HUD_SCR(1) ? PORT_2D_RIGHT : PORT_2D_LEFT); /* (as the second pass of the tree left it) */
+    }
+}
+
+/* Round reset: no trailing health is left over from the fight before. */
+void HudGauge_ResetExtras(void) {
+    memset(sHudExtraShown, 0, sizeof(sHudExtraShown));
+    memset(sHudExtraDrain, 0, sizeof(sHudExtraDrain));
+}
+#endif
