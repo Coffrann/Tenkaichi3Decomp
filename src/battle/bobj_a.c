@@ -1566,6 +1566,12 @@ void BtlObjMdl_CopyTexAlpha(BobjMdl *mdl, BobjTexTable *src, BobjTexTable *dst) 
 #else
     Res_RelocateOffsets(&hdr, dst);
 #endif
+#ifdef PORT /* a model from outside the disc may name a shared record its table does not have (seen in an added
+               character: the console reads whatever lies there, the PC build stops on the address). Left as it is. */
+    if ((u32)mdl->model->faceTex >= src->count) {
+        return;
+    }
+#endif
     from = *(u8 **)(src->rec + mdl->model->faceTex * 0x40 + 0x3C) + 0x60;
     for (i = 0; i < hdr->count; i++) {
         to = *(u8 **)(hdr->rec + i * 0x40 + 0x3C) + 0x60;
