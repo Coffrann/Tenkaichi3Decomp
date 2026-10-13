@@ -7,10 +7,14 @@
 
 #ifdef PORT
 /* The third-fighter experiment: a cut is framed on the two fighters of it, which the game takes for fighters 0
-   and 1. The second is player 1's opponent of the moment (the camera of a throw or an ultimate on the third
-   fighter looked at the other one: seen by the user). */
-extern s32 gPortTarget[]; /* btl_char_flag_opp.c: 1 without a third fighter */
-#define CUT_FIGHTER(i) BtlChar_Get((i) == 1 ? gPortTarget[0] : (i))
+   and 1. They are the fighter whose cut it is and its opponent of the moment (the camera of a throw or an
+   ultimate on the third fighter looked at the other one: seen by the user; the cut of a clash between two that
+   are not player 1 looked at the empty middle between player 1 and its opponent). The lower index is the first,
+   so that with two fighters the middle is computed in the game's own order. */
+extern s32 gPortTarget[]; /* btl_char_flag_opp.c: 1 and 0 without a third fighter */
+#define CUT_LOW(chr) ((chr)->side < gPortTarget[(chr)->side] ? (chr)->side : gPortTarget[(chr)->side])
+#define CUT_HIGH(chr) ((chr)->side < gPortTarget[(chr)->side] ? gPortTarget[(chr)->side] : (chr)->side)
+#define CUT_FIGHTER(i) BtlChar_Get((i) == 1 ? CUT_HIGH(chr) : CUT_LOW(chr))
 #else
 #define CUT_FIGHTER(i) BtlChar_Get(i)
 #endif
@@ -68,7 +72,7 @@ void ChrCam_CalcCut(ChrCamChr *chr, Vec4 *eye, Vec4 *rot, Vec4 *target) {
             id = chr->objId;
         }
         if (id < 0) {
-            BtlCharApi_GetNodePos(BtlChar_Get(0)->objId, node & CHRCUT_NODE_MASK, &tmp0);
+            BtlCharApi_GetNodePos(CUT_FIGHTER(0)->objId, node & CHRCUT_NODE_MASK, &tmp0);
             BtlCharApi_GetNodePos(CUT_FIGHTER(1)->objId, node & CHRCUT_NODE_MASK, &tmp1);
             Vec4_Lerp(&cut->vecA, &tmp0, &tmp1, 0.5f);
         } else if (frozen == 0 || other == 0) {
@@ -94,7 +98,7 @@ void ChrCam_CalcCut(ChrCamChr *chr, Vec4 *eye, Vec4 *rot, Vec4 *target) {
                 id = chr->objId;
             }
             if (id < 0) {
-                BtlCharApi_GetNodePos(BtlChar_Get(0)->objId, node & CHRCUT_NODE_MASK, &tmp2);
+                BtlCharApi_GetNodePos(CUT_FIGHTER(0)->objId, node & CHRCUT_NODE_MASK, &tmp2);
                 BtlCharApi_GetNodePos(CUT_FIGHTER(1)->objId, node & CHRCUT_NODE_MASK, &tmp3);
                 Vec4_Lerp(&tmp0, &tmp2, &tmp3, 0.5f);
             } else if (frozen == 0 || other == 0) {
@@ -117,7 +121,7 @@ void ChrCam_CalcCut(ChrCamChr *chr, Vec4 *eye, Vec4 *rot, Vec4 *target) {
             id = chr->objId;
         }
         if (id < 0) {
-            BtlCharApi_GetNodePos(BtlChar_Get(0)->objId, node & CHRCUT_NODE_MASK, &tmp0);
+            BtlCharApi_GetNodePos(CUT_FIGHTER(0)->objId, node & CHRCUT_NODE_MASK, &tmp0);
             BtlCharApi_GetNodePos(CUT_FIGHTER(1)->objId, node & CHRCUT_NODE_MASK, &tmp1);
             Vec4_Lerp(&cut->vecC, &tmp0, &tmp1, 0.5f);
         } else if (frozen == 0 || other == 0) {
@@ -140,7 +144,7 @@ void ChrCam_CalcCut(ChrCamChr *chr, Vec4 *eye, Vec4 *rot, Vec4 *target) {
                 id = chr->objId;
             }
             if (id < 0) {
-                BtlCharApi_GetNodePos(BtlChar_Get(0)->objId, node & CHRCUT_NODE_MASK, &tmp1);
+                BtlCharApi_GetNodePos(CUT_FIGHTER(0)->objId, node & CHRCUT_NODE_MASK, &tmp1);
                 BtlCharApi_GetNodePos(CUT_FIGHTER(1)->objId, node & CHRCUT_NODE_MASK, &tmp2);
                 Vec4_Lerp(&tmp0, &tmp1, &tmp2, 0.5f);
             } else if (frozen == 0 || other == 0) {
