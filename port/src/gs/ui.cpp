@@ -77,6 +77,14 @@ int Port_LobbyRelayed(void);                                 // the other player
 int Port_LobbyPoll(void);
 void Port_LobbyCancel(void);
 void Port_LobbyLaunch(void);
+int Port_ExtraCount(void);                     // plat_fighters.c: the extra fighters of the experiment (settings)
+int Port_ExtraChara(int index);
+int Port_ExtraTeam(int index);                 // 0, 1: a player's team; -1: its own
+int Port_ExtraLevel(int index);
+void Port_ExtraSet(int count, int index, int chara, int team, int level);
+int Port_ExtraCharaOk(int chara, char *why, int size); // its files are in the game data
+int Port_ExtraLast(void);                      // what the last fight's set-up decided
+const char *Port_CharaName(int chara);         // a character's name from the game data ("" if it gave none)
 }
 static bool sReady, sOpen;
 static bool sNet;                              // the open window is the online screen (Dragon Net Battle), not the settings
@@ -1300,6 +1308,125 @@ static void cheats_tab(void) {
     }
 }
 
+// The Experiments tab: things that are not finished, each off until switched on, none of them in online play.
+// Extra fighters: a table with a row for each (one today; the settings carry an index, plat_fighters.c).
+static void chara_label(char *out, size_t size, int chara) {
+    const char *name = Port_CharaName(chara);
+    if (name[0] != '\0') {
+        snprintf(out, size, "%s  (%d)", name, chara);
+    } else {
+        snprintf(out, size, "Character %d", chara);
+    }
+}
+
+static void experiments_tab(void) {
+    static const char *const kTeams[] = {"Team 1 (player 1's)", "Team 2 (player 2's)", "On its own"}; // (more teams: more rows here)
+    static const char *const kLast[] = {NULL,
+                                        "The last fight had it.",
+                                        "The last fight was left as the game's own: only Duel and training fights get one.",
+                                        "The last fight was left as the game's own: a side had more than one member.",
+                                        "The last fight was left as the game's own: the picture was split for two players.",
+                                        "The last fight was left as the game's own: it was a replay.",
+                                        "The last fight was left as the game's own: it had a script.",
+                                        "The last fight was left as the game's own: an online match never has one.",
+                                        "The last fight was left as the game's own: the character's files were not found."};
+    static int checked = -1, ok, age; // the character whose files were looked for, what came of it, frames since
+    static char why[160], refused[320];
+    int count = Port_ExtraCount(), chara = Port_ExtraChara(0), team = Port_ExtraTeam(0), level = Port_ExtraLevel(0);
+    int wasCount = count, wasChara = chara, wasTeam = team, wasLevel = level, last = Port_ExtraLast();
+    bool on = count > 0;
+    char label[96];
+
+    ImGui::TextWrapped("Unfinished things to try. They change how the game plays, so none of them is ever used in an online match.");
+    ImGui::Spacing();
+    ImGui::SeparatorText("Extra fighters");
+    if (ImGui::Checkbox("Third fighter (experimental)", &on)) {
+        count = on ? 1 : 0;
+    }
+    ImGui::SetItemTooltip("A third fighter, played by the computer, joins the next fight that starts.\n"
+                          "Only in a one against one fight of Duel (against the computer) or of training;\n"
+                          "story, tournaments, team battles, two-player split screen and replays stay as they are.\n"
+                          "It has no health bar yet, and a replay saved from such a fight will not play back right.");
+    if (Port_NetActive()) {
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "Off while you are in an online match.");
+    }
+    ImGui::BeginDisabled(!on);
+    if (ImGui::BeginTable("extra", 4, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 20.0f);
+        ImGui::TableSetupColumn("Character", ImGuiTableColumnFlags_WidthStretch, 2.6f);
+        ImGui::TableSetupColumn("Team", ImGuiTableColumnFlags_WidthStretch, 2.3f);
+        ImGui::TableSetupColumn("Computer level", ImGuiTableColumnFlags_WidthStretch, 1.5f);
+        ImGui::TableHeadersRow();
+        ImGui::TableNextRow();
+        ImGui::PushID(0);
+        ImGui::TableNextColumn();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("3");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        chara_label(label, sizeof(label), chara);
+        if (ImGui::BeginCombo("##chara", label, ImGuiComboFlags_HeightLarge)) {
+            for (int c = 0; c <= 160; c++) {
+                chara_label(label, sizeof(label), c);
+                if (ImGui::Selectable(label, c == chara)) {
+                    // a character whose files the game data does not have is not taken: the fight could not load it
+                    if (Port_ExtraCharaOk(c, why, sizeof(why))) {
+                        chara = c;
+                        refused[0] = '\0';
+                    } else {
+                        snprintf(refused, sizeof(refused), "%s was not taken: %s.", label, why);
+                    }
+                }
+                if (c == chara) {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        {
+            int at = team < 0 ? 2 : team;
+            if (ImGui::Combo("##team", &at, kTeams, 3)) {
+                team = at == 2 ? -1 : at;
+            }
+        }
+        ImGui::SetItemTooltip("Whose side it fights on. Fighters of one team do not hit each other.\n"
+                              "On its own: against both players.");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::SliderInt("##level", &level, 0, 29, "%d", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("How well the computer plays it, 0 to 29.\n"
+                              "The game's own five levels are 0, 6, 13, 21 and 29.");
+        ImGui::PopID();
+        ImGui::EndTable();
+    }
+    ImGui::EndDisabled();
+    if (count != wasCount || chara != wasChara || team != wasTeam || level != wasLevel) {
+        Port_ExtraSet(count, 0, chara, team, level);
+    }
+    if (checked != chara || ++age > 120) { // (again now and then: the data folder is the player's to change)
+        checked = chara;
+        age = 0;
+        ok = Port_ExtraCharaOk(chara, why, sizeof(why));
+    }
+    if (refused[0] != '\0') {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.4f, 1.0f));
+        ImGui::TextWrapped("%s", refused);
+        ImGui::PopStyleColor();
+    }
+    if (on && !ok) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.5f, 0.4f, 1.0f));
+        ImGui::TextWrapped("This character cannot be used: %s. Fights stay as the game's own until another is chosen.", why);
+        ImGui::PopStyleColor();
+    }
+    ImGui::Spacing();
+    ImGui::TextWrapped("A change here is used by the next fight that starts; a fight that is on keeps what it started with.");
+    if (last > 0 && last < (int)(sizeof(kLast) / sizeof(kLast[0])) && (on || last == 1)) {
+        ImGui::TextDisabled("%s", kLast[last]);
+    }
+}
+
 // The Controls tab's part for the sticks: each stick of the player's controller as it is now (the dot), its deadzone
 // (the shaded middle: a circle, or the game's own square), what the game is given for it (the ring, and in numbers),
 // the triggers, and the settings for these and for vibration. For seeing a stick that drifts and choosing a deadzone
@@ -1518,12 +1645,13 @@ static void build(void) {
         open = false;
     }
     if (sForceTab < 0 && (pad_pressed(ImGuiKey_GamepadL1) || pad_pressed(ImGuiKey_GamepadR1))) {
-        sForceTab = (sTab + (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false) ? 6 : 1)) % 7;
+        sForceTab = (sTab + (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false) ? 7 : 1)) % 8;
         sPadTab = true;
     }
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     // (760 high where the picture has the room: the Controls tab's sticks and its list of bindings together)
-    ImGui::SetNextWindowSize(ImVec2(640.0f, io.DisplaySize.y >= 800.0f ? 760.0f : 600.0f), ImGuiCond_Appearing);
+    // (and 690 wide: the eight tabs' names side by side)
+    ImGui::SetNextWindowSize(ImVec2(690.0f, io.DisplaySize.y >= 800.0f ? 760.0f : 600.0f), ImGuiCond_Appearing);
     if (ImGui::Begin("Settings", &open, ImGuiWindowFlags_NoCollapse)) {
         {
             int latest = update_latest();
@@ -1579,6 +1707,7 @@ static void build(void) {
             }
             if (tab("Cheats", 5)) { cheats_tab(); ImGui::EndTabItem(); }
             if (tab("Misc", 6)) { misc_tab(); ImGui::EndTabItem(); }
+            if (tab("Experiments", 7)) { experiments_tab(); ImGui::EndTabItem(); }
             ImGui::EndTabBar();
         }
         ImGui::EndChild();
