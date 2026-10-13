@@ -1330,6 +1330,15 @@ s32 BtlAct_VanishDashHandler(BtlActEChr *chr, s32 phase) {
     }
 }
 
+#ifdef PORT
+/* The third-fighter experiment: the first fighter of the clash (it takes the first of the two motions, and makes
+   the exchange's spark and sound once for both), which the game takes for player 0. btl_char_flag_clash.c. */
+extern s32 gPortClash[2];
+#define CLASH_FIRST gPortClash[0]
+#else
+#define CLASH_FIRST 0
+#endif
+
 /*
  * Action 0xFA (forced by flag 0x61): clash B, the two fighters trading blows. Every accepted input
  * (input condition 0x33) adds to clashCountB; abilities and a technique in progress add more on a
@@ -1339,7 +1348,7 @@ void BtlAct_ClashBlowsHandler(BtlActEChr *chr, s32 phase) {
     s32 *bonus = &chr->work[2];
 
     if (phase == 0) {
-        BtlAnim_Play(chr, chr->player == 0 ? 0x173 : 0x174, 0.15f);
+        BtlAnim_Play(chr, chr->player == CLASH_FIRST ? 0x173 : 0x174, 0.15f);
         chr->clashCountB = 0;
         if (BtlAct_IsTechniqueId(BtlAct_GetPrev(chr))) {
             chr->work[0] |= 1;
@@ -1571,7 +1580,7 @@ s32 BtlAct_ClashExchangeHandler(BtlActEChr *chr, s32 phase) {
                     if (BtlAnim_PassedRatio(chr, 0.1f)) {
                         BtlChar_SetFxBit(chr, 0xC);
                         BtlChar_Vibrate(chr, 1.0f, 0.3f);
-                        if (chr->player == 0) {
+                        if (chr->player == CLASH_FIRST) {
                             BtlChar_SetFxBit(chr, 0x2D);
                             BtlCharSnd_PlayCommon(chr, 0x4F);
                             BtlCharSnd_PlayCommon(chr, 0x4B);

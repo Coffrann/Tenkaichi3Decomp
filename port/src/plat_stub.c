@@ -690,6 +690,44 @@ int Port_PageAspectMilli(void) {
 
 /* (the third-fighter experiment's tool) BT3_FREEZE_LOG=1: once every 120 updates, each fighter's freeze level
    (2 or 1: it holds the others still), its action and whether it is frozen itself. */
+/* (the third-fighter experiment's tools, for clashes: btl_char_flag_clash.c)
+   BT3_CLASH_PAIR_LOG=1: a line when a clash starts, is decided and is over: which two fighters (roster indices),
+   their two counts, who won, and the number of the picture.
+   BT3_FORCE_CLASH=n,a,b[,kind]: from the n-th update of the clash code on, fighters a and b are put into a clash
+   the next time they are near each other and none runs, and again n updates after that (kind 1, the default:
+   trading blows; 2: the vanishing exchange; 3: the struggle, whenever both are in a technique that can
+   struggle). */
+void Port_ClashPairLog(const char *what, int a, int b, int countA, int countB, int winner) {
+    extern unsigned gGsFrame; /* gs_core.c: the number of the picture (BT3_SHOT names its files by it) */
+    static int on = -1;
+    if (on < 0) { on = getenv("BT3_CLASH_PAIR_LOG") != NULL; }
+    if (!on) { return; }
+    if (winner >= 0) {
+        fprintf(stderr, "bt3: clash: frame %u: %s: fighters %d and %d, counts %d and %d, fighter %d wins\n", gGsFrame, what, a, b, countA, countB, winner);
+    } else {
+        fprintf(stderr, "bt3: clash: frame %u: %s: fighters %d and %d\n", gGsFrame, what, a, b);
+    }
+}
+static int sForceClashCalls, sForceClashNext;
+void Port_ForceClashDone(void) {
+    sForceClashNext = sForceClashCalls;
+}
+int Port_ForceClash(int *a, int *b) {
+    static int every = -1, fa, fb, kind = 1;
+    if (every < 0) {
+        const char *e = getenv("BT3_FORCE_CLASH");
+        every = 0;
+        if (e != NULL && sscanf(e, "%d,%d,%d,%d", &every, &fa, &fb, &kind) < 3) { every = 0; }
+        if (every < 0) { every = 0; }
+    }
+    if (every == 0) { return 0; }
+    sForceClashCalls++;
+    if (sForceClashCalls < sForceClashNext + every) { return 0; }
+    *a = fa;
+    *b = fb;
+    return kind == 2 || kind == 3 ? kind : 1;
+}
+
 void Port_FreezeLog(int i, int level, int action, int frozen, int count) {
     static int on = -1, calls;
     if (on < 0) { on = getenv("BT3_FREEZE_LOG") != NULL; }

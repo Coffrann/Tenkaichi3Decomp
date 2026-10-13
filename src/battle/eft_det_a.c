@@ -1210,6 +1210,20 @@ void EftDet_ClashPass(void) {
 
                 if (list->rec[i].objId != list->rec[j].objId) {
                     if (EftHit_CanHit(&list->rec[j], 2)) {
+#ifdef PORT
+                        {
+                            /* The third-fighter experiment: shots of two fighters of one team do not meet (as a
+                               shot is never tried on a friend). A shot of an object that is not a fighter keeps
+                               the game's rule. */
+                            extern s32 Port_IsEnemy(s32 a, s32 b); /* btl_char_flag_opp.c */
+                            extern s32 BtlChar_GetCount(void);
+                            if (BtlChar_GetCount() > 2 && (u32)list->rec[i].objId < (u32)BtlChar_GetCount() &&
+                                (u32)list->rec[j].objId < (u32)BtlChar_GetCount() &&
+                                !Port_IsEnemy(list->rec[i].objId, list->rec[j].objId)) {
+                                continue;
+                            }
+                        }
+#endif
                         if (list->rec[i].shape.type == 0 && list->rec[j].shape.type == 0) {
                             if (EftDet_SpheresVsSpheres(&list->rec[i].shape, &list->rec[j].shape)) {
                                 hit = 1;
@@ -1245,6 +1259,25 @@ void EftDet_ClashPass(void) {
                                     EftHit_SetTaskFlag(i, 8, list->rec[i].shape.hitPos);
                                     EftHit_SetTaskFlag(j, 8, list->rec[j].shape.hitPos);
                                 } else {
+#ifdef PORT
+                                    /* The third-fighter experiment: the struggle is between the owners of the two
+                                       shots, whoever they are (the game takes them for fighters 0 and 1). One
+                                       clash runs at a time: when another pair is in one, or an owner is not a
+                                       fighter, these two beams pass each other. */
+                                    extern s32 Port_ClashPair(s32 a, s32 b); /* btl_char_flag_clash.c */
+                                    extern s32 BtlChar_GetCount(void);
+                                    if (BtlChar_GetCount() > 2) {
+                                        if (Port_ClashPair(list->rec[i].objId, list->rec[j].objId)) {
+                                            BtlCharApi_SetHeldFlagAA(list->rec[i].objId);
+                                            BtlCharApi_SetHeldFlagAA(list->rec[j].objId);
+                                            if (!EftStruggle_IsActive()) {
+                                                EftHit_SetTaskFlag(i, 0x100, list->rec[i].shape.hitPos);
+                                                EftHit_SetTaskFlag(j, 0x100, list->rec[j].shape.hitPos);
+                                                EftStruggle_Start(&list->rec[i].shape.hitPos, &list->rec[i], &list->rec[j]);
+                                            }
+                                        }
+                                    } else {
+#endif
                                     BtlCharApi_SetHeldFlagAA(0);
                                     BtlCharApi_SetHeldFlagAA(1);
                                     if (!EftStruggle_IsActive()) {
@@ -1252,6 +1285,9 @@ void EftDet_ClashPass(void) {
                                         EftHit_SetTaskFlag(j, 0x100, list->rec[j].shape.hitPos);
                                         EftStruggle_Start(&list->rec[i].shape.hitPos, &list->rec[i], &list->rec[j]);
                                     }
+#ifdef PORT
+                                    }
+#endif
                                 }
                             }
                         }

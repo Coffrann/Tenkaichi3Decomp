@@ -60,6 +60,7 @@ extern int Port_ThirdTeam(void); /* port/src/plat_stub.c */
 #define PORT_FIGHTERS 4
 s32 gPortTarget[PORT_FIGHTERS] = { 1, 0, 0, 0 };
 static s32 sPortTargetHold[PORT_FIGHTERS];
+extern s32 Port_ClashPartner(s32 i); /* btl_char_flag_clash.c: the other fighter of the clash i is in, or -1 */
 s32 Port_Team(s32 i) {
     return i < 2 ? i : Port_ThirdTeam();
 }
@@ -75,6 +76,11 @@ void Port_TargetHit(s32 attacker, s32 victim) {
        BtlAiSense_IsBehindOpponent, seen by the user.) */
     if ((u32)attacker < (u32)BtlChar_GetCount() && (u32)victim < (u32)BtlChar_GetCount() &&
         Port_IsEnemy(attacker, victim)) {
+        /* (Two in a clash keep each other: a hit from outside the pair does not turn either away.) */
+        if ((Port_ClashPartner(attacker) >= 0 && Port_ClashPartner(attacker) != victim) ||
+            (Port_ClashPartner(victim) >= 0 && Port_ClashPartner(victim) != attacker)) {
+            return;
+        }
         gPortTarget[attacker] = victim;
         sPortTargetHold[attacker] = 120;
         /* The victim's too: what a hit does to it is worked out against "its opponent" (which way it is thrown,
@@ -102,6 +108,13 @@ void Port_UpdateTarget(void) {
 
         if (cur >= count || !Port_IsEnemy(i, cur)) {
             cur = -1;
+        }
+        /* A clash is between two: each is the other's target for as long as it lasts, and two seconds on (the
+           loser's damage is "the opponent's count", asked after the sequence is over). */
+        if (Port_ClashPartner(i) >= 0) {
+            gPortTarget[i] = Port_ClashPartner(i);
+            sPortTargetHold[i] = 120;
+            continue;
         }
         /* A technique (a beam, a rush, an ultimate: actions 0x105..0x132) is between the fighter and its victim
            for as long as it lasts, which can be far longer than the two seconds a hit holds the target: a Spirit

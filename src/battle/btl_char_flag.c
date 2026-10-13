@@ -234,6 +234,20 @@ void BtlChar_SetFrameBits(BtlFlagChr *chr, u64 bits) {
 
 /* The first clash won in a battle (by either side): set-once bit 0, flag 0xE3 and battle event 0x3C for this fighter. */
 void BtlChar_RaiseFirstClash(BtlFlagChr *chr) {
+#ifdef PORT
+    {
+        /* (The third-fighter experiment: "first" is asked of every fighter. With the two below alone, each clash
+           a third fighter won was the battle's first again until one of the two won one.) */
+        extern s32 BtlChar_GetCount(void);
+        s32 i;
+
+        for (i = 0; i < BtlChar_GetCount(); i++) {
+            if (BtlChar_TestOnceBit(BtlChar_Get(i), 0)) {
+                return;
+            }
+        }
+    }
+#endif
     if (!BtlChar_TestOnceBit(BtlChar_Get(0), 0) && !BtlChar_TestOnceBit(BtlChar_Get(1), 0)) {
         BtlChar_SetOnceBit(chr, 0);
         BtlChar_SetFlag(chr, 0xE3);

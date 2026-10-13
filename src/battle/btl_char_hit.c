@@ -825,12 +825,18 @@ s32 BtlHit_CheckClash(void) {
         HitChr *b = BtlChar_Get(BtlOpp_GetPlayer(a));
 
 #ifdef PORT
-        /* The third-fighter experiment: a clash (the two trading blows, or pushing) is run for fighters 0 and 1
-           and decided between them. With the third fighter in one, it entered the clash and nobody ended it: it
-           stayed in action 0xFA and the fight's clock stood still. Until the clash knows its pair, the third
-           fighter and whoever touches it do not clash: the blows land as ordinary hits. */
-        if (i >= 2 || BtlOpp_GetPlayer(a) >= 2) {
-            continue;
+        /* The third-fighter experiment: with more than two fighters a clash is between a fighter and its target
+           (an enemy), and only one clash runs at a time (btl_char_flag_clash.c). The touch that starts it has to
+           be between these two: "blocked by the opponent" is each one's own push-out against its own target, and
+           b's target may be somebody else. */
+        if (BtlChar_GetCount() > 2) {
+            extern s32 Port_IsEnemy(s32 a, s32 b); /* btl_char_flag_opp.c */
+            extern s32 Port_ClashBusy(void);       /* btl_char_flag_clash.c */
+
+            if (!Port_IsEnemy(i, b->player) || Port_ClashBusy() ||
+                (!BtlMove_IsBlockedByOpponent(a) && BtlOpp_GetPlayer(b) != i)) {
+                continue;
+            }
         }
 #endif
         if (BtlChar_TestFlag(a, 3)) {
@@ -871,6 +877,12 @@ s32 BtlHit_CheckClash(void) {
                     BtlCharSnd_PlayCommon(b, 0x4B);
                     BtlChar_SetFxBit(a, 0x2C);
                 }
+#ifdef PORT
+                if (BtlChar_GetCount() > 2) { /* (the pair of the clash that these flags start) */
+                    extern s32 Port_ClashPair(s32 a, s32 b);
+                    Port_ClashPair(i, b->player);
+                }
+#endif
                 BtlChar_SetFlag(a, 0x44);
                 BtlChar_SetFlag(a, 0x45);
                 BtlChar_SetFlag(a, 0x46);
