@@ -54,8 +54,8 @@ all "the model of costume 1". If a folder has two files of one kind, the first b
 | `*_voice_jp.pak` | voice bank, **Japanese** | `0xBDA + id` | 591,872 |
 | `voice_us/NNN.adx` | spoken lines, English: `000.adx` .. `099.adx` | `0xCC32 + id*100 + NNN` | none (streamed) |
 | `voice_jp/NNN.adx` | spoken lines, Japanese | `0x8D4E + id*100 + NNN` | none (streamed) |
-| `portrait.bin` | the large picture of the menus | `0x2F9 + id` | 92,160 |
-| `member_1p.bin`, `member_2p.bin` | the fight's member block (the small picture of a team mate), for the left and the right side | `8 + id*2 + side` | 4,096 |
+| `portrait.bin`, or `*_img.cdbt` | the large picture of the menus | `0x2F9 + id` | 92,160 |
+| `member_1p.bin`, `member_2p.bin`, or `*_tag_P1.dbt`, `*_tag_P2.dbt` | the fight's member block (the small picture of a team mate), for the left and the right side | `8 + id*2 + side` | 4,096 |
 | `chip.bin` | the small square of the roster: one entry of the character select's chip pack | menu archive `0x1C1`, section 45, entry `id + 1` | exactly the game's 5,504-byte entry |
 | `character.txt` | the manifest (section 3) | | first 16,383 bytes are read |
 

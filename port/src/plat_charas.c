@@ -133,6 +133,17 @@ static int same_nocase(const char *a, const char *b) {
     return *a == '\0' && *b == '\0';
 }
 
+/* whether a name ends with `end` (given in lower case), without regard to case */
+static int ends_nocase(const char *name, const char *end) {
+    size_t l = strlen(name), el = strlen(end), k;
+    if (l < el) {
+        return 0;
+    }
+    for (k = 0; k < el && tolower((unsigned char)name[l - el + k]) == end[k]; k++) {
+    }
+    return k == el;
+}
+
 /* which of the twelve files a name is, by its ending; -1 if none */
 static int kind_of(const char *name) {
     static const struct { const char *end; int kind; } kEnds[] = {
@@ -513,11 +524,11 @@ static Chara *scan(const char *root, const char *name, const Chara *owner) {
             slot = c->file[k];
         } else if (same_nocase(n, "chip.bin")) {
             slot = c->chip;
-        } else if (same_nocase(n, "portrait.bin")) {
-            slot = c->portrait;
-        } else if (same_nocase(n, "member_1p.bin")) {
+        } else if (same_nocase(n, "portrait.bin") || ends_nocase(n, "_img.cdbt")) {
+            slot = c->portrait; /* (the second name of each of these three: as such files are passed around) */
+        } else if (same_nocase(n, "member_1p.bin") || ends_nocase(n, "_tag_p1.dbt")) {
             slot = c->member[0];
-        } else if (same_nocase(n, "member_2p.bin")) {
+        } else if (same_nocase(n, "member_2p.bin") || ends_nocase(n, "_tag_p2.dbt")) {
             slot = c->member[1];
         } else if (same_nocase(n, "voice_jp")) {
             slot = c->lines[0];
