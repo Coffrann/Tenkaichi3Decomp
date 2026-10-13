@@ -1497,6 +1497,16 @@ void BtlChars_UpdateMain(void) {
             Port_Dbg3("targets of 0, 1, 2 / time stopped", gPortTarget[0], gPortTarget[1], gPortTarget[2], BtlChars_IsTimeStopped());
         }
     }
+    {
+        /* (the experiment's tool, BT3_THIRD_DAMAGED=<frame>: at that frame of the fight the third fighter is told
+           it was hit by a finishing technique, as the effect scene tells a fighter: action 0x104, which loads
+           the damaged costume if it does not wear it. For showing that model change in a run without a window.) */
+        extern int Port_ThirdDamagedDue(int frame); /* port/src/plat_stub.c: 1 once, when the frame has come */
+        extern s32 BtlChar_FrameMod(s32 n);
+        if (BtlChar_GetCount() > 2 && Port_ThirdDamagedDue(BtlChar_FrameMod(0x7FFFFFFF))) {
+            BtlChar_SetHeldFlag(BtlChar_Get(2), 0xAB);
+        }
+    }
 #endif
     if (Battle_GetWork()->flags & BATTLE_FLAG_PAUSE) {
         return;

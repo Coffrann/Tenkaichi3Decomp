@@ -647,6 +647,16 @@ void Port_ThirdTransformTaken(int frame, int index, int chara) {
     third_transform_next(1);
     fprintf(stderr, "bt3: the third fighter is made to transform at frame %d (picture %u): transformation %d, into character %d\n", frame, gGsFrame, index, chara);
 }
+/* (the experiment's tool) BT3_THIRD_DAMAGED=<frame>: src/battle/btl_char_mgr.c, BtlChars_UpdateMain. */
+int Port_ThirdDamagedDue(int frame) {
+    static int at = -2;
+    extern unsigned gGsFrame;
+    if (at == -2) { at = getenv("BT3_THIRD_DAMAGED") != NULL ? atoi(getenv("BT3_THIRD_DAMAGED")) : -1; }
+    if (at < 0 || frame < at) { return 0; }
+    at = -1;
+    fprintf(stderr, "bt3: the third fighter is told it was hit by a finishing technique at frame %d (picture %u)\n", frame, gGsFrame);
+    return 1;
+}
 int Port_ThirdAi(void) {
     return !(getenv("BT3_THIRD_AI") != NULL && atoi(getenv("BT3_THIRD_AI")) == 0);
 }
