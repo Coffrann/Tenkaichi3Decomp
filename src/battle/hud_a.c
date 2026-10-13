@@ -130,6 +130,7 @@ extern void HudPrompt_SelectSide(s32 side);                    /* select the sid
 extern void HudPrompt_SetButton(s32 side, s32 button, s32 arg);
 #ifdef PORT
 extern int Port_ClashSquare(void), Port_NetActive(void), Port_NetMe(void); /* port/src/gs */
+extern int Port_DemoHud(void); /* port/src/plat_stub.c */
 #endif
 extern void HudPrompt_SetCommand(s32 side, s32 count, s32 *buttons, s32 *kinds, s32 idx);
 extern void HudPrompt_ClearCommand(s32 side);
@@ -567,7 +568,13 @@ void Hud_Draw(void) {
 #ifdef PORT
     Port_GsMarker(PORT_2D_CENTER);
 #endif
+#ifdef PORT
+    /* (BT3_DEMO_HUD=1, testing: the attract demo shows the fight HUD, so that a run without a pad has gauges to
+       look at) */
+    if (Battle_GetMode() == 7 && !Port_DemoHud()) {
+#else
     if (Battle_GetMode() == 7) {
+#endif
         HudNode_Update(gHud->caption);
         HudNode_Draw(gHud->caption, 0);
     } else if (BtlGame_IsReplay()) {

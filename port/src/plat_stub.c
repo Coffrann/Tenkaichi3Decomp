@@ -600,6 +600,12 @@ int Port_TestHp(int i) { /* BT3_TEST_HP=<a>,<b>,<c>: starting health of fighters
     }
     return v;
 }
+/* BT3_DEMO_HUD=1 (testing): the attract demo draws the fight HUD instead of its caption (src/battle/hud_a.c). */
+int Port_DemoHud(void) {
+    static int on = -1;
+    if (on < 0) { on = getenv("BT3_DEMO_HUD") != NULL && atoi(getenv("BT3_DEMO_HUD")) != 0; }
+    return on;
+}
 int Port_ThirdAi(void) {
     return !(getenv("BT3_THIRD_AI") != NULL && atoi(getenv("BT3_THIRD_AI")) == 0);
 }
