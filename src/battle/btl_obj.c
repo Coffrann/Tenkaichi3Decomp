@@ -23,6 +23,11 @@
  */
 #include "common.h"
 #include "battle/btl_obj.h"
+#ifdef PORT
+/* (the object table of this build: BTL_OBJ_MAX entries, see the header) */
+static BtlObj *sPortObjTbl[BTL_OBJ_MAX];
+#define gBtlObjTbl sPortObjTbl
+#endif
 #include "battle/battle.h"
 #include "battle/btl_cam.h"
 #include "sys/common.h"
