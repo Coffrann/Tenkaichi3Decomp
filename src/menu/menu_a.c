@@ -5,6 +5,9 @@ extern void Port_NetMenuOpen(void);
 extern int Port_NetMenuListed(void);
 extern int Port_NetSession(void);
 extern void Port_NetLeave(void);
+extern int Port_ModesMenu(int select); /* port/src/plat_modes.c: the page of extra modes */
+extern int Port_ModesSound(void);
+extern void Port_ModesLeave(void);
 #endif
 #include "sys/pad.h"
 #include "sys/save.h"
@@ -491,6 +494,41 @@ void MainMenu_Input(s32 *result) {
     }
 }
 
+#ifdef PORT
+/* The port's page of extra modes (fights with more than two fighters; port/src/plat_modes.c, drawn over this
+   screen by port/src/gs/ui.cpp). SELECT opens it, here and nowhere else: this is asked only on the frames the
+   menu takes input. While the page is up the pads are the page's and this menu is given none. The page's Start is
+   a choice of this menu, made the way an entry's is (MAINMENU_CHOOSE), but for the character select of the
+   versus mode (39) or of the training mode (45) and not for the menu in front of it: what that menu would have
+   left in gProgress is set here. Returns 1 when this frame's input was the page's. */
+static s32 MainMenu_PortModes(void) {
+    s32 next;
+    s32 se;
+
+    if (!(gMainMenu->flash[0].flags & MFLASH_PAD)) {
+        return 0;
+    }
+    next = Port_ModesMenu((gPad[0].gamePressed & 0x2000) != 0);
+    se = Port_ModesSound();
+    if (se >= 0) {
+        Snd_PlaySe(1, se); /* (the page moves, chooses and cancels with this menu's sounds) */
+    }
+    if (next > 0) {
+        if (next == 39) {
+            /* the versus menu's two answers (DuelProgress, include/menu/menu_g.h): 1P vs COM, a single battle */
+            *(s32 *)((u8 *)gProgress + 0x620) = 0;
+            *(s32 *)((u8 *)gProgress + 0x624) = 0;
+        } else {
+            /* the training menu's note that it was left for the character select (MPTRAIN_SELECT,
+               include/menu/menu_i.h): going back from the select, that menu opens as it does after its own entry */
+            *(s32 *)((u8 *)gProgress + 0x7D4) |= 0x10;
+        }
+        MAINMENU_CHOOSE(next);
+    }
+    return next != 0;
+}
+#endif
+
 /* The main menu's own frame loop. Returns 1 when a mode was chosen (gProgress->mode is set), 0 on cancel. */
 s32 MainMenu_Run(s32 section) {
     s32 result = 1;
@@ -499,6 +537,7 @@ s32 MainMenu_Run(s32 section) {
     if (Port_NetSession()) {
         Port_NetLeave(); /* an online session lives in the versus mode: back at the main menu it is over (no return) */
     }
+    Port_ModesLeave(); /* a fight asked for on the page of extra modes ends here too: Duel is the game's own again */
 #endif
     MainMenu_Init(section);
     ColorFade_StartIn(0, 0, 0, 0x14);
@@ -544,6 +583,11 @@ s32 MainMenu_Run(s32 section) {
                 gProgress->mainMenuItem = MAINMENU_CUR(gMainMenu);
             }
         } else {
+#ifdef PORT
+            if (MainMenu_PortModes()) {
+                continue;
+            }
+#endif
             MainMenu_Input(&result);
         }
     }
