@@ -24,11 +24,52 @@ extern void *memset(void *dst, s32 c, u32 n);
 
 extern BtlCtlRoster *gBtlChars;
 
+#ifdef PORT
+/* More than two fighters. The ring holds six requests, and a request that finds it full is dropped without a
+   word: the fighter that made it then waits for its model for ever, holding everybody else still. Two fighters
+   never have six waiting; ten can (each may ask for a transformation, a partner's body, a damaged costume).
+   What does not fit waits here, in its order, and moves into the ring as the ring gets room. */
+#define PORT_CHANGE_MORE 32
+static BtlChangeReq sPortChangeMore[PORT_CHANGE_MORE];
+static s32 sPortChangeMoreCount;
+
+static void Port_ChangeRefill(void) {
+    BtlChangeQueue *q = &gBtlChars->change;
+    s32 i;
+
+    while (sPortChangeMoreCount > 0 && (q->write + 1) % BTL_CHANGE_RING != q->read) {
+        q->req[q->write] = sPortChangeMore[0];
+        q->write = (q->write + 1) % BTL_CHANGE_RING;
+        sPortChangeMoreCount--;
+        for (i = 0; i < sPortChangeMoreCount; i++) {
+            sPortChangeMore[i] = sPortChangeMore[i + 1];
+        }
+    }
+}
+
+/* The fighter whose request is the active one, -1 when none is. BtlChars_UpdateFreeze asks: while a request is
+   active nobody but its owner holds the others still. The owner has to act for the queue to move on (it says
+   when the swap may happen and when it is done), and a fighter that starts a transformation meanwhile stands in
+   its action with the hit-stop up, waiting for a turn that never came while the owner was frozen by it (seen
+   with ten fighters: one transformed during two others' rush sequence, whose attacker had asked for its
+   partner's body; the fight stood still for good). */
+s32 Port_ChangeOwner(void) {
+    BtlChangeQueue *q = &gBtlChars->change;
+
+    return q->cur != NULL ? q->cur->player : -1;
+}
+#endif
+
 /* Reserves the next slot of the request ring, or returns NULL when it is full. */
 BtlChangeReq *BtlChange_Alloc(void) {
     BtlChangeQueue *q = &gBtlChars->change;
     s32 w = q->write;
 
+#ifdef PORT
+    if (sPortChangeMoreCount > 0 || (w + 1) % BTL_CHANGE_RING == q->read) {
+        return sPortChangeMoreCount < PORT_CHANGE_MORE ? &sPortChangeMore[sPortChangeMoreCount++] : NULL;
+    }
+#endif
     if ((w + 1) % BTL_CHANGE_RING == q->read) {
         return NULL;
     }
@@ -51,6 +92,9 @@ BtlChangeReq *BtlChange_Pop(void) {
 /* Empties the request queue and clears the time-stop word. */
 void BtlChange_Reset(void) {
     memset(&gBtlChars->change, 0, sizeof(BtlChangeQueue));
+#ifdef PORT
+    sPortChangeMoreCount = 0;
+#endif
 }
 
 /* Once per frame: retires a finished request, starts the next one, and sets the time-stop word while one is active. */
@@ -68,6 +112,9 @@ void BtlChange_Update(void) {
     }
 #endif
 
+#ifdef PORT
+    Port_ChangeRefill();
+#endif
     if (q->state == BTL_CHANGE_DONE) {
         q->state = BTL_CHANGE_IDLE;
         q->loaded = 0;

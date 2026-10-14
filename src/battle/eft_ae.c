@@ -1558,6 +1558,57 @@ BtlTask *BtlTask_GetParent(BtlTask *task) {
     return task->list->parent;
 }
 
+#ifdef PORT
+/* The experiment of more than two fighters: the list and the two parts of VRAM it hands out are never checked by
+   the game (128 textures, 256 blocks of palettes from 0x2A00, the images from 0x2B00 up to where the objects'
+   textures begin, 0x3480: BtlObjMdl_BindFiles; a fight of two stays far below all three: 57 textures, 123 blocks
+   of palettes, 584 of images in a demo fight). With ten fighters the palettes' 256 blocks are used up while the
+   images have used half of theirs. So a palette that does not fit its part is given blocks from the END of the
+   images' part, downwards, and the images may grow up to there. A texture that does not fit at all is left out for this frame (it is drawn with
+   what its place in VRAM held before) instead of being written past the table or past VRAM; that is said once,
+   and BT3_HEAPCHK prints the most a fight asked for.
+   Port_VramRoom: `image`, `clut` are the blocks this texture takes (0: none); 0 when there is no room, else
+   *clutAt is where its palette goes. */
+extern void Port_Dbg3(const char *what, int a, int b, int c, int d); /* port/src/plat_stub.c */
+extern void Port_VramFull(int what, int asked, int room);
+static s32 sPortVramPeak[3]; /* textures, palette blocks, the end of the images */
+static u8 sPortVramSaid[2];
+#define PORT_VRAM_END 0x3480
+static s32 sPortClutTop = PORT_VRAM_END; /* the lowest block given to a palette from the end of the part this frame */
+static s32 Port_VramRoom(s32 image, s32 clut, s32 *clutAt) {
+    s32 full = -1, top = sPortClutTop;
+
+    *clutAt = gEftVram->clutNext;
+    if (clut != 0 && gEftVram->clutNext + clut > 0x2B00) {
+        top -= clut;
+        *clutAt = top;
+    }
+    if (gEftVram->count >= EFT_VRAM_ENTRIES) {
+        full = 0;
+    } else if (gEftVram->imageNext + image > top) {
+        full = 1;
+    }
+    if (full >= 0) {
+        if (!sPortVramSaid[full]) {
+            sPortVramSaid[full] = 1;
+            Port_VramFull(full, full == 0 ? (s32)gEftVram->count + 1 : gEftVram->imageNext + image, full == 0 ? EFT_VRAM_ENTRIES : top);
+        }
+        return 0;
+    }
+    sPortClutTop = top;
+    if ((s32)gEftVram->count + 1 > sPortVramPeak[0]) {
+        sPortVramPeak[0] = gEftVram->count + 1;
+    }
+    if (gEftVram->clutNext - 0x2A00 + (PORT_VRAM_END - top) + (*clutAt == top ? 0 : clut) > sPortVramPeak[1]) {
+        sPortVramPeak[1] = gEftVram->clutNext - 0x2A00 + (PORT_VRAM_END - top) + (*clutAt == top ? 0 : clut);
+    }
+    if (gEftVram->imageNext + image > sPortVramPeak[2]) {
+        sPortVramPeak[2] = gEftVram->imageNext + image;
+    }
+    return 1;
+}
+#endif
+
 /* Allocates the effect VRAM list (from BtlScene_Init). */
 void EftVram_Init(void) {
     gEftVram = Heap_Alloc(sizeof(EftAeVram), 0x20, 0, 2);
@@ -1568,6 +1619,12 @@ void EftVram_Init(void) {
 
 /* Frees it. */
 void EftVram_Term(void) {
+#ifdef PORT
+    Port_Dbg3("effect textures of a frame, the most: textures / blocks of palettes / images end at block / -", sPortVramPeak[0],
+              sPortVramPeak[1], sPortVramPeak[2], 0);
+    memset(sPortVramPeak, 0, sizeof(sPortVramPeak));
+    memset(sPortVramSaid, 0, sizeof(sPortVramSaid));
+#endif
     if (gEftVram != NULL) {
         Heap_Free(gEftVram);
         gEftVram = NULL;
@@ -1592,6 +1649,26 @@ u64 EftVram_AddTex(EftAeTex *tex, s32 tcc, s32 tfx) {
     EftAeVramEntry *e = &gEftVram->entry[gEftVram->count];
     u64 tex0;
 
+#ifdef PORT
+    {
+        s32 clutAt;
+
+        if (!Port_VramRoom(tex->image->imageBlocks, tex->image->clutBlocks, &clutAt)) {
+            return tex->tex0;
+        }
+        if (clutAt != gEftVram->clutNext) { /* (its palette is at the end of the images' part) */
+            e->tex = tex;
+            e->imageBlock = gEftVram->imageNext;
+            e->clutBlock = clutAt;
+            e->flags = 3;
+            gEftVram->count++;
+            tex->tex0 &= 0xFFF80003FFFFC000;
+            tex0 = ((tex->tex0 | ((u64)tcc << 34)) | (((u64)tfx << 35) | (u32)gEftVram->imageNext)) | ((u64)(u32)clutAt << 37);
+            gEftVram->imageNext += tex->image->imageBlocks;
+            return tex0;
+        }
+    }
+#endif
     e->tex = tex;
     e->imageBlock = gEftVram->imageNext;
     e->clutBlock = gEftVram->clutNext;
@@ -1610,6 +1687,15 @@ u64 EftVram_AddImage(EftAeTex *tex, s32 tcc, s32 tfx) {
     EftAeVramEntry *e = &gEftVram->entry[gEftVram->count];
     u64 tex0;
 
+#ifdef PORT
+    {
+        s32 clutAt;
+
+        if (!Port_VramRoom(tex->image->imageBlocks, 0, &clutAt)) {
+            return tex->tex0;
+        }
+    }
+#endif
     e->tex = tex;
     e->imageBlock = gEftVram->imageNext;
     e->flags = 1;
@@ -1626,6 +1712,23 @@ u64 EftVram_AddClut(EftAeTex *tex) {
     EftAeVramEntry *e = &gEftVram->entry[gEftVram->count];
     u64 block;
 
+#ifdef PORT
+    {
+        s32 clutAt;
+
+        if (!Port_VramRoom(0, tex->image->clutBlocks, &clutAt)) {
+            return (u32)gEftVram->clutNext;
+        }
+        if (clutAt != gEftVram->clutNext) { /* (at the end of the images' part) */
+            e->tex = tex;
+            e->imageBlock = 0;
+            e->clutBlock = clutAt;
+            e->flags = 2;
+            gEftVram->count++;
+            return (u32)clutAt;
+        }
+    }
+#endif
     e->tex = tex;
     e->imageBlock = 0;
     e->clutBlock = gEftVram->clutNext;
@@ -1640,6 +1743,15 @@ u64 EftVram_AddClut(EftAeTex *tex) {
 u64 EftVram_AddTexAt(EftAeTex *tex, s32 imageBlock, s32 clutBlock, s32 tcc, s32 tfx) {
     EftAeVramEntry *e = &gEftVram->entry[gEftVram->count];
 
+#ifdef PORT
+    {
+        s32 clutAt;
+
+        if (!Port_VramRoom(0, 0, &clutAt)) {
+            return tex->tex0;
+        }
+    }
+#endif
     e->flags = 3;
     e->imageBlock = imageBlock;
     e->clutBlock = clutBlock;
@@ -1709,6 +1821,9 @@ void EftVram_Reset(void) {
     gEftVram->imageNext = 0x2B00;
     gEftVram->clutNext = 0x2A00;
     gEftVram->count = 0;
+#ifdef PORT
+    sPortClutTop = PORT_VRAM_END;
+#endif
 }
 
 /* Empty: a stripped assert that a pack's texture count fits the set. */

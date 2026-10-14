@@ -567,6 +567,11 @@ void Port_Dbg3(const char *what, int a, int b, int c, int d) {
 void Port_PoolFull(int slot, int size, int used) {
     fprintf(stderr, "bt3: EFFECT ARENA %d IS FULL: %d bytes, %d asked for\n", slot, size, used);
 }
+/* The effect scene asked for more textures in one frame than it has room for (src/battle/eft_ae.c): `what` 0 the
+   list, 1 VRAM. The texture is left out for the frame. */
+void Port_VramFull(int what, int asked, int room) {
+    fprintf(stderr, "bt3: effect textures: more than fit in one frame (%s: %d of %d)\n", what == 0 ? "textures in the list" : "the images end at VRAM block", asked, room);
+}
 int Port_HeapCheck(const char *where) {
     static int on = -1, said;
     PortHeapBlock *b, *prev = NULL;

@@ -640,6 +640,16 @@ void BtlChars_UpdateFreeze(void) {
         } else if (BtlChar_TestFlag(chr, 0x126)) {
             level[i] = 1;
         }
+#ifdef PORT
+        {
+            /* More than two fighters: while a model request is active only its owner holds the others still
+               (btl_char_ctl_b.c, Port_ChangeOwner). */
+            extern s32 Port_ChangeOwner(void);
+            if (level[i] != 0 && BtlChar_GetCount() > 2 && Port_ChangeOwner() >= 0 && Port_ChangeOwner() != i) {
+                level[i] = 0;
+            }
+        }
+#endif
         if (max < level[i]) {
             max = level[i];
         }
