@@ -605,12 +605,45 @@ f32 BtlCharApi_GetCamUnk4A0(s32 objId) {
     return 0.0f;
 }
 
+#ifdef PORT
+/* More than two fighters: the camera of a throw, a grab, a rush or an ultimate (flag 0xD3) took the whole screen
+   whoever it was on, so a fight elsewhere on the field cut the player's picture away to it (seen by the user:
+   "grab attacks switch camera to people who grab, and characters who do skills it switches camera to them
+   regardless if you were the target"). Such a camera now has the screen only when it is a player's own or its
+   fighter's target is a player: a player is fighter 0 or 1 when that side is not computer-controlled (with both
+   computer-controlled, a demo, fighter 0 as the default view is). With two fighters every camera passes. Asked
+   by the camera and by drawing code only (whose view is shown, which effects are hidden while a cut runs). */
+extern s32 gPortTarget[];             /* btl_char_flag_opp.c */
+extern s32 BattleSide_IsCpu(s32 side); /* battle_load.c */
+static s32 Port_IsWatched(s32 i) {
+    if (i == 0 || i == 1) {
+        return !BattleSide_IsCpu(i) || (i == 0 && BattleSide_IsCpu(1));
+    }
+    return 0;
+}
+extern void Port_CamLog(int fighter, int target, int shown); /* port/src/plat_stub.c (BT3_CAM_LOG) */
+static s32 Port_CutShown(s32 i) {
+    s32 shown;
+
+    if (BtlChar_GetCount() < 3 || (u32)i >= (u32)BtlChar_GetCount()) {
+        return 1;
+    }
+    shown = Port_IsWatched(i) || Port_IsWatched(gPortTarget[i]);
+    Port_CamLog(i, gPortTarget[i], shown);
+    return shown;
+}
+#endif
+
 /* Fighter flag 0xD3 as 0 / 1: this fighter's camera wants the whole screen. */
 s32 BtlCharApi_HasCamPriority(s32 objId) {
     BtlCharApiChr *chr = BtlChar_FindByObjId(objId);
 
     if (chr != NULL) {
+#ifdef PORT
+        return BtlChar_TestFlag(chr, 0xD3) != 0 && Port_CutShown(chr->side);
+#else
         return BtlChar_TestFlag(chr, 0xD3) != 0;
+#endif
     }
     return 0;
 }
@@ -696,7 +729,11 @@ s32 BtlCharApi_AnyCamPriority(void) {
     }
     for (i = 0; i < gBtlChars->count; i++) {
         chr = BtlChar_Get(i);
+#ifdef PORT
+        if (ChrCam_IsCutActive(chr) && BtlChar_TestFlag(chr, 0xD3) && Port_CutShown(chr->side)) {
+#else
         if (ChrCam_IsCutActive(chr) && BtlChar_TestFlag(chr, 0xD3)) {
+#endif
             return 1;
         }
     }

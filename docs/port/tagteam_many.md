@@ -226,3 +226,11 @@ program's data; the heap walker of `BT3_HEAPCHK` is unchanged. Nothing of this r
 - Windows and macOS builds were not made; the 32-bit program (no port region) falls back to the heap for every
   block above and was not run with extras.
 - Pictures were taken at 4:3 only.
+
+## Camera of throws, grabs and skills
+
+With more than two fighters, a fighter camera that asks for the whole screen (flag 0xD3: a throw, a grab, a rush, an
+ultimate) gets it only when it is a player's own or its fighter's target is a player (fighter 0 or 1 on a side that
+is not computer-controlled; in a demo, fighter 0). Before, any such camera took the screen, so a fight elsewhere on
+the field cut the player's picture away. `BtlCharApi_HasCamPriority` and `BtlCharApi_AnyCamPriority` ask
+`Port_CutShown` (btl_char_api.c); with two fighters every camera passes. `BT3_CAM_LOG=1` prints each decision.

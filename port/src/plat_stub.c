@@ -744,6 +744,25 @@ int Port_ForceClash(int *a, int *b) {
     return kind == 2 || kind == 3 ? kind : 1;
 }
 
+/* BT3_CAM_LOG=1: each time a fighter's whole-screen camera (a throw's, a rush's, an ultimate's) is let onto the
+   screen or kept off it, with more than two fighters (btl_char_api.c, Port_CutShown): one line per change. */
+void Port_CamLog(int fighter, int target, int shown) {
+    static int on = -1;
+    static int last[16];
+    int v = 1 + target * 2 + (shown != 0);
+
+    if (on < 0) {
+        const char *e = getenv("BT3_CAM_LOG");
+        on = e != NULL && e[0] == '1';
+    }
+    if (!on || fighter < 0 || fighter >= 16 || last[fighter] == v) {
+        return;
+    }
+    last[fighter] = v;
+    fprintf(stderr, "bt3: camera: fighter %d's cut (target %d) %s\n", fighter, target,
+            shown ? "takes the screen" : "kept off the screen");
+}
+
 void Port_FreezeLog(int i, int level, int action, int frozen, int count) {
     static int on = -1, calls;
     if (on < 0) { on = getenv("BT3_FREEZE_LOG") != NULL; }
