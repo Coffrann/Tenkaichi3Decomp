@@ -1296,7 +1296,17 @@ void BtlChar_UpdateCamera(BtlMgrChr *chr) {
     if (!BtlChar_IsFrozen(chr)) {
         ChrCam_StartCut(chr);
         ChrCam_UpdateDemo(chr);
+#ifdef PORT
+        {
+            /* (more than two fighters: the player's camera looks at the chosen enemy, btl_char_flag_opp.c) */
+            extern s32 gPortCamOf;
+            gPortCamOf = chr->side;
+            ChrCam_UpdateInput(chr);
+            gPortCamOf = -1;
+        }
+#else
         ChrCam_UpdateInput(chr);
+#endif
         BtlObj_SetMoveVec(obj, BtlChar_GetPos(chr)->unk30);
         BtlObj_UpdateChains(obj);
         BtlChar_UpdateHead(chr);
@@ -1323,7 +1333,16 @@ void BtlChar_PostScene(BtlMgrChr *chr) {
         return;
     }
     BtlChar_ObjToPose(chr);
+#ifdef PORT
+    {
+        extern s32 gPortCamOf;
+        gPortCamOf = chr->side;
+        ChrCam_Update(chr);
+        gPortCamOf = -1;
+    }
+#else
     ChrCam_Update(chr);
+#endif
     BtlFx_UpdatePostScene(chr);
     if (BtlMember_GetActiveGauge(chr)->health < 10000) {
         BtlMember_GetActiveGauge(chr)->lowHealth = 1;

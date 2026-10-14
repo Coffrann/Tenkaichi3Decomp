@@ -804,6 +804,19 @@ int Port_TargetTestFlick(int i) {
     return ++frames % period == 0 ? 1 : 0;
 }
 
+/* BT3_CAM_LOG=1, too: what the player's camera looks at and the game's target, at each change of either. */
+void Port_CamFollowLog(int i, int cam, int game, int action) {
+    static int on = -1;
+
+    if (on < 0) {
+        const char *e = getenv("BT3_CAM_LOG");
+        on = e != NULL && e[0] == '1';
+    }
+    if (on) {
+        fprintf(stderr, "bt3: target: fighter %d's camera on %d, the game's target %d (action 0x%X)\n", i, cam, game, action);
+    }
+}
+
 /* BT3_CAM_LOG=1, too: the player's choice of target. */
 void Port_TargetLog(int i, int target, int x, int locked) {
     static int on = -1;

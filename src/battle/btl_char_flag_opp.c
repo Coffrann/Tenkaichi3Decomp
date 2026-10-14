@@ -127,6 +127,8 @@ void Port_TargetHit(s32 attacker, s32 victim) {
    is held, is not there with more than two fighters (btl_char_cam_modes.c). A player is fighter 0 or 1 on a side
    that is not computer-controlled (BT3_TARGET_FLICK, testing: fighter 0 too, flicking by itself). */
 static s32 sPortLock[PORT_FIGHTERS];  /* 1 + the chosen enemy, or 0 */
+static s32 sPortLockAuto[PORT_FIGHTERS]; /* the choice was the game's (the nearest, at the start or when the one
+                                            before went down), not a flick */
 static s32 sPortLockNew[PORT_FIGHTERS]; /* chosen and not the target yet: no hold keeps the old one */
 extern s32 BattleSide_IsCpu(s32 side);                  /* battle_load.c */
 extern s32 BtlInput_IsPressed(BtlFlagChr *chr, u32 mask); /* btl_input.c */
@@ -149,7 +151,8 @@ static s32 Port_LockValid(s32 i) {
 }
 /* The next enemy on the screen from the target, to the right (dir 1) or the left (-1); -1 when there is none. */
 static s32 Port_NextOnScreen(s32 i, s32 dir) {
-    s32 count = BtlChar_GetCount(), cur = gPortTarget[i], k, best = -1, wrap = -1, cx = 0x8000, cy, x, y;
+    s32 count = BtlChar_GetCount(), k, best = -1, wrap = -1, cx = 0x8000, cy, x, y;
+    s32 cur = Port_LockValid(i) ? sPortLock[i] - 1 : gPortTarget[i]; /* (from the one the player sees) */
     s32 bestD = 0, wrapD = 0, d;
     Vec4 pos;
 
@@ -193,6 +196,7 @@ static void Port_TargetChoose(s32 i) {
         if (n >= 0) {
             sPortLock[i] = n + 1;
             sPortLockNew[i] = 1;
+            sPortLockAuto[i] = 0;
             BtlChar_GetSnapPos(BtlChar_Get(n), &pos, 6);
             Port_ProjectPoint(&pos, &x, &y);
             Port_TargetLog(i, n, x, 1);
@@ -203,13 +207,62 @@ static void Port_TargetChoose(s32 i) {
         sPortLock[i] = 0;
         sPortLockNew[i] = 0;
     }
+    /* (no choice: the nearest enemy that stands becomes it, and stays it; the target does not move to whoever
+       is nearer later on: the user asked for no switching of the camera by itself) */
+    if (sPortLock[i] == 0) {
+        s32 count = BtlChar_GetCount(), k, best = -1;
+        f32 bestDist = 0.0f, dist;
+        Vec4 d;
+
+        for (k = 0; k < count; k++) {
+            if (!Port_IsEnemy(i, k) || BtlChar_IsDead(BtlChar_Get(k))) {
+                continue;
+            }
+            Vec4_Sub(&d, &BtlChar_GetPos(BtlChar_Get(k))->pos, &BtlChar_GetPos(me)->pos);
+            dist = Vec3_Length(&d);
+            if (best < 0 || dist < bestDist) {
+                best = k;
+                bestDist = dist;
+            }
+        }
+        if (best >= 0) {
+            sPortLock[i] = best + 1;
+            sPortLockNew[i] = 1;
+            sPortLockAuto[i] = 1;
+        }
+    }
+}
+/* The enemy the player's camera looks at: the chosen one, except while a rush, a throw, a clash or a technique
+   of the player's is on, which the camera has to show between the two of it. A hit from somebody else turns the
+   player to them for what the hit does (Port_TargetHit), not the camera: it stays on the chosen enemy. Anyone
+   else, and two fighters: the target. */
+static s32 Port_InSequence(s32 i);
+s32 Port_CamTarget(s32 i) {
+    if (BtlChar_GetCount() < 3 || !Port_TargetHuman(i) || !Port_LockValid(i) || Port_InSequence(i) ||
+        Port_ClashPartner(i) >= 0 || BtlAct_IsTechniqueId(BtlAct_GetCurrent(BtlChar_Get(i)))) {
+        return gPortTarget[i];
+    }
+    return sPortLock[i] - 1;
+}
+/* Set while a fighter's own camera is worked out (btl_char_mgr.c): "the opponent" is then Port_CamTarget's. */
+s32 gPortCamOf = -1;
+/* (BT3_CAM_LOG: each change of what player i's camera looks at, and of the game's target, with the action) */
+static void Port_CamTargetLog(s32 i) {
+    static s32 lastCam[2] = { -1, -1 }, lastGame[2] = { -1, -1 };
+    extern void Port_CamFollowLog(int i, int cam, int game, int action);
+
+    if (i < 2 && Port_TargetHuman(i) && (Port_CamTarget(i) != lastCam[i] || gPortTarget[i] != lastGame[i])) {
+        lastCam[i] = Port_CamTarget(i);
+        lastGame[i] = gPortTarget[i];
+        Port_CamFollowLog(i, lastCam[i], lastGame[i], BtlAct_GetCurrent(BtlChar_Get(i)));
+    }
 }
 /* The marker's two points for player p: its target's head (model node 0x30, which the camera keeps behind) and
    its feet; 0 when the marker is not drawn (two fighters, no player, a target that is down). The third answer: 1
    when chosen. */
 extern void BtlCharApi_GetNodePos(s32 objId, s32 node, Vec4 *out); /* btl_char_api.c */
 s32 Port_TargetMark(s32 p, Vec4 *head, Vec4 *feet, s32 *locked) {
-    s32 t = gPortTarget[p];
+    s32 t = Port_CamTarget(p);
 
     if (BtlChar_GetCount() < 3 || !Port_TargetHuman(p) || (u32)t >= (u32)BtlChar_GetCount() ||
         !Port_IsEnemy(p, t) || BtlChar_IsDead(BtlChar_Get(t))) {
@@ -217,7 +270,7 @@ s32 Port_TargetMark(s32 p, Vec4 *head, Vec4 *feet, s32 *locked) {
     }
     BtlCharApi_GetNodePos(BtlChar_Get(t)->objId, 0x30, head);
     *feet = BtlChar_GetPos(BtlChar_Get(t))->pos;
-    *locked = sPortLock[p] == t + 1;
+    *locked = sPortLock[p] == t + 1 && !sPortLockAuto[p];
     return 1;
 }
 
@@ -229,7 +282,9 @@ void Port_TargetReset(void) {
         sPortTargetHold[i] = 0;
         sPortLock[i] = 0;
         sPortLockNew[i] = 0;
+        sPortLockAuto[i] = 0;
     }
+    gPortCamOf = -1;
 }
 void Port_UpdateTarget(void) {
     s32 count = BtlChar_GetCount();
@@ -319,8 +374,11 @@ void Port_UpdateTarget(void) {
             gPortTarget[i] = best;
         }
     }
+    for (i = 0; i < 2 && i < count; i++) {
+        Port_CamTargetLog(i);
+    }
 }
-#define OPPONENT(chr) BtlChar_Get(gPortTarget[(chr)->player])
+#define OPPONENT(chr) BtlChar_Get((chr)->player == gPortCamOf ? Port_CamTarget((chr)->player) : gPortTarget[(chr)->player])
 #else
 #define OPPONENT(chr) ((chr)->player == 0 ? BtlChar_Get(1) : BtlChar_Get(0))
 #endif

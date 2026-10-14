@@ -245,7 +245,11 @@ prints each such hold.
 
 With more than two fighters a player (fighter 0 or 1 on a side that is not computer-controlled) flicks the right
 stick right or left to make the next enemy on the screen that way the target (round to the far side past the last).
-The choice holds until that enemy is down; then the nearest again. A rush, throw, clash or technique keeps its
+The choice holds until that enemy is down; then the nearest again, and that holds too: the camera never moves to
+another enemy by itself (the user asked for no automatic switching). The camera asks for "the opponent" with
+`gPortCamOf` set (btl_char_mgr.c) and gets `Port_CamTarget`: the chosen enemy, except during a rush, throw, clash
+or technique of the player's, which it shows between the two of it. The game's own target still turns to whoever
+hit the player (what the hit does depends on it); only the camera and the marker stay on the choice. A rush, throw, clash or technique keeps its
 target until it is over, and a hit from someone else turns the player to them for the second the game needs.
 Held right stick no longer moves the camera to a side with more than two fighters. A triangle over the target's head
 (model node 0x30) shows it: yellow when the game picked it, red when the player did (`HudExtra_DrawTargetMark`,
