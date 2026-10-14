@@ -1523,14 +1523,27 @@ void BtlChars_UpdateMain(void) {
         extern void Port_Dbg3(const char *what, int a, int b, int c, int d);
         extern s32 BtlAct_GetCurrent(BtlMgrChr *chr);
         extern s32 BtlAnim_GetId(BtlMgrChr *chr);
+        extern s32 BtlAct_GetPrev(BtlMgrChr *chr);
         extern s32 gPortTarget[];
         static s32 n;
+        static s32 lost;
+        for (i = 0; i < BtlChar_GetCount(); i++) { /* (a place far off the map, or not a number: said once a fighter) */
+            BtlMgrChr *c = BtlChar_Get(i);
+            f32 *at = (f32 *)BtlChar_GetPos(c);
+            if (!(lost & (1 << i)) && !(at[0] > -1.0e6f && at[0] < 1.0e6f && at[1] > -1.0e6f && at[1] < 1.0e6f && at[2] > -1.0e6f && at[2] < 1.0e6f)) {
+                lost |= 1 << i;
+                Port_Dbg3("a fighter's place is not on the map: fighter / action / its target / that one's action", i, BtlAct_GetCurrent(c),
+                          gPortTarget[i], BtlAct_GetCurrent(BtlChar_Get(gPortTarget[i])));
+                Port_Dbg3("... frame / its animation / previous action / -", n, BtlAnim_GetId(c), BtlAct_GetPrev(c), 0);
+            }
+        }
         if (++n % 150 == 0) {
             for (i = 0; i < BtlChar_GetCount(); i++) {
                 BtlMgrChr *c = BtlChar_Get(i);
                 Port_Dbg3("fighter / action / animation / frozen", i, BtlAct_GetCurrent(c), BtlAnim_GetId(c), BtlChar_IsFrozen(c));
             }
             Port_Dbg3("targets of 0, 1, 2 / time stopped", gPortTarget[0], gPortTarget[1], gPortTarget[2], BtlChars_IsTimeStopped());
+            Port_Dbg3("fighters / the battle's flags / the sequence's state / -", BtlChar_GetCount(), (s32)Battle_GetWork()->flags, BtlSeq_GetState(), 0);
             {
                 extern int Port_HeapFree(int *largest); /* port/src/plat_stub.c */
                 s32 largest = 0;

@@ -2153,6 +2153,23 @@ static s32 Port_RushLoaded(ActGChr *chr, s32 side, s32 level) {
     return 0;
 }
 #define RUSH_LOADED(chr, side, level) Port_RushLoaded(chr, side, level)
+
+/* The other fighter of the rush sequence fighter i is in (attacker 0x12D..0x12F, victim 0x139..0x13B: the throw
+   block names both), -1 when it is in none. btl_char_flag_opp.c keeps the two each other's opponent with it. */
+s32 Port_SequencePartner(s32 i) {
+    ActGChr *chr = (ActGChr *)BtlChar_Get(i);
+    s32 action = BtlAct_GetCurrent(chr);
+    s32 other;
+
+    if (action >= 0x12D && action <= 0x12F) {
+        other = chr->thr.defSide;
+    } else if (action >= 0x139 && action <= 0x13B) {
+        other = chr->thr.atkSide;
+    } else {
+        return -1;
+    }
+    return (u32)other < (u32)BtlChar_GetCount() && other != i ? other : -1;
+}
 #else
 #define RUSH_LOADED(chr, side, level) BtlChange_IsLoadedFor(side)
 #endif

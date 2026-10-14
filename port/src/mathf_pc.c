@@ -34,6 +34,12 @@ float Mathf_WrapAngle(float angle, float half) {
     uint32_t a = bits(angle), h = bits(half);
     uint32_t range = RefVu0_AddBits(h, h);
 
+    /* (An angle 2^24 times the range or more is not changed by a turn more or less and never leaves these loops:
+       the console stands still there, and so did this program (a fighter thrown far off the map by a fault, its
+       hair's swing angle). Such an angle has no direction left to keep: 0.) */
+    if (((a >> 23) & 0xFF) >= ((range >> 23) & 0xFF) + 24) {
+        return 0.0f;
+    }
     while (RefVu0_LtBits(a, range)) {
         a = RefVu0_AddBits(a, range);
     }

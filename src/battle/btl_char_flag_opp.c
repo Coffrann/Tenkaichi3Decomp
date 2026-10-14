@@ -70,6 +70,25 @@ s32 Port_IsEnemy(s32 a, s32 b) {
 /* While a fighter is busy with one of its enemies the target stays: a rush or a throw is a sequence between the
    attacker and the fighter it hit, and the effects of it ask "the opponent" all the way through (a rush on the
    third fighter stopped the game in EftShotTech_UpdateSubs when the target changed under it). */
+/* 1 while fighter i is one of the two of a rush technique's scripted sequence (the attacker's actions 0x12D..0x12F,
+   the victim's 0x133 up) and has its partner as its target. The two are placed against each other on every step
+   ("the opponent"), and nothing from outside may come between: a third fighter's shot that only touched the
+   victim made that fighter the victim's opponent, the victim was placed against somebody who was not in the
+   sequence, far off the map, and its hair's swing angle grew past what the angle wrap can bring back (the game
+   stood still in Mathf_WrapAngle: seen with ten fighters). */
+extern s32 Port_SequencePartner(s32 i); /* btl_act_f.c: from the sequence's own record of the two */
+static s32 Port_InSequence(s32 i) {
+    s32 action = BtlAct_GetCurrent(BtlChar_Get(i));
+    s32 cur = gPortTarget[i];
+
+    if (Port_SequencePartner(i) >= 0) {
+        return 1;
+    }
+    if (!((action >= 0x12D && action <= 0x12F) || action >= 0x133)) {
+        return 0;
+    }
+    return (u32)cur < (u32)BtlChar_GetCount() && cur != i;
+}
 void Port_TargetHit(s32 attacker, s32 victim) {
     /* (Both must be fighters: a shot's owner can be another object, a partner's, with an id past the roster.
        Player 2's target became 3 through here and its AI read a controller that is not there: a crash in
@@ -81,8 +100,13 @@ void Port_TargetHit(s32 attacker, s32 victim) {
             (Port_ClashPartner(victim) >= 0 && Port_ClashPartner(victim) != attacker)) {
             return;
         }
-        gPortTarget[attacker] = victim;
-        sPortTargetHold[attacker] = 120;
+        if (!Port_InSequence(attacker)) {
+            gPortTarget[attacker] = victim;
+            sPortTargetHold[attacker] = 120;
+        }
+        if (Port_InSequence(victim)) {
+            return;
+        }
         /* The victim's too: what a hit does to it is worked out against "its opponent" (which way it is thrown,
            the pair of a rush or an ultimate), and that has to be the one who hit it. With an ally in the fight an
            ultimate of player 1's on player 2 never ended: player 2's opponent was the ally. */
@@ -119,6 +143,13 @@ void Port_UpdateTarget(void) {
 
         if (cur >= count || !Port_IsEnemy(i, cur)) {
             cur = -1;
+        }
+        /* The two of a rush technique's sequence are each other's target, whatever happened before it began
+           (the hit that starts one does not always pass Port_TargetHit). */
+        if (Port_SequencePartner(i) >= 0) {
+            gPortTarget[i] = Port_SequencePartner(i);
+            sPortTargetHold[i] = 120;
+            continue;
         }
         /* A clash is between two: each is the other's target for as long as it lasts, and two seconds on (the
            loser's damage is "the opponent's count", asked after the sequence is over). */
