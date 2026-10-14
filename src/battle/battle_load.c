@@ -23,6 +23,7 @@ extern int Port_ExtraSetup(int mode, int members0, int members1, int split, int 
 extern int Port_ExtraAdd(int side, int index, int chara, int costume, int level);
 extern void Port_ExtraDone(void);
 extern int Port_TestRoster(int side, int index);
+extern int Port_TestDemoMode(void);
 extern void Port_TargetReset(void); /* btl_char_flag_opp.c */
 static u8 sPortExtraScene[PORT_EXTRA_MAX]; /* extra fighter k's effect set exists in the scene of now */
 static s32 sPortExtraAsked;                /* extra fighters whose files the first load has asked for */
@@ -1286,6 +1287,11 @@ static void Port_LoadExtras(void) {
     BattleSetup *setup = SETUP();
     s32 s, i, roster;
 
+    /* (the tests' tool, BT3_DEMO_MODE=<n>: the demo fight is of that battle mode, 0 the versus menu's, so that a
+       fight without a pad runs the sequence and the rules of a real one) */
+    if (Battle_GetMode() == 7 && Port_TestDemoMode() >= 0) {
+        setup->rule.mode = Port_TestDemoMode();
+    }
     /* (the tests' tool, BT3_TEAM_ROSTER: the two teams as the team select would have left them) */
     for (s = 0; s < 2; s++) {
         BattleSide *side = &setup->sides[s];

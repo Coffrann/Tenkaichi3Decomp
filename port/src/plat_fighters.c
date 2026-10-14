@@ -378,6 +378,13 @@ int Port_ThirdTeam(void) {
     return Port_FightTeam(0);
 }
 
+/* BT3_DEMO_MODE=<battle mode> (the tests): the demo fight is given that mode when it loads; -1: not set. */
+int Port_TestDemoMode(void) {
+    const char *e = getenv("BT3_DEMO_MODE");
+
+    return e != NULL && atoi(e) >= 0 && atoi(e) <= 9 ? atoi(e) : -1;
+}
+
 /* BT3_TEAM_ROSTER=<character>,<character>,.../<character>,... (the tests): the members of the two sides' teams,
    as the team select would have left them, for a fight that was set up without it (the demo fight). Member
    `index` of `side`, -1 past the last or when the variable is not set. */
