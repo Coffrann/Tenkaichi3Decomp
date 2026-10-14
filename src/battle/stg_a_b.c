@@ -813,13 +813,14 @@ s32 BtlStage_ProbeGround(s32 zone, Vec4 *pos, StgGroundHit *out) {
    - a fighter on player 1's or player 2's team stands in a shallow V beside and behind that player's point
      (the first to the leader's one side, the second to the other, the next two a row further back and out),
      facing what the leader faces;
-   - a fighter on a team of its own stands on the circle through the two points, around their middle, in the
-     gaps between the two players (a quarter turn to one side, then the other, then the eighths), facing the
-     middle.
+   - a fighter of a further team (in a free-for-all: every extra fighter) stands on the circle through the two
+     points, around their middle: the two halves of the circle are filled in turn and each half is shared out
+     evenly, facing the middle.
    Each place is tried on the stage's ground with the game's own query; where there is none (off the map's
    edge, a narrow stage) the place is pulled in towards the leader's point, or the middle, until there is, and
    as the last resort it is that point itself. With two fighters nothing here is asked. */
 extern s32 Port_Team(s32 i);                               /* btl_char_flag_opp.c */
+extern s32 BtlChar_GetCount(void);
 extern void Port_Dbg3(const char *what, int a, int b, int c, int d); /* port/src/plat_stub.c (BT3_HEAPCHK) */
 extern f32 Mathf_Sin(f32 angle);
 extern f32 Mathf_Cos(f32 angle);
@@ -841,7 +842,6 @@ static s32 Port_StartGround(Vec4 *pos, f32 leaderY, StgGroundHit *hit) {
 }
 
 static s32 Port_StartPlace(s32 side, Vec4 *pos, Vec4 *rot) {
-    static const f32 kTurn[8] = { 0.5f, -0.5f, 0.25f, -0.25f, 0.75f, -0.75f, 0.375f, -0.375f };
     StgPlace *starts = gBtlStage->data->starts;
     StgGroundHit hit;
     Vec4 lead;
@@ -849,8 +849,13 @@ static s32 Port_StartPlace(s32 side, Vec4 *pos, Vec4 *rot) {
     f32 dx = starts[1].pos.x - starts[0].pos.x, dz = starts[1].pos.z - starts[0].pos.z;
     f32 dist = sqrtf(dx * dx + dz * dz), ux, uz, cx, cz, leaderY, shrink = 1.0f, tx, tz;
 
+    s32 others = 0; /* fighters of the further teams in the whole fight */
+
     for (i = 2; i < side; i++) {
         same += (team < 2) ? Port_Team(i) == team : Port_Team(i) >= 2;
+    }
+    for (i = 2; i < BtlChar_GetCount(); i++) {
+        others += Port_Team(i) >= 2;
     }
     if (dist < 1.0f) {
         dist = 1.0f;
@@ -878,7 +883,11 @@ static s32 Port_StartPlace(s32 side, Vec4 *pos, Vec4 *rot) {
             tx = starts[team].target.x;
             tz = starts[team].target.z;
         } else {
-            f32 turn = kTurn[same % 8] * 3.14159265f, c = Mathf_Cos(turn), sn = Mathf_Sin(turn);
+            /* (the two halves of the circle in turn, each half shared out evenly between the two players'
+               points: one such fighter stands a quarter turn from both, eight stand 36 degrees apart) */
+            s32 half = same % 2, inHalf = (others + 1 - half) / 2;
+            f32 turn = (half ? -1.0f : 1.0f) * (f32)(same / 2 + 1) / (f32)(inHalf + 1) * 3.14159265f;
+            f32 c = Mathf_Cos(turn), sn = Mathf_Sin(turn);
             f32 vx = (starts[0].pos.x - cx) * shrink, vz = (starts[0].pos.z - cz) * shrink;
 
             pos->x = cx + vx * c - vz * sn;

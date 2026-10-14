@@ -447,6 +447,13 @@ void BtlInput_BuildRecord(BtlInputChr *chr) {
     }
 }
 
+#ifdef PORT
+extern s32 BtlChar_GetCount(void);
+static s32 Port_InputFighters(void) {
+    return BtlChar_GetCount();
+}
+#endif
+
 /* Queues this frame's record, takes the oldest queued frame and blanks or filters it according to the battle state. */
 void BtlInput_Fetch(BtlInputChr *chr, u32 *outButtons, u32 *outCommands, u8 *stick) {
     u32 buttons;
@@ -466,6 +473,16 @@ void BtlInput_Fetch(BtlInputChr *chr, u32 *outButtons, u32 *outCommands, u8 *sti
             filter = 1;
         }
     }
+#ifdef PORT
+    /* More than two fighters: the computer's fighters stand still until "Fight!". The filter of the Ready state
+       lets steps and dashes through, and in a fight of two the computer never uses them there (it starts at the
+       distance it likes). With more fighters its enemy of the moment is nearer or further than that, and it ran
+       at it under the word "Ready!" (an extra fighter: seen by the user; in a free-for-all the two sides'
+       computers as well). A player's own fighter keeps what the game allows. */
+    if ((Battle_GetWork()->flags & BTL_INPUT_FLAG_FILTER) && chr->injectOn && Port_InputFighters() > 2) {
+        block = 1;
+    }
+#endif
     if ((Battle_GetWork()->flags & BTL_INPUT_FLAG_BLOCK) || BtlChar_TestFlag(chr, 0x11E) || BtlChar_TestFlag(chr, 0x11F) ||
         BtlChar_TestFlag(chr, 0xB1)) {
         block = 1;
