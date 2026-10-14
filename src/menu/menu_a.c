@@ -527,8 +527,8 @@ static s32 MainMenu_PortModes(void) {
     }
     return next != 0;
 }
-#endif
 
+#endif
 /* The main menu's own frame loop. Returns 1 when a mode was chosen (gProgress->mode is set), 0 on cancel. */
 s32 MainMenu_Run(s32 section) {
     s32 result = 1;
