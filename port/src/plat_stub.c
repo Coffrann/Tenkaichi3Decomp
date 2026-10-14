@@ -405,7 +405,12 @@ int scePad2Read(int socket, unsigned char *data) {
         Port_NetInput(socket, data); /* both pads come from the exchange with the other player */
         n = 18;
     } else {
+        extern void Port_ModesPad(int socket, unsigned char *data); /* plat_modes.c */
         n = pad_read(socket, data);
+        /* The page of extra modes (SELECT on the main menu) is worked with the pads: while it is up they are its
+           own and the game is handed idle ones. After the recording or the controllers have answered, so a
+           recording made with the page plays back the same. */
+        Port_ModesPad(socket, data);
     }
     if (socket >= 0 && socket < 2) {
         memcpy(sPadLast[socket], data, 18);

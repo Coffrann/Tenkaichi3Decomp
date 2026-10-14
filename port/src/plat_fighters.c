@@ -20,6 +20,11 @@
  *     only entry 0 is read so far, and docs/port/tagteam_menu.md says what the rest needs.
  *     From the settings a fight gets its extra fighter only when it is a plain one against one of Duel or of the
  *     training mode: no script, one member a side, one view, not a replay. Everything else is the game's own.
+ *   - or the page of extra modes (plat_modes.c: SELECT on the game's main menu). Its Start writes the same
+ *     extraN_* rows and two settings of its own, modes_fight (which mode) and modes_extras (how many), which stand
+ *     until the main menu is back. While they stand a fight has the extra fighters under the same rules as above,
+ *     whatever the Experiments tab's switch says, and only in the kind of fight the mode is (the versus menu's, or
+ *     training's).
  *
  * Whatever asked, there is none in an online match (the two copies must compute the game's own fight), and none
  * when the character's files are not in the data folder (the loader would wait for them for ever or read nothing).
@@ -32,9 +37,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include "gs/menu_labels.h"
+#include "plat_fighters.h"
 
 #define CHARA_COUNT 161  /* characters 0..160 (MCHR_RANDOM, include/menu/menu_d.h) */
-#define EXTRA_MAX 1      /* extra fighters a fight can have so far */
+#define EXTRA_MAX PORT_EXTRA_MAX /* extra fighters a fight can have so far */
 #define FILE_CHARA 0x590 /* file ids of character c: c * 10 + this is its model, + 8 and + 9 its two animation files
                             (what battle_load.c asks for) */
 
@@ -51,10 +57,12 @@ static int sChara = -1, sTeam = 1, sLevel = -1;
 enum { EXTRA_NONE, EXTRA_IN, EXTRA_MODE, EXTRA_TEAMS, EXTRA_SPLIT, EXTRA_REPLAY, EXTRA_SCRIPT, EXTRA_ONLINE, EXTRA_FILES };
 static volatile int sLast = EXTRA_NONE;
 
-/* The settings of an entry (a row here for each entry there is room for). */
-static const char *const kSettings[EXTRA_MAX][3] = {{"extra0_chara", "extra0_team", "extra0_level"}};
-static const char *setting_name(int index, const char *what) {
-    return kSettings[index][what[0] == 'c' ? 0 : what[0] == 't' ? 1 : 2];
+/* The name of a setting of entry `index`: "extra0_chara", "extra1_team", ... (into the caller's buffer: the window's
+   thread asks too). */
+typedef char SettingName[24];
+static const char *setting_name(SettingName out, int index, const char *what) {
+    snprintf(out, sizeof(SettingName), "extra%d_%s", index, what);
+    return out;
 }
 
 /* The settings, held to their ranges (the file may have been written by hand). */
@@ -63,25 +71,36 @@ int Port_ExtraCount(void) {
     return n < 0 ? 0 : n > EXTRA_MAX ? EXTRA_MAX : n;
 }
 int Port_ExtraChara(int index) {
-    int c = index >= 0 && index < EXTRA_MAX ? Port_Setting(setting_name(index, "chara"), 0) : 0;
+    SettingName name;
+    int c = index >= 0 && index < EXTRA_MAX ? Port_Setting(setting_name(name, index, "chara"), 0) : 0;
     return c < 0 || c >= CHARA_COUNT ? 0 : c;
 }
 int Port_ExtraTeam(int index) { /* 0, 1: a player's team; -1: its own */
-    int t = index >= 0 && index < EXTRA_MAX ? Port_Setting(setting_name(index, "team"), 1) : 1;
+    SettingName name;
+    int t = index >= 0 && index < EXTRA_MAX ? Port_Setting(setting_name(name, index, "team"), 1) : 1;
     return t < -1 || t > 1 ? 1 : t;
 }
 int Port_ExtraLevel(int index) {
-    int v = index >= 0 && index < EXTRA_MAX ? Port_Setting(setting_name(index, "level"), 13) : 13;
+    SettingName name;
+    int v = index >= 0 && index < EXTRA_MAX ? Port_Setting(setting_name(name, index, "level"), 13) : 13;
     return v < 0 ? 0 : v > 29 ? 29 : v;
+}
+void Port_ExtraSetFighter(int index, int chara, int team, int level) { /* (the caller writes the file) */
+    SettingName name;
+
+    if (index < 0 || index >= EXTRA_MAX) {
+        return;
+    }
+    Port_SettingSave(setting_name(name, index, "chara"), chara);
+    Port_SettingSave(setting_name(name, index, "team"), team);
+    Port_SettingSave(setting_name(name, index, "level"), level);
 }
 void Port_ExtraSet(int count, int index, int chara, int team, int level) {
     if (index < 0 || index >= EXTRA_MAX) {
         return;
     }
     Port_SettingSave("extra_fighters", count);
-    Port_SettingSave(setting_name(index, "chara"), chara);
-    Port_SettingSave(setting_name(index, "team"), team);
-    Port_SettingSave(setting_name(index, "level"), level);
+    Port_ExtraSetFighter(index, chara, team, level);
     Port_SettingsWrite();
 }
 
@@ -121,6 +140,7 @@ void Port_ExtraSetup(int mode, int members0, int members1, int split, int replay
     const char *env = getenv("BT3_THIRD_FIGHTER"), *e;
     char why[160];
     int asked = 0, last = EXTRA_NONE;
+    int page = Port_ModesFight(); /* the mode asked on the page of extra modes, 0: none */
 
     sChara = -1;
     sTeam = 1;
@@ -132,12 +152,12 @@ void Port_ExtraSetup(int mode, int members0, int members1, int split, int replay
         if (sChara >= CHARA_COUNT) {
             sChara = -1;
         }
-    } else if (Port_ExtraCount() > 0) {
+    } else if (page != PORT_MODE_NONE ? Port_ModesCount() > 0 : Port_ExtraCount() > 0) {
         asked = 1;
         if (Port_NetActive()) {
             last = EXTRA_ONLINE;
-        } else if (mode != 0 && mode != 6) {
-            last = EXTRA_MODE;
+        } else if (page != PORT_MODE_NONE ? mode != (page == PORT_MODE_TRAINING ? 6 : 0) : mode != 0 && mode != 6) {
+            last = EXTRA_MODE; /* (the page's choice is for the kind of fight it led into, and no other) */
         } else if (script) {
             last = EXTRA_SCRIPT;
         } else if (members0 != 1 || members1 != 1) {
@@ -169,8 +189,9 @@ void Port_ExtraSetup(int mode, int members0, int members1, int split, int replay
     }
     if (sChara >= 0) {
         last = EXTRA_IN;
-        fprintf(stderr, "bt3: extra fighter: character %d, team %d, level %d (%s)\n", sChara, sTeam, sLevel,
-                env != NULL ? "BT3_THIRD_FIGHTER" : "the settings");
+        fprintf(stderr, "bt3: extra fighter: character %d, team %d, level %d (%s%s)\n", sChara, sTeam, sLevel,
+                env != NULL ? "BT3_THIRD_FIGHTER" : page != PORT_MODE_NONE ? "the modes page: " : "the settings",
+                env == NULL && page != PORT_MODE_NONE ? Port_ModesName(page) : "");
     } else if (asked) {
         static const char *const kWhy[] = {"", "", "this mode's fights are left as the game's own", "a side has more than one member",
                                            "the picture is split for two players", "a replay is being played",
