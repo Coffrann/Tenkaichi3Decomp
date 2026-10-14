@@ -1,5 +1,8 @@
 #include "common.h"
 #include "battle/btl_char_cam_int.h"
+#ifdef PORT
+extern s32 BtlChar_GetCount(void);
+#endif
 
 /* The fighter camera's modes, per-frame update and cut control, 0x1C5840-0x1C7B30: the last part of
  * btl_char_cam.c (see the note at the top of that file). */
@@ -357,9 +360,16 @@ void ChrCam_UpdateLockOnYaw(ChrCamChr *chr) {
     if (BtlChar_IsFlagRaised(chr, 5)) {
         goto keep;
     }
+#ifdef PORT
+    /* (more than two fighters: the right stick chooses the target, btl_char_flag_opp.c) */
+    if (BtlChar_GetCount() < 3 && BtlInput_IsHeld(chr, 0x100)) {
+        cam->side = -limit;
+    } else if (BtlChar_GetCount() < 3 && BtlInput_IsHeld(chr, 0x400)) {
+#else
     if (BtlInput_IsHeld(chr, 0x100)) {
         cam->side = -limit;
     } else if (BtlInput_IsHeld(chr, 0x400)) {
+#endif
         cam->side = limit;
     } else if (BtlChar_TestFlag(chr, 0xD5)) {
     keep:

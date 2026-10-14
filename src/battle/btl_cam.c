@@ -529,6 +529,22 @@ void BtlCam_ApplyView(s32 scissor) {
 
 #ifdef PORT
 extern int Port_NetView(void); /* port/src/gs/net.c: the local player's view (0 or 1), or -1 */
+
+/* Where a point of the world is on the screen of the current view, in the GS units the picture is drawn in (1/16
+   pixel, with the frame's offset); 0 when it is behind the camera. (The player's target choice and its marker,
+   btl_char_flag_opp.c / hud_b.c.) */
+extern s32 Mtx_ProjectPoint(s32 *out, Mtx44 *m, Vec4 *pos);
+s32 Port_ProjectPoint(Vec4 *pos, s32 *x, s32 *y) {
+    s32 scr[4] __attribute__((aligned(16)));
+
+    if (gBtlCamView == NULL) {
+        return 0;
+    }
+    Mtx_ProjectPoint(scr, &gBtlCamView->world2screen, pos);
+    *x = scr[0];
+    *y = scr[1];
+    return scr[3] > 0;
+}
 #endif
 /* Decides whether one full-screen view replaces the per-player views this frame; returns 1 if so. */
 s32 BtlCam_UpdateOverride(void) {

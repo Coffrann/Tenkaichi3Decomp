@@ -117,12 +117,118 @@ void Port_TargetHit(s32 attacker, s32 victim) {
 /* A fight is being loaded: nobody has a target from the fight before. (They are asked before the first frame
    chooses them, by the HUD for one: after a fight of three, a fight of two read player 1's target, the third
    fighter, which is not there: a crash in BtlSide_IsComboHitNew.) */
+/* The player's own choice (asked for by the user: "targeting with flicking R3 to switch between them and have an
+   indicator on the highlighted target"). A flick of the right stick to the right or the left makes the next enemy
+   on the screen that way the player's target (past the last, round to the far side), and it stays the target
+   until it is down; the marker over its head is drawn by hud_b.c. What the fight needs still comes first: a rush,
+   a throw, a clash or a technique keeps the target it is about until it is over, and a hit from somebody else
+   turns the player to them for the second the game needs; then it is the chosen one again. Without a choice,
+   the nearest enemy, as before. The right stick's other use in a fight, moving the camera to one side while it
+   is held, is not there with more than two fighters (btl_char_cam_modes.c). A player is fighter 0 or 1 on a side
+   that is not computer-controlled (BT3_TARGET_FLICK, testing: fighter 0 too, flicking by itself). */
+static s32 sPortLock[PORT_FIGHTERS];  /* 1 + the chosen enemy, or 0 */
+static s32 sPortLockNew[PORT_FIGHTERS]; /* chosen and not the target yet: no hold keeps the old one */
+extern s32 BattleSide_IsCpu(s32 side);                  /* battle_load.c */
+extern s32 BtlInput_IsPressed(BtlFlagChr *chr, u32 mask); /* btl_input.c */
+extern s32 Port_ProjectPoint(Vec4 *pos, s32 *x, s32 *y); /* btl_cam.c */
+extern int Port_TargetTestFlick(int i);                 /* port/src/plat_stub.c: BT3_TARGET_FLICK */
+extern void Port_TargetLog(int i, int target, int x, int locked);
+s32 Port_TargetHuman(s32 i) {
+    if (i == 0 || i == 1) {
+        return !BattleSide_IsCpu(i) || (i == 0 && Port_TargetTestFlick(-1));
+    }
+    return 0;
+}
+s32 Port_TargetLocked(s32 i) {
+    return (u32)i < PORT_FIGHTERS && sPortLock[i] != 0;
+}
+static s32 Port_LockValid(s32 i) {
+    s32 l = sPortLock[i] - 1;
+
+    return l >= 0 && l < BtlChar_GetCount() && Port_IsEnemy(i, l) && !BtlChar_IsDead(BtlChar_Get(l));
+}
+/* The next enemy on the screen from the target, to the right (dir 1) or the left (-1); -1 when there is none. */
+static s32 Port_NextOnScreen(s32 i, s32 dir) {
+    s32 count = BtlChar_GetCount(), cur = gPortTarget[i], k, best = -1, wrap = -1, cx = 0x8000, cy, x, y;
+    s32 bestD = 0, wrapD = 0, d;
+    Vec4 pos;
+
+    if ((u32)cur < (u32)count) {
+        BtlChar_GetSnapPos(BtlChar_Get(cur), &pos, 6);
+        if (!Port_ProjectPoint(&pos, &cx, &cy)) {
+            cx = 0x8000;
+        }
+    }
+    for (k = 0; k < count; k++) {
+        if (k == cur || !Port_IsEnemy(i, k) || BtlChar_IsDead(BtlChar_Get(k))) {
+            continue;
+        }
+        BtlChar_GetSnapPos(BtlChar_Get(k), &pos, 6);
+        if (!Port_ProjectPoint(&pos, &x, &y)) {
+            x = cx + dir * 0x100000; /* (behind the camera: after everything on the screen that way) */
+        }
+        d = (x - cx) * dir;
+        if (d >= 0 && (best < 0 || d < bestD)) {
+            best = k;
+            bestD = d;
+        }
+        if (wrap < 0 || d < wrapD) {
+            wrap = k;
+            wrapD = d;
+        }
+    }
+    return best >= 0 ? best : wrap;
+}
+static void Port_TargetChoose(s32 i) {
+    BtlFlagChr *me = BtlChar_Get(i);
+    s32 dir, n, x = 0, y;
+    Vec4 pos;
+
+    if (!Port_TargetHuman(i)) {
+        return;
+    }
+    dir = BtlInput_IsPressed(me, 0x400) ? 1 : BtlInput_IsPressed(me, 0x100) ? -1 : Port_TargetTestFlick(i);
+    if (dir != 0) {
+        n = Port_NextOnScreen(i, dir);
+        if (n >= 0) {
+            sPortLock[i] = n + 1;
+            sPortLockNew[i] = 1;
+            BtlChar_GetSnapPos(BtlChar_Get(n), &pos, 6);
+            Port_ProjectPoint(&pos, &x, &y);
+            Port_TargetLog(i, n, x, 1);
+        }
+    }
+    if (sPortLock[i] != 0 && !Port_LockValid(i)) {
+        Port_TargetLog(i, sPortLock[i] - 1, 0, 0);
+        sPortLock[i] = 0;
+        sPortLockNew[i] = 0;
+    }
+}
+/* The marker's two points for player p: its target's head (model node 0x30, which the camera keeps behind) and
+   its feet; 0 when the marker is not drawn (two fighters, no player, a target that is down). The third answer: 1
+   when chosen. */
+extern void BtlCharApi_GetNodePos(s32 objId, s32 node, Vec4 *out); /* btl_char_api.c */
+s32 Port_TargetMark(s32 p, Vec4 *head, Vec4 *feet, s32 *locked) {
+    s32 t = gPortTarget[p];
+
+    if (BtlChar_GetCount() < 3 || !Port_TargetHuman(p) || (u32)t >= (u32)BtlChar_GetCount() ||
+        !Port_IsEnemy(p, t) || BtlChar_IsDead(BtlChar_Get(t))) {
+        return 0;
+    }
+    BtlCharApi_GetNodePos(BtlChar_Get(t)->objId, 0x30, head);
+    *feet = BtlChar_GetPos(BtlChar_Get(t))->pos;
+    *locked = sPortLock[p] == t + 1;
+    return 1;
+}
+
 void Port_TargetReset(void) {
     s32 i;
 
     for (i = 0; i < PORT_FIGHTERS; i++) {
         gPortTarget[i] = i == 0 ? 1 : 0;
         sPortTargetHold[i] = 0;
+        sPortLock[i] = 0;
+        sPortLockNew[i] = 0;
     }
 }
 void Port_UpdateTarget(void) {
@@ -144,6 +250,7 @@ void Port_UpdateTarget(void) {
         if (cur >= count || !Port_IsEnemy(i, cur)) {
             cur = -1;
         }
+        Port_TargetChoose(i);
         /* The two of a rush technique's sequence are each other's target, whatever happened before it began
            (the hit that starts one does not always pass Port_TargetHit). */
         if (Port_SequencePartner(i) >= 0) {
@@ -169,8 +276,14 @@ void Port_UpdateTarget(void) {
             sPortTargetHold[i] = 120;
             continue;
         }
-        if (cur >= 0 && sPortTargetHold[i] > 0) {
+        if (cur >= 0 && sPortTargetHold[i] > 0 && !(sPortLockNew[i] && Port_LockValid(i))) {
             sPortTargetHold[i]--;
+            continue;
+        }
+        if (Port_LockValid(i)) {
+            gPortTarget[i] = sPortLock[i] - 1;
+            sPortTargetHold[i] = 0;
+            sPortLockNew[i] = 0;
             continue;
         }
         for (k = 0; k < count; k++) {

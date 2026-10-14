@@ -240,3 +240,14 @@ way: about a player it is the game's own, otherwise it holds only its own target
 (`BtlChars_UpdateFreeze`, `BtlChars_UpdateObjFlag2`; `Port_AboutPlayer` in btl_char_api.c). Before, with the camera
 kept on the player, the player stood still and vanished for a second for a super elsewhere. `BT3_CAM_LOG=1` also
 prints each such hold.
+
+## Choosing the target
+
+With more than two fighters a player (fighter 0 or 1 on a side that is not computer-controlled) flicks the right
+stick right or left to make the next enemy on the screen that way the target (round to the far side past the last).
+The choice holds until that enemy is down; then the nearest again. A rush, throw, clash or technique keeps its
+target until it is over, and a hit from someone else turns the player to them for the second the game needs.
+Held right stick no longer moves the camera to a side with more than two fighters. A triangle over the target's head
+(model node 0x30) shows it: yellow when the game picked it, red when the player did (`HudExtra_DrawTargetMark`,
+hud_b.c, drawn in the picture's own coordinates). `BT3_TARGET_FLICK=<n>` (testing) makes fighter 0 flick every n
+frames by itself; `BT3_CAM_LOG=1` prints the choices.

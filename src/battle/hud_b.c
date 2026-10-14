@@ -1894,6 +1894,8 @@ static void HudExtra_DrawRow(void) {
     }
 }
 
+static void HudExtra_DrawTargetMark(void); /* (below) */
+
 /* Draws the rows; called by Hud_Draw behind the two passes of the gauge tree. */
 void HudGauge_DrawExtras(void) {
     s32 used[2] = { 0, 0 }; /* rows taken, by side of the screen */
@@ -1927,7 +1929,60 @@ void HudGauge_DrawExtras(void) {
         }
     }
     if (count > 2) {
+        HudExtra_DrawTargetMark();
         Port_GsMarker(HUD_SCR(1) ? PORT_2D_RIGHT : PORT_2D_LEFT); /* (as the second pass of the tree left it) */
+    }
+}
+
+/* The marker over the player's target (btl_char_flag_opp.c, Port_TargetMark): a small triangle pointing down
+   above its head, yellow while the game chooses the target (the nearest enemy) and red when the player has
+   chosen it. It is drawn straight in the picture's own coordinates (no 2D anchoring: it has to stay over the
+   fighter in any picture shape), its size from how tall the fighter is on the screen. */
+typedef struct { f32 x, y, z, w; } __attribute__((aligned(16))) HudXPoint; /* (a Vec4) */
+extern s32 Port_TargetMark(s32 p, HudXPoint *head, HudXPoint *feet, s32 *locked); /* btl_char_flag_opp.c */
+extern s32 Port_ProjectPoint(HudXPoint *pos, s32 *x, s32 *y);                   /* btl_cam.c */
+extern u64 *Dma_BeginDirect(void);
+extern void Dma_EndDirect(u64 *end);
+
+static void HudExtra_Triangle(s32 x0, s32 y0, s32 x1, s32 y1, s32 x2, s32 y2, u32 rgba) {
+    u64 *p = Dma_BeginDirect();
+    u64 *tag = p;
+
+    p += 2;
+    p[0] = rgba;
+    p[1] = 0x43; /* triangle, alpha blended, context 1 */
+    p += 2;
+    p[0] = 0;
+    p[1] = (u64)(u16)x0 | ((u64)(u16)y0 << 16);
+    p += 2;
+    p[0] = 0;
+    p[1] = (u64)(u16)x1 | ((u64)(u16)y1 << 16);
+    p += 2;
+    p[0] = 0;
+    p[1] = (u64)(u16)x2 | ((u64)(u16)y2 << 16);
+    p += 2;
+    tag[0] = ((u64)8 << 60) | ((u64)1 << 58) | ((u64)1 << 15) | 1; /* 8 registers, REGLIST, EOP, 1 loop */
+    tag[1] = 0x53535301;                                            /* RGBAQ, PRIM, 3 x (UV, XYZ2) */
+    Dma_EndDirect(p);
+}
+
+static void HudExtra_DrawTargetMark(void) {
+    HudXPoint head, feet;
+    s32 p, locked, ax, ay, fx, fy, h, s, tip;
+
+    for (p = 0; p < 2; p++) {
+        if (!Port_TargetMark(p, &head, &feet, &locked) || !Port_ProjectPoint(&head, &ax, &ay) ||
+            !Port_ProjectPoint(&feet, &fx, &fy)) {
+            continue;
+        }
+        h = fy > ay ? fy - ay : ay - fy;     /* the fighter's height on the screen (head to feet) */
+        s = h / 8;
+        s = s < 4 * 16 ? 4 * 16 : s > 9 * 16 ? 9 * 16 : s;
+        tip = ay - h / 6 - s;                 /* above the head and its hair */
+        Port_GsMarker(PORT_2D_END);
+        HudExtra_Triangle(ax - s - 24, tip - s * 2 - 16, ax + s + 24, tip - s * 2 - 16, ax, tip + 24, 0x80000000);
+        HudExtra_Triangle(ax - s, tip - s * 2, ax + s, tip - s * 2, ax, tip,
+                          locked ? 0x80202CFF : 0x8030E0FF); /* (A B G R) */
     }
 }
 

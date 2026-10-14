@@ -786,6 +786,41 @@ void Port_HoldLog(int fighter, int target, int level) {
             fighter, level, target, frames);
 }
 
+/* BT3_TARGET_FLICK=<n> (testing, btl_char_flag_opp.c): fighter 0 counts as a player for the choice of target and
+   flicks the right stick to the right every n frames by itself (asked with -1: whether the switch is on). */
+int Port_TargetTestFlick(int i) {
+    static int period = -1, frames;
+
+    if (period < 0) {
+        const char *e = getenv("BT3_TARGET_FLICK");
+        period = e != NULL ? atoi(e) : 0;
+    }
+    if (i < 0 || period <= 0) {
+        return period > 0;
+    }
+    if (i != 0) {
+        return 0;
+    }
+    return ++frames % period == 0 ? 1 : 0;
+}
+
+/* BT3_CAM_LOG=1, too: the player's choice of target. */
+void Port_TargetLog(int i, int target, int x, int locked) {
+    static int on = -1;
+
+    if (on < 0) {
+        const char *e = getenv("BT3_CAM_LOG");
+        on = e != NULL && e[0] == '1';
+    }
+    if (on) {
+        if (locked) {
+            fprintf(stderr, "bt3: target: fighter %d chooses fighter %d (screen x %d)\n", i, target, (x - 0x7000) / 16);
+        } else {
+            fprintf(stderr, "bt3: target: fighter %d's choice %d is down: the nearest again\n", i, target);
+        }
+    }
+}
+
 void Port_FreezeLog(int i, int level, int action, int frozen, int count) {
     static int on = -1, calls;
     if (on < 0) { on = getenv("BT3_FREEZE_LOG") != NULL; }
