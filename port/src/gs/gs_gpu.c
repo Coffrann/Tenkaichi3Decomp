@@ -1016,13 +1016,20 @@ static void vk_frame_end(void) {
         gUiPresentH = (int)bl.destination.h;
         Ui_Draw(cmd, swap);
         {   /* BT3_UI_SHOT=<frame>:<file.ppm>: the window's picture with the settings window on it, for checking
-                the settings window without a person or a screen capture (drawn a second time into a texture) */
-            static int frame = -1;
-            static const char *file;
+                the settings window without a person or a screen capture (drawn a second time into a texture).
+                BT3_UI_SHOT=<frame>,<frame>,...:<file.ppm>: several pictures of one run (the frames in rising
+                order), each to <file.ppm> with the frame's number put before ".ppm"; for what the port draws over
+                the game through a run of menus (the page of extra modes). */
+            static int frame = -1, several;
+            static const char *file, *next;
+            static char numbered[1024];
             if (frame < 0) {
                 frame = 0;
                 if (getenv("BT3_UI_SHOT") != NULL && (file = strchr(getenv("BT3_UI_SHOT"), ':')) != NULL) {
                     frame = atoi(getenv("BT3_UI_SHOT"));
+                    next = strchr(getenv("BT3_UI_SHOT"), ',');
+                    several = next != NULL && next < file;
+                    next = several ? next + 1 : NULL;
                     file++;
                 }
             }
@@ -1042,7 +1049,17 @@ static void vk_frame_end(void) {
                 FILE *fp;
                 Uint32 x, y;
 
+                if (several) {
+                    const char *dot = strrchr(file, '.');
+                    int stem = dot != NULL ? (int)(dot - file) : (int)strlen(file);
+                    snprintf(numbered, sizeof(numbered), "%.*s_%05d%s", stem, file, frame, dot != NULL ? dot : "");
+                }
                 frame = 0;
+                if (next != NULL) { /* the next frame of the list, if there is one */
+                    frame = atoi(next);
+                    next = strchr(next, ',');
+                    next = next != NULL && next < file ? next + 1 : NULL;
+                }
                 SDL_zero(ci);
                 ci.type = SDL_GPU_TEXTURETYPE_2D;
                 ci.format = fmt;
@@ -1074,7 +1091,7 @@ static void vk_frame_end(void) {
                 SDL_WaitForGPUFences(sDev, true, &fence, 1);
                 SDL_ReleaseGPUFence(sDev, fence);
                 px = SDL_MapGPUTransferBuffer(sDev, tb, false);
-                fp = fopen(file, "wb");
+                fp = fopen(several ? numbered : file, "wb");
                 if (fp != NULL && px != NULL) {
                     fprintf(fp, "P6\n%u %u\n255\n", sw, sh);
                     for (y = 0; y < sh; y++) {
