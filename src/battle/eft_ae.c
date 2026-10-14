@@ -1242,6 +1242,12 @@ void BtlTaskList_Reset(BtlTaskList *list, s32 mask) {
             if (task->cls->reset != NULL) {
                 task->cls->reset(task);
             }
+#ifdef PORT
+        } else if ((u32)mask >= 0x100000 && (task->tag & mask)) { /* (an extra fighter's own tag: EFT_OWNER_TAG) */
+            if (task->cls->reset != NULL) {
+                task->cls->reset(task);
+            }
+#endif
         }
         next = task->next;
         if (BTL_TASK_BITS(task)->dead) {

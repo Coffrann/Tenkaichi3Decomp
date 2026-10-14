@@ -1470,6 +1470,7 @@ static u8 sPortResPending[BTL_RES_FIXED_MAX + BTL_RES_SLOT_MAX];         /* wait
 
 void Port_ResReleaseOld(s32 number);
 
+extern void Port_Dbg3(const char *what, int a, int b, int c, int d); /* port/src/plat_stub.c (BT3_HEAPCHK) */
 static void *Port_ResBuffer(s32 id, s32 room) {
     extern unsigned Port_GameBigAlloc(int size); /* port/src/plat_mem.c */
     extern int Port_HeapFree(int *largest);      /* port/src/plat_stub.c */
@@ -1482,6 +1483,7 @@ static void *Port_ResBuffer(s32 id, s32 room) {
     }
     buf = (void *)Port_GameBigAlloc(room);
     if (buf != NULL) {
+        Port_Dbg3("fighter file buffer: file / at / room / -", id, (int)buf, room, 0);
         return File_Request3(id, buf, room);
     }
     Port_HeapFree(&largest);
@@ -1587,6 +1589,9 @@ void Port_ResReleaseOld(s32 number) {
         return;
     }
     for (i = 0; i < 3; i++) {
+        if (sPortResNext[number][i].buf != NULL) {
+            Port_Dbg3("fighter file buffer freed: slot / at / file / -", number, (int)sPortResNext[number][i].buf, sPortResNext[number][i].id, 0);
+        }
         BtlRes_FreeFile(&sPortResNext[number][i]);
     }
 }

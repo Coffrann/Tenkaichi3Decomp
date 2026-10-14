@@ -1,4 +1,19 @@
 #include "common.h"
+
+#ifndef EFT_OWNER_TAG
+#ifdef PORT
+/* More than two fighters: whose a task is. The game has two tags, "object 0's" and "anybody else's", and ends a
+   fighter's effects by resetting every task of its tag: with more fighters one fighter's change of model ended
+   the techniques of all the others past the first (a beam gone, and a technique's camera cut left running with
+   its data freed under it: a crash). Every extra fighter (objects 2..9) has a tag and a reset group of its own
+   (BtlTaskList_Reset, BtlScene_Reset); any other object keeps "anybody else's". */
+#define EFT_OWNER_TAG(n) ((n) == 0 ? 0x800 : ((u32)(n) - 2 < 8) ? (0x100000 << ((n) - 2)) : 0x1000)
+#define EFT_OWNER_RESET(n) ((n) == 0 ? 2 : ((u32)(n) - 2 < 8) ? (n) + 3 : 3)
+#else
+#define EFT_OWNER_TAG(n) n == 0 ? 0x800 : 0x1000
+#define EFT_OWNER_RESET(n) n == 0 ? 2 : 3
+#endif
+#endif
 #include "battle/eft_h.h"
 
 /*
@@ -346,7 +361,7 @@ void EftShot_DestroyChar(s32 chr) {
     EftHChar *c = &gEftShot->chars[chr];
 
     if (c->task != NULL) {
-        BtlScene_Reset(chr == 0 ? 2 : 3);
+        BtlScene_Reset(EFT_OWNER_RESET(chr));
         EftShot_SetCharPool(chr);
         BtlTask_Kill(c->task);
         c->task = NULL;
@@ -744,7 +759,7 @@ void EftVolley_Init(EftHTask *task, EftHSlot *arg) {
     if ((u16)slot->param->id - 0x26E < 2U) {
         w->flags |= EFT_VOLLEY_800 | EFT_VOLLEY_1000;
     }
-    BtlTask_SetOwnerTag(task, slot->arg.chr == 0 ? 0x800 : 0x1000);
+    BtlTask_SetOwnerTag(task, EFT_OWNER_TAG(slot->arg.chr));
 }
 
 /* Instance term: releases the emitter state and, for a technique, sets the fighter's held flag 0xA8. */
@@ -1427,7 +1442,7 @@ void EftEmit_TagTask(void *task, s32 chr, s32 type) {
     s32 flags;
 
     if (task != NULL && type != 2 && type != 5) {
-        flags = chr == 0 ? 0x800 : 0x1000;
+        flags = EFT_OWNER_TAG(chr);
         BtlTask_SetOwnerTag(task, flags);
         flags = 0; /* dead store: the original does not tail-call here */
     }

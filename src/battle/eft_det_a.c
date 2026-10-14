@@ -244,6 +244,16 @@ void EftVram_Upload(EftVramTex *tex, s32 imageBlock, s32 clutBlock) {
     };
     EftVramImage *img = tex->img;
 
+#ifdef PORT
+    /* A texture is put on the list while the scene is updated and sent when it is drawn. In between, a fighter
+       that changes its model has its effects ended (BtlScene_FreeChar, from the loader's poll), and an ended
+       task's texture record is cleared: the list then names a record without an image. The console reads its
+       sizes from address 0 and sends whatever that gives; here it is a fault. Seen with eight fighters, where
+       somebody's effect is on the list in most frames; two fighters can meet it as well. Nothing is sent. */
+    if (img == NULL) {
+        return;
+    }
+#endif
     if (imageBlock >= 0 && img->imageSize != 0) {
         pkt[8] = EFT_VRAM_BITBLTBUF(imageBlock, img->imageWidth);
         pkt[9] = EFT_VRAM_BITBLTBUF(imageBlock, img->imageWidth) >> 32;

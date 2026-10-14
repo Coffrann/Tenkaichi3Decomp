@@ -511,8 +511,8 @@ s32 BtlLoad_StepChara(BtlJob *job) {
 #ifdef PORT
         if (job->side >= 2) {
             /* The experiment of more than two fighters: the swap for a fighter that is not a side's. Its new
-               files go into its slot, its object is bound to them, and only then are the old files freed (the
-               object reads its old model a last time when it is bound again). The rest is what a side gets
+               files go into its slot and its object is bound to them; the old files are kept (the object reads
+               its old model a last time when it is bound again, and see below). The rest is what a side gets
                below, without the voice bank and the member block, which such a fighter does not have. */
             s32 obj = Port_LoadObj(job->side);
             s32 slot = Port_FighterSlot(job->side);
@@ -535,7 +535,13 @@ s32 BtlLoad_StepChara(BtlJob *job) {
                 BtlScene_CreateChar(obj);
                 sPortExtraScene[job->side - 2] = 1;
             }
-            Port_ResReleaseOld(slot);
+            /* The old files are NOT given back here. A camera cut that was running when the change came (the
+               transformation's own, played from the fighter's animation file) goes on reading them for a while
+               after the swap; with several fighters changing one after the other the next one's files were read
+               into the very block just freed, under the cut (a crash in DemoCam_EvalAnim, seen with ten
+               fighters). They stay until this fighter's next change (Port_ResReload frees them first), a
+               restart, or the end of the fight: one set of files more for a fighter that has changed, in the
+               port's memory. */
             Port_Dbg3("fighter change, bound: fighter / model file of its slot now / only the model / new files", job->side,
                       Port_ResModelFile(slot), job->modelOnly, got);
             BtlJob_Free(job);
