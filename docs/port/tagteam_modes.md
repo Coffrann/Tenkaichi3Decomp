@@ -1,5 +1,9 @@
 # The page of extra modes: SELECT on the main menu
 
+> Replaced by docs/port/tagteam_menuflow.md (branch tt-menuflow): the page described here, a window of the port drawn
+> over the main menu with a set-up of the extra fighter, is gone. SELECT now switches the main menu own entries, and a
+> mode leads to the game own team character select. What follows is kept as the record of that first version.
+
 Notes of the branch `tt-modes` (from `tagteam-exp` at 6d58f3b). Before this the extra fighter of the experiment
 could be switched on in the settings window (F1, Experiments: docs/port/tagteam_menu.md) or with environment
 variables. Now the game's main menu has a way in of its own, the way players of this kind of fight expect it:

@@ -29,8 +29,8 @@ MainMenu *gMainMenu = NULL;
 
 /* The item under the cursor. */
 #define MAINMENU_CUR(m) ((m)->items[((m)->top + (m)->cursor + 1) % (m)->itemCount])
-
 #ifdef PORT
+
 /* The extra modes (fights with more than two fighters: Team Battle, Free-for-All, Training) are a second set of
    entries of this menu; SELECT switches to it and back. The set is this menu with a list of three: the plates,
    the cursor, the sounds and the movie are the menu's own. Each mode sits on the plate of one of the menu's
