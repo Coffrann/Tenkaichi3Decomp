@@ -3,8 +3,13 @@
 
 #include "types.h"
 
-#ifdef PORT /* (the third-fighter experiment: arenas 9 and 10 are the third fighter's shots and effects, as 5 and 8) */
-#define BTL_POOL_SLOT_COUNT 11
+#ifdef PORT
+/* The experiment of more than two fighters: every extra fighter has an arena for its shots and one for its
+   effects, as fighter 1 has 5 and 8. Extra fighter k's are 9 + 2k and 10 + 2k (BTL_POOL_EXTRA_SHOT / _EFFECT);
+   eight extra fighters. */
+#define BTL_POOL_SLOT_COUNT 25
+#define BTL_POOL_EXTRA_SHOT(k) (9 + 2 * (k))
+#define BTL_POOL_EXTRA_EFFECT(k) (10 + 2 * (k))
 #else
 #define BTL_POOL_SLOT_COUNT 9
 #endif

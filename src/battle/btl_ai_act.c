@@ -964,9 +964,9 @@ s32 BtlAiSense_IsBehindOpponent(AiActSide *s) {
     AiActVec dir;
 
 #ifdef PORT
-    if ((u32)s->side > 2 || (u32)AI_OTHER(s->side) > 2) {
+    if ((u32)s->side >= AITH_SIDES || (u32)AI_OTHER(s->side) >= AITH_SIDES) {
         extern void Port_Dbg3(const char *what, int a, int b, int c, int d);
-        Port_Dbg3("AI: bad side / its target / slot / targets[2]", s->side, (u32)s->side < 4 ? AI_OTHER(s->side) : -1, (int)(s - gBtlAi->side), gPortTarget[2]);
+        Port_Dbg3("AI: bad side / its target / slot / targets[2]", s->side, (u32)s->side < AITH_SIDES ? AI_OTHER(s->side) : -1, (int)(s - gBtlAi->side), gPortTarget[2]);
         return 0;
     }
 #endif

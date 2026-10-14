@@ -44,9 +44,9 @@ extern f32 BtlParam_GetUnkC7Scale(BtlFlagChr *chr);
  * fighter"s, the shots' and the punches' victim). Here every fighter has a TEAM, an enemy is a fighter of another
  * team, and each fighter has a TARGET: the enemy everything it does "towards the opponent" is about.
  *
- *   Port_Team(i)          the team of roster index i: 0 for player 1, 1 for player 2, and the third fighter's is
- *                         BT3_THIRD_TEAM: 1 (with player 2: two against one, the default), 0 (with player 1: an
- *                         ally) or 2 (its own: a free-for-all)
+ *   Port_Team(i)          the team of roster index i: 0 for player 1, 1 for player 2, and an extra fighter's is
+ *                         what the fight's set-up gave it (port/src/plat_fighters.c): 1 (with player 2), 0 (with
+ *                         player 1: an ally) or a further team, 2 on (alone, or with other extra fighters)
  *   Port_IsEnemy(a, b)    fighters of different teams
  *   gPortTarget[i]        the fighter's target, chosen once a frame (Port_UpdateTarget, from BtlChars_UpdateMain):
  *                         the nearest enemy that still stands, kept until another is clearly nearer (three
@@ -56,13 +56,13 @@ extern f32 BtlParam_GetUnkC7Scale(BtlFlagChr *chr);
  * There is no friendly fire: a shot or a punch is only tried on enemies. With two fighters all of this gives
  * the game's own answer (each one's target is the other). */
 extern s32 BtlChar_GetCount(void);
-extern int Port_ThirdTeam(void); /* port/src/plat_fighters.c: the fight's, from BT3_THIRD_TEAM or the settings */
-#define PORT_FIGHTERS 4
-s32 gPortTarget[PORT_FIGHTERS] = { 1, 0, 0, 0 };
+extern int Port_FightTeam(int k); /* port/src/plat_fighters.c: extra fighter k's, decided when the fight loads */
+#define PORT_FIGHTERS 10 /* (PORT_FIGHTER_MAX, port/include/port_fighters.h) */
+s32 gPortTarget[PORT_FIGHTERS] = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 static s32 sPortTargetHold[PORT_FIGHTERS];
 extern s32 Port_ClashPartner(s32 i); /* btl_char_flag_clash.c: the other fighter of the clash i is in, or -1 */
 s32 Port_Team(s32 i) {
-    return i < 2 ? i : Port_ThirdTeam();
+    return i < 2 ? i : Port_FightTeam(i - 2);
 }
 s32 Port_IsEnemy(s32 a, s32 b) {
     return a != b && Port_Team(a) != Port_Team(b);

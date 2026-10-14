@@ -132,8 +132,8 @@ void BtlAiMgr_Reset(void) {
         AiThink_ResetSide(i, 0);
     }
 #ifdef PORT
-    if (BtlChar_GetCount() >= 3) { /* (the third fighter's controller, from its fighter as the others') */
-        AiThink_ResetSide(2, 0);
+    for (i = 2; i < BtlChar_GetCount() && i < BTLAI_SIDES; i++) { /* (the extra fighters' controllers, from their fighters as the others') */
+        AiThink_ResetSide(i, 0);
     }
 #endif
 }

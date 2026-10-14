@@ -258,6 +258,51 @@ void BtlObjLight_FindRes1(s32 key) {
     TexFile_UploadOne(BtlObjLight_Get()->res, 1, key, -1);
 }
 
+#ifdef PORT
+/* The experiment of more than two fighters: memory for what the work block has too little of when there are more
+   objects than the game ever makes. The block holds 512 model parts (every mesh of every object takes one), four
+   face states (one for each object with eyes or a mouth: the fifth fighter's was a null pointer, a crash when
+   its object was made), five shadows and three fighter work buffers. When one of these runs out, more is taken
+   here: from the port's memory where there is such (the heap is sized for two fighters), zeroed, remembered,
+   and given back when the work block is (BtlObj_Term). A fight of two never comes here. */
+extern unsigned Port_GameBigAlloc(int size); /* port/src/plat_mem.c */
+extern int Port_GameBigFree(unsigned addr);
+#define PORT_OBJ_EXTRA_MAX 64
+static void *sPortObjExtra[PORT_OBJ_EXTRA_MAX];
+static s32 sPortObjExtras;
+void *Port_ObjExtraAlloc(s32 size) {
+    void *mem;
+
+    if (sPortObjExtras >= PORT_OBJ_EXTRA_MAX) {
+        return NULL;
+    }
+    mem = (void *)Port_GameBigAlloc(size);
+    if (mem == NULL) {
+        mem = Heap_Alloc(size, 0x40, 0, HEAP_ANY);
+    }
+    if (mem != NULL) {
+        memset(mem, 0, size);
+        sPortObjExtra[sPortObjExtras++] = mem;
+    }
+    return mem;
+}
+static u8 *sPortCharaWork[BTL_OBJ_MAX];
+/* `heap`: the heap's blocks are freed too (0 when the heap itself may have been emptied since: a work block that
+   was never shut down). */
+static void Port_ObjExtraFreeAll(s32 heap) {
+    s32 i;
+
+    for (i = 0; i < sPortObjExtras; i++) {
+        if (!Port_GameBigFree((unsigned)sPortObjExtra[i]) && heap) {
+            Heap_Free(sPortObjExtra[i]);
+        }
+        sPortObjExtra[i] = NULL;
+    }
+    sPortObjExtras = 0;
+    memset(sPortCharaWork, 0, sizeof(sPortCharaWork));
+}
+#endif
+
 /* Returns the 0xE0-byte node pool. */
 BtlObjPoolE0Work *BtlObjPoolE0_Get(void) {
     return &gBtlObjWork->poolE0;
@@ -281,6 +326,17 @@ void BtlObjPoolE0_Init(void) {
 BtlObjPoolE0 *BtlObjPoolE0_Alloc(void) {
     BtlObjPoolE0 *node = (BtlObjPoolE0 *)SList_PopFront(&BtlObjPoolE0_Get()->free);
 
+#ifdef PORT
+    if (node == NULL) { /* (the 512 are in use: 128 more) */
+        BtlObjPoolE0 *more = Port_ObjExtraAlloc(128 * sizeof(BtlObjPoolE0));
+        s32 i;
+
+        for (i = 0; more != NULL && i < 128; i++) {
+            SList_PushFront(&BtlObjPoolE0_Get()->free, &more[i].link);
+        }
+        node = (BtlObjPoolE0 *)SList_PopFront(&BtlObjPoolE0_Get()->free);
+    }
+#endif
     if (node == NULL) {
         return NULL;
     }
@@ -322,6 +378,17 @@ BtlObjPool70 *BtlObjPool70_Alloc(void) {
     SListNode *link = SList_PopFront(&BtlObjPool70_Get()->free);
     BtlObjPool70 *node = (BtlObjPool70 *)link;
 
+#ifdef PORT
+    if (node == NULL) { /* (the four are in use: one for each object there can be) */
+        BtlObjPool70 *more = Port_ObjExtraAlloc(BTL_OBJ_MAX * sizeof(BtlObjPool70));
+        s32 i;
+
+        for (i = 0; more != NULL && i < BTL_OBJ_MAX; i++) {
+            SList_PushFront(&BtlObjPool70_Get()->free, &more[i].link);
+        }
+        node = (BtlObjPool70 *)SList_PopFront(&BtlObjPool70_Get()->free);
+    }
+#endif
     return node;
 }
 
@@ -438,13 +505,33 @@ BtlObj *BtlObj_Get(s32 id) {
 }
 
 /* Returns the big work buffer that goes with a fighter object id. */
+#ifdef PORT
+/* The experiment of more than two fighters: the work buffers of the fighters whose object id is 3 or more (the
+   table has three). 107 KB each, taken when the object is first made (Port_ObjExtraAlloc) and given back with
+   the table. */
+#define PORT_CHARA_WORK_SIZE 0x1A0C0
+extern int Port_FightExtras(void); /* port/src/plat_fighters.c */
+static u8 *Port_CharaWork(u32 id) {
+    if (id >= BTL_OBJ_MAX || id >= (u32)(2 + Port_FightExtras())) {
+        return NULL; /* (not a fighter's object) */
+    }
+    if (sPortCharaWork[id] == NULL) {
+        sPortCharaWork[id] = Port_ObjExtraAlloc(PORT_CHARA_WORK_SIZE);
+    }
+    return sPortCharaWork[id];
+}
+#endif
 u8 *BtlObj_GetCharaWork(u32 id) {
     BtlObjTable *tbl = BtlObj_GetTable();
 
     if (id < 3) {
         return tbl->charaWork[id];
     }
+#ifdef PORT
+    return Port_CharaWork(id);
+#else
     return NULL;
+#endif
 }
 
 /* Binds an object to a loaded model and fills its header. */
@@ -538,6 +625,9 @@ void BtlRes_CommitReloadEx(void) {
 
 /* Allocates the work block and initialises every part of it. */
 void BtlObj_Init(s32 prealloc) {
+#ifdef PORT
+    Port_ObjExtraFreeAll(0);
+#endif
     gBtlObjWork = Heap_Alloc(BTL_OBJ_WORK_SIZE, 0x20, 0, HEAP_ANY);
     memset(gBtlObjWork, 0, BTL_OBJ_WORK_SIZE);
     BtlRes_Init(prealloc);
@@ -557,6 +647,9 @@ void BtlObj_Term(void) {
     BtlObj_TermNop();
     BtlRes_Term();
     ObjShadow_TermPool();
+#ifdef PORT
+    Port_ObjExtraFreeAll(1);
+#endif
     Heap_Free(gBtlObjWork);
     gBtlObjWork = NULL;
 }

@@ -412,7 +412,11 @@ typedef struct EftBodyFxArg {
 /* gEftBodyFx, 0x328 bytes: the effect packs and the task of each fighter. */
 typedef struct EftBodyFxMgr {
     /* 0x000 */ EftOSet set[EFT_BODYFX_SETS];
+#ifdef PORT /* (the experiment of more than two fighters: one for every object id, BTL_OBJ_MAX; allocated by its size) */
+    /* 0x320 */ EftOTask *task[12];
+#else
     /* 0x320 */ EftOTask *task[2];
+#endif
 } EftBodyFxMgr;
 
 /* Work of the task (class 0x2C3B08). */

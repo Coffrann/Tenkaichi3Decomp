@@ -183,8 +183,9 @@ typedef struct BtlAi {
     /* 0x004 */ f32 dist;           /* (m) between the two fighters' centres, refreshed every frame */
     /* 0x008 */ f32 radiusSum;      /* both fighters' BtlCharApi_GetRadius */
     /* 0x00C */ s32 sight;          /* (m) BTLAI_SIGHT_*: stage line test between the two fighters */
-#ifdef PORT /* (the third-fighter experiment: a controller for the third; the block is allocated by its size) */
-#define BTLAI_SIDES 3
+#ifdef PORT /* (the experiment of more than two fighters: a controller for each, PORT_FIGHTER_MAX of
+               port/include/port_fighters.h; the block is allocated by its size) */
+#define BTLAI_SIDES 10
 #else
 #define BTLAI_SIDES 2
 #endif

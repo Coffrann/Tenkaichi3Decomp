@@ -132,10 +132,10 @@ void BtlScene_Init(s32 layerMask) {
 #ifdef PORT
     {
         /* The third-fighter experiment: the effect scene keeps its per-fighter tables (the technique events, the
-           shots, the glow, the auras, the bolts: eight modules) by this count, indexed by object id. Three with
-           a third fighter, whose object is the third made (id 2). */
-        extern int gPortThirdObj;
-        BtlScene_SetCharCount(gPortThirdObj == 2 ? 3 : 2);
+           shots, the glow, the auras, the bolts: eight modules) by this count, indexed by object id. The extra
+           fighters' objects are the ones made after the two sides' (ids 2 on). */
+        extern int gPortExtraObjs; /* port/src/plat_stub.c */
+        BtlScene_SetCharCount(2 + gPortExtraObjs);
     }
 #else
     BtlScene_SetCharCount(2);

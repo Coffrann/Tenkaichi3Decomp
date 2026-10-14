@@ -5,9 +5,10 @@
 extern "C" {
 #endif
 
-/* How many extra fighters a fight can have in this build. THE one number: the settings' rows, the page's count
-   control and the Experiments tab are all held to it. (The battle code itself carries one so far.) */
-#define PORT_EXTRA_MAX 1
+/* How many extra fighters a fight can have in this build, PORT_EXTRA_MAX (eight: ten fighters in all). THE one
+   number: the battle code's tables, the settings' rows, the page's count control and the Experiments tab are all
+   held to it. */
+#include "../include/port_fighters.h"
 
 /* plat_fighters.c: the settings, held to their ranges */
 int Port_ExtraCount(void);      /* the Experiments tab's switch: how many extra fighters every Duel / training fight gets */
@@ -18,6 +19,10 @@ void Port_ExtraSet(int count, int index, int chara, int team, int level);
 void Port_ExtraSetFighter(int index, int chara, int team, int level); /* the same without the switch (not written to the file yet) */
 int Port_ExtraCharaOk(int chara, char *why, int size); /* its files are in the game data */
 int Port_ExtraLast(void);                              /* what the last fight's set-up decided */
+int Port_ExtraSetup(int mode, int members0, int members1, int split, int replay, int script); /* the loader's: a fight is being loaded */
+int Port_ExtraAdd(int side, int index, int chara, int costume, int level);
+void Port_ExtraDone(void);
+int Port_TestRoster(int side, int index);
 const char *Port_CharaName(int chara); /* a character's name from the game data ("" if it gave none); the window's thread only */
 
 /* plat_modes.c: the page of extra modes (SELECT on the game's main menu) */

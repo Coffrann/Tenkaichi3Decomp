@@ -732,8 +732,9 @@ extern void *gEftCharKindClass[11];  /* 0x2C3BE0: manager class of each kind */
 extern u8 gEftKiBombMgrClass[0x18];          /* manager class used for kind 2 when the fighter has a type 3 ki blast */
 extern u8 D_002C3E00[0x18];          /* manager class used for kind 1 when the fighter has a type 2 ki blast */
 
-#ifdef PORT /* (the third fighter's own pool) */
-#define PORT_CHAR_POOL(chr) ((chr) == 0 ? 7 : (chr) >= 2 ? 10 : 8)
+#ifdef PORT /* (an extra fighter's own pool: fighter 2's is 10, fighter 3's 12, ...: BTL_POOL_EXTRA_EFFECT, btl_pool.h) */
+#define PORT_EXTRA_POOL(k) (10 + 2 * (k))
+#define PORT_CHAR_POOL(chr) ((chr) == 0 ? 7 : (chr) >= 2 ? PORT_EXTRA_POOL((chr) - 2) : 8)
 #else
 #define PORT_CHAR_POOL(chr) ((chr) == 0 ? 7 : 8)
 #endif
@@ -771,7 +772,13 @@ void EftCharRoot_Term(EftQTask *task) {
     BtlPool_Reset(7);
     BtlPool_Reset(8);
 #ifdef PORT
-    BtlPool_Reset(10);
+    {
+        s32 k;
+
+        for (k = 0; k < 8; k++) { /* (the extra fighters' own, PORT_EXTRA_MAX of them) */
+            BtlPool_Reset(PORT_EXTRA_POOL(k));
+        }
+    }
 #endif
 }
 

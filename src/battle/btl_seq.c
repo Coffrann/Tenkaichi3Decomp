@@ -1248,6 +1248,37 @@ extern void Port_Dbg2(const char *what, int a, int b); /* port/src/plat_stub.c (
 extern s32 BtlChar_GetCount(void);
 extern s32 Port_Team(s32 i); /* btl_char_flag_opp.c */
 #define PORT_ENDDBG(n) Port_Dbg2("the fight ends by rule", n, (int)result->reason)
+#define PORT_SEQ_TEAMS 10 /* (PORT_TEAM_MAX, port/include/port_fighters.h) */
+extern s32 BtlCharApi_GetHp(s32 objId);
+/* More than two fighters, the time is up: the team with the most health left in all its fighters has won (the
+   game compares the two sides' fighters). Player 1's team = player 1 wins, any other = player 2 wins. 0: two
+   fighters, or the best teams are level: the game's own rule decides. */
+static s32 Port_JudgeTeams(BattleResult *result) {
+    s32 hp[PORT_SEQ_TEAMS], i, best = 0, level = 0;
+
+    if (BtlChar_GetCount() <= 2) {
+        return 0;
+    }
+    memset(hp, 0, sizeof(hp));
+    for (i = 0; i < BtlChar_GetCount(); i++) {
+        if ((u32)Port_Team(i) < PORT_SEQ_TEAMS && BtlCharApi_GetHp(i) > 0) {
+            hp[Port_Team(i)] += BtlCharApi_GetHp(i);
+        }
+    }
+    for (i = 1; i < PORT_SEQ_TEAMS; i++) {
+        if (hp[i] > hp[best]) {
+            best = i;
+            level = 0;
+        } else if (hp[i] == hp[best]) {
+            level = 1;
+        }
+    }
+    if (level) {
+        return 0;
+    }
+    result->winner = best == 0 ? BTL_RESULT_WIN_P1 : BTL_RESULT_WIN_P2;
+    return 1;
+}
 #else
 #define PORT_ENDDBG(n)
 #endif
@@ -1276,6 +1307,9 @@ s32 BtlSeq_CheckBattleEnd(void) {
     }
     if (timeUp) {
         result->reason = BTL_REASON_TIME_UP;
+#ifdef PORT
+        if (!Port_JudgeTeams(result))
+#endif
         BtlSeq_JudgeByHealth(result);
         { PORT_ENDDBG(2); return 1; }
     }
@@ -1295,17 +1329,21 @@ s32 BtlSeq_CheckBattleEnd(void) {
         { PORT_ENDDBG(5); return 1; }
     }
 #ifdef PORT
-    /* The experiment's third fighter: a knock-out ends the fight when one team is left (teams:
-       btl_char_flag_opp.c). The result only knows two sides: player 1's team left = player 1 wins, any other
-       team left = player 2 wins. */
+    /* More than two fighters: a knock-out ends the fight when one team is left (teams: btl_char_flag_opp.c;
+       a Team Battle ends when every fighter of a team is down, a Free-for-All when one fighter is left). The
+       result only knows two sides: player 1's team left = player 1 wins, any other team left = player 2 wins. */
     if (BtlChar_GetCount() > 2) {
-        s32 alive[3] = { 0, 0, 0 }, i, teams;
-        for (i = 0; i < 3; i++) {
-            if (!BtlCtrl_IsTeamDead(i)) {
+        s32 alive[PORT_SEQ_TEAMS], i, teams = 0;
+
+        memset(alive, 0, sizeof(alive));
+        for (i = 0; i < BtlChar_GetCount(); i++) {
+            if (!BtlCtrl_IsTeamDead(i) && (u32)Port_Team(i) < PORT_SEQ_TEAMS) {
                 alive[Port_Team(i)] = 1;
             }
         }
-        teams = alive[0] + alive[1] + alive[2];
+        for (i = 0; i < PORT_SEQ_TEAMS; i++) {
+            teams += alive[i];
+        }
         if (teams == 0) {
             result->reason = BTL_REASON_KO;
             BtlSeq_JudgeByHealth(result);

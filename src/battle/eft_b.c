@@ -648,6 +648,14 @@ s32 EftBubble_StartBurst(s32 objId) {
 void EftBubble_OnBlastRecord(void *rec) {
 }
 
+#ifdef PORT
+/* The experiment of more than two fighters: an entry for every object id there can be (BTL_OBJ_MAX). The third
+   fighter's bubbles were written past the two. */
+#define EFT_BUBBLE_CHRS 12
+#else
+#define EFT_BUBBLE_CHRS 2
+#endif
+
 /* Task init: allocates the state and the pool, loads the textures; kills the task when the stage has fewer than 6. */
 void EftBubble_Init(EftBTask *task) {
     s32 *stage;
@@ -657,8 +665,8 @@ void EftBubble_Init(EftBTask *task) {
         memset(gEftBubble, 0, sizeof(EftBubbleWork));
     }
     if (gEftBubble->chr == NULL) {
-        gEftBubble->chr = BtlPool_Alloc(BtlPool_GetCurrent(), 2 * sizeof(EftBubbleChr));
-        memset(gEftBubble->chr, 0, 2 * sizeof(EftBubbleChr));
+        gEftBubble->chr = BtlPool_Alloc(BtlPool_GetCurrent(), EFT_BUBBLE_CHRS * sizeof(EftBubbleChr));
+        memset(gEftBubble->chr, 0, EFT_BUBBLE_CHRS * sizeof(EftBubbleChr));
     }
     if (gEftBubble->pool == NULL) {
         gEftBubble->pool = BtlPool_Alloc(BtlPool_GetCurrent(), EFT_BUBBLE_MAX * sizeof(EftBubble));
@@ -883,7 +891,7 @@ void EftBubble_UpdateChrs(void) {
         return;
     }
     chr = gEftBubble->chr;
-    for (i = 0; i < 2; i++, chr++) {
+    for (i = 0; i < EFT_BUBBLE_CHRS; i++, chr++) {
         if (EFT_BUBBLE_CHR_FLAGS(chr)->trail) {
             EftBubble_UpdateTrail(chr);
         }

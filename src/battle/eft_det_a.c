@@ -678,6 +678,17 @@ s32 BtlBodyHit_TestVolumes(EftDetObjWork *work, EftDetPart **body) {
     return 0;
 }
 
+#ifdef PORT
+/* The experiment of more than two fighters. The game records "my strike touched object n" as bit 0x18 + n of the
+   attacker's contact word and "object n's strike touched me" as bit 0x1C + n of the victim's: four bits each, room
+   for objects 0..3. A fifth fighter's bit would be the first of the other four, and from the ninth on the shift
+   leaves the word. Who was touched is kept here instead, a bit for each object, by the attacker's object id;
+   the entry is cleared where the game clears the bits (BtlObjHit_BuildVolumes, bobj_a.c). In the word itself the
+   bits are set as the game sets them for objects 0..3; for an object past them the attacker gets one of its
+   four all the same, because the game asks "did my strike touch anybody" by those (& 0xF000000). */
+u16 gPortBodyTouch[12]; /* (BTL_OBJ_MAX) */
+#endif
+
 /* Tests the strike volumes of `atk` against the body of `def` and records the contact in both objects. */
 s32 BtlBodyHit_Test(EftDetObj *atk, EftDetObj *def) {
     EftDetObjWork *work;
@@ -705,8 +716,18 @@ s32 BtlBodyHit_Test(EftDetObj *atk, EftDetObj *def) {
     if (!BtlBodyHit_TestVolumes(work, body)) {
         return 0;
     }
+#ifdef PORT
+    if ((u32)atk->id < 12 && (u32)def->id < 12) {
+        gPortBodyTouch[atk->id] |= 1 << def->id;
+    }
+    work->hitFlags |= 1 << ((def->id & 3) + 0x18);
+    if ((u32)atk->id < 4) {
+        defWork->hitFlags |= 1 << (atk->id + 0x1C);
+    }
+#else
     work->hitFlags |= 1 << (def->id + 0x18);
     defWork->hitFlags |= 1 << (atk->id + 0x1C);
+#endif
     return 1;
 }
 
@@ -720,21 +741,22 @@ void BtlBodyHit_Update(void) {
     BtlBodyHit_Test(a, BtlObj_Get(BattleSide_GetObjId(0)));
 #ifdef PORT
     {
-        /* The experiment's third fighter (of side 2): against player 1's fighter and back, as the pair above.
-           The test marks WHICH object was touched (a bit for each object id), so nothing else has to change
-           here. */
+        /* More than two fighters: every extra fighter against every fighter before it and back, as the pair
+           above. The test marks WHICH object was touched (a bit for each object id), so nothing else has to
+           change here. (Every pair, friends too: bodies do not pass through each other, and whether a touch is
+           a HIT is decided by who the attacker's enemies are, in BtlHit_TestHit.) */
         extern s32 Port_FighterObjId(s32 i); /* btl_char_mgr.c */
         extern s32 BtlChar_GetCount(void);
-        s32 third = Port_FighterObjId(2);
-        if (third >= 0) {
-            /* (Every pair with the third, friends too: bodies do not pass through each other, and whether a
-               touch is a HIT is decided by who the attacker's enemies are, in BtlHit_TestHit.) */
-            s32 k;
-            for (k = 0; k < 2; k++) {
-                a = BtlObj_Get(BattleSide_GetObjId(k));
-                BtlBodyHit_Test(a, BtlObj_Get(third));
-                a = BtlObj_Get(third);
-                BtlBodyHit_Test(a, BtlObj_Get(BattleSide_GetObjId(k)));
+        s32 n, k;
+
+        for (n = 2; n < BtlChar_GetCount(); n++) {
+            s32 extra = Port_FighterObjId(n);
+
+            for (k = 0; k < n && extra >= 0; k++) {
+                a = BtlObj_Get(Port_FighterObjId(k));
+                BtlBodyHit_Test(a, BtlObj_Get(extra));
+                a = BtlObj_Get(extra);
+                BtlBodyHit_Test(a, BtlObj_Get(Port_FighterObjId(k)));
             }
         }
     }
@@ -997,7 +1019,7 @@ void EftDet_FighterPass(void) {
                        Teams: the shot is tried on its owner's target, then on its other enemies; never on a
                        friend. Roster indices and object ids are the same numbers for the three.) */
                     s32 owner = list->rec[i].objId;
-                    s32 who = (u32)owner < 4 ? gPortTarget[owner] : 0;
+                    s32 who = gPortTarget[owner]; /* (owner is a roster index: tested above) */
                     s32 k;
 
                     target = Port_FighterObjId(who);

@@ -1,33 +1,37 @@
 /*
- * Extra fighters (the third-fighter experiment): who they are, and whether a fight has them.
+ * Extra fighters (the experiment of more than two fighters): who they are, and whether a fight has them.
  *
- * The battle code (src/battle: battle_load.c, battle.c, battle_work.c, btl_ai_cond.c, btl_char_flag_opp.c) asks
- * three things: Port_ThirdFighter() (a character, or -1: no third fighter), Port_ThirdTeam() and
- * Port_ThirdLevel(). The answers are decided ONCE PER FIGHT, by Port_ExtraSetup, which the loader calls just before
- * it asks for the fighters' models: a setting changed in the middle of a fight changes the next one, and a fight
- * never sees two answers.
+ * The battle code (src/battle) asks through port/include/port_fighters.h: how many extra fighters the fight has
+ * (Port_FightExtras, 0..PORT_EXTRA_MAX) and for extra k its character, costume, team and computer level. Extra k
+ * is roster index 2 + k; fighters 0 and 1 are the two sides' own. The answers are decided ONCE PER FIGHT, by
+ * Port_ExtraSetup, which the loader calls just before it asks for the fighters' models: a setting changed in the
+ * middle of a fight changes the next one, and a fight never sees two answers. (Port_ThirdFighter, Port_ThirdTeam
+ * and Port_ThirdLevel are extra 0 by its older name.)
  *
- * Where the answers come from:
- *   - the environment (the tests): BT3_THIRD_FIGHTER=<character 0..160>, BT3_THIRD_TEAM (1 with player 2, the
- *     default; 0 with player 1; 2 on its own), BT3_THIRD_LEVEL (0..29). Each one that is set wins over its setting,
- *     and BT3_THIRD_FIGHTER applies to every kind of fight, as it always did;
- *   - else the settings (the Experiments tab of the settings window, port/src/gs/ui.cpp):
- *         extra_fighters   how many extra fighters (0 or 1 today)
- *         extra0_chara     the first one's character
- *         extra0_team      its team: 0 player 1's, 1 player 2's, -1 a team of its own
- *         extra0_level     its computer level, 0..29
- *     The names carry an index and the count is a number because the aim is more than one (up to ten in a fight);
- *     only entry 0 is read so far, and docs/port/tagteam_menu.md says what the rest needs.
- *     From the settings a fight gets its extra fighter only when it is a plain one against one of Duel or of the
- *     training mode: no script, one member a side, one view, not a replay. Everything else is the game's own.
- *   - or the page of extra modes (plat_modes.c: SELECT on the game's main menu). Its Start writes the same
- *     extraN_* rows and two settings of its own, modes_fight (which mode) and modes_extras (how many), which stand
- *     until the main menu is back. While they stand a fight has the extra fighters under the same rules as above,
- *     whatever the Experiments tab's switch says, and only in the kind of fight the mode is (the versus menu's, or
- *     training's).
+ * Where the answers come from, the first that applies:
+ *   - the environment (the tests), in every kind of fight:
+ *       BT3_EXTRA_FIGHTERS=<character>:<team>[:<level>],<character>:<team>,...   any number up to PORT_EXTRA_MAX;
+ *                         team 0 is player 1's, 1 player 2's, 2 and up are further teams; level 0..29
+ *       BT3_THIRD_FIGHTER=<character 0..160>   one, with BT3_THIRD_TEAM (1 with player 2, the default; 0 with
+ *                         player 1; 2 on its own) and BT3_THIRD_LEVEL (0..29)
+ *   - the sides' own team rosters, when the setting modes_fight says so: 1 Team Battle, 2 Free-for-All (written
+ *     by the menu code, cleared at the main menu; BT3_MODES_FIGHT=<n> stands in for it in a test, in any kind of
+ *     fight). Every member the players picked on the game's own team select fights AT ONCE: fighter 0 is side 0's
+ *     first member, fighter 1 side 1's, and the other members are the extra fighters, side 0's first. In a Team
+ *     Battle a fighter's team is its side; in a Free-for-All everyone is alone. The loader hands the members over
+ *     (Port_ExtraAdd) and then leaves each side ONE member, so that the game's own switching of members has
+ *     nothing to switch. Only in a fight of the versus menu, with no script, one view, not a replay.
+ *   - else the settings' rows (the Experiments tab of the settings window, port/src/gs/ui.cpp, and the Training
+ *     entry of the page of extra modes, plat_modes.c):
+ *         extra_fighters   how many extra fighters (the Experiments switch), or modes_extras with modes_fight 3
+ *         extraN_chara     extra N's character
+ *         extraN_team      its team: 0 player 1's, 1 player 2's, -1 a team of its own (team 2 + N)
+ *         extraN_level     its computer level, 0..29
+ *     From the settings a fight gets them only when it is a plain one against one of Duel or of the training
+ *     mode: no script, one member a side, one view, not a replay.
  *
- * Whatever asked, there is none in an online match (the two copies must compute the game's own fight), and none
- * when the character's files are not in the data folder (the loader would wait for them for ever or read nothing).
+ * Whatever asked, there are none in an online match (the two copies must compute the game's own fight), and a
+ * character whose files are not in the data folder is left out (the loader would wait for them for ever).
  *
  * The characters' names for the window are read from the player's own data (the versus select's text in the
  * first menu archive): nothing of them is in the repository.
@@ -38,6 +42,7 @@
 #include <string.h>
 #include "gs/menu_labels.h"
 #include "plat_fighters.h"
+#include "port_fighters.h"
 
 #define CHARA_COUNT 161  /* characters 0..160 (MCHR_RANDOM, include/menu/menu_d.h) */
 #define EXTRA_MAX PORT_EXTRA_MAX /* extra fighters a fight can have so far */
@@ -52,7 +57,14 @@ extern int Port_NetActive(void);                                    /* gs/net.c 
 extern int PortA11y_Utf8(char *out, int cap, const uint16_t *str); /* gs/a11y.c: the game's text as UTF-8 */
 
 /* The fight's answers (set by Port_ExtraSetup on the game's thread, read by it). */
-static int sChara = -1, sTeam = 1, sLevel = -1;
+typedef struct FightExtra {
+    int chara, costume, team, level;
+    int member; /* side * 8 + index of the member of the battle setup it was made from, -1: none */
+} FightExtra;
+static FightExtra sFight[PORT_EXTRA_MAX];
+static int sFightCount;
+static int sFightRoster; /* PORT_MODE_TEAM or PORT_MODE_FFA while the sides' members are being handed over, and after */
+static const char *sFightFrom = ""; /* who asked, for the log */
 /* What the last set-up decided, for the window (one of PORT_EXTRA_*; an int, the window is another thread's). */
 enum { EXTRA_NONE, EXTRA_IN, EXTRA_MODE, EXTRA_TEAMS, EXTRA_SPLIT, EXTRA_REPLAY, EXTRA_SCRIPT, EXTRA_ONLINE, EXTRA_FILES };
 static volatile int sLast = EXTRA_NONE;
@@ -133,30 +145,146 @@ int Port_ExtraCharaOk(int chara, char *why, int size) {
     return 1;
 }
 
-/* A fight is being loaded: does it have an extra fighter? Called by the loader (BtlLoad_StepInitial) with the
-   battle's mode (include/battle/battle_setup.h: 0 the versus menu's, 6 training), each side's number of members,
-   and whether the picture is split, a replay is played, the fight has a script. */
-void Port_ExtraSetup(int mode, int members0, int members1, int split, int replay, int script) {
-    const char *env = getenv("BT3_THIRD_FIGHTER"), *e;
+/* One more extra fighter for the fight being set up. 0: not taken (the table is full, there is no such character,
+   its files are missing: the reason is logged, and kept for the window). */
+static int fight_add(int chara, int costume, int team, int level, int member) {
     char why[160];
-    int asked = 0, last = EXTRA_NONE;
-    int page = Port_ModesFight(); /* the mode asked on the page of extra modes, 0: none */
+    FightExtra *f;
 
-    sChara = -1;
-    sTeam = 1;
-    sLevel = -1; /* (the side's own level, src/battle/btl_ai_cond.c) */
-    why[0] = '\0';
-    if (env != NULL) {
-        sChara = atoi(env);
-        asked = sChara >= 0;
-        if (sChara >= CHARA_COUNT) {
-            sChara = -1;
+    if (sFightCount >= PORT_EXTRA_MAX) {
+        fprintf(stderr, "bt3: extra fighter: character %d is left out (a fight has %d fighters at most)\n", chara, PORT_FIGHTER_MAX);
+        return 0;
+    }
+    if (!Port_ExtraCharaOk(chara, why, sizeof(why))) {
+        fprintf(stderr, "bt3: extra fighter: character %d is left out (%s)\n", chara, why);
+        sLast = EXTRA_FILES;
+        return 0;
+    }
+    f = &sFight[sFightCount++];
+    f->chara = chara;
+    f->costume = costume < 0 ? 0 : costume;
+    f->team = team < 0 ? 0 : team >= PORT_TEAM_MAX ? PORT_TEAM_MAX - 1 : team;
+    f->level = level > 29 ? 29 : level;
+    f->member = member;
+    return 1;
+}
+
+/* BT3_EXTRA_FIGHTERS=<character>:<team>[:<level>],... (the tests): any number of extra fighters, in any fight. */
+static void fight_from_list(const char *p) {
+    while (*p != '\0') {
+        char *end;
+        long chara = strtol(p, &end, 10), team = 1, level = -1;
+
+        if (end == p) {
+            break;
+        }
+        if (*end == ':') {
+            team = strtol(end + 1, &end, 10);
+            if (*end == ':') {
+                level = strtol(end + 1, &end, 10);
+            }
+        }
+        fight_add((int)chara, 0, (int)team, (int)level, -1);
+        p = end;
+        while (*p == ',' || *p == ' ') {
+            p++;
+        }
+    }
+}
+
+/* The mode the fights of now are of: the page's or the menu flow's setting, or BT3_MODES_FIGHT in a test (which
+   then holds for every kind of fight: `forced`). */
+static int fight_mode(int *forced) {
+    const char *e = getenv("BT3_MODES_FIGHT");
+
+    *forced = e != NULL;
+    if (e != NULL) {
+        int m = atoi(e);
+        return m > PORT_MODE_NONE && m < PORT_MODE_COUNT ? m : PORT_MODE_NONE;
+    }
+    return Port_ModesFight();
+}
+
+static void fight_log(void) {
+    int i;
+
+    for (i = 0; i < sFightCount; i++) {
+        fprintf(stderr, "bt3: extra fighter: character %d, team %d, level %d (%s)\n", sFight[i].chara, sFight[i].team, sFight[i].level,
+                sFightFrom);
+    }
+    if (sFightCount > 1) {
+        fprintf(stderr, "bt3: extra fighters: %d, so %d in the fight\n", sFightCount, sFightCount + 2);
+    }
+}
+
+/* A fight is being loaded: does it have extra fighters? Called by the loader (BtlLoad_StepInitial) with the
+   battle's mode (include/battle/battle_setup.h: 0 the versus menu's, 6 training), each side's number of members,
+   and whether the picture is split, a replay is played, the fight has a script.
+   Returns 0 when the fight's extra fighters are decided (none, or the table is filled), or PORT_MODE_TEAM /
+   PORT_MODE_FFA when they are the sides' own members: the loader then hands those over with Port_ExtraAdd and
+   ends with Port_ExtraDone. */
+int Port_ExtraSetup(int mode, int members0, int members1, int split, int replay, int script) {
+    static const char *const kWhy[] = {"", "", "this mode's fights are left as the game's own", "a side has more than one member",
+                                       "the picture is split for two players", "a replay is being played",
+                                       "the fight has a script", "an online match", ""};
+    const char *list = getenv("BT3_EXTRA_FIGHTERS"), *env = getenv("BT3_THIRD_FIGHTER"), *e;
+    int asked = 0, last = EXTRA_NONE, forced = 0, i;
+    int page = fight_mode(&forced); /* the mode asked on the page of extra modes or by the menu flow, 0: none */
+    int roster = page == PORT_MODE_TEAM || page == PORT_MODE_FFA;
+
+    sFightCount = 0;
+    sFightRoster = 0;
+    sFightFrom = "";
+    sLast = EXTRA_NONE;
+    if (Port_NetActive()) {
+        /* (nothing of this in an online match, whoever asks) */
+        if (list != NULL || env != NULL || (roster ? members0 + members1 > 2 : page != PORT_MODE_NONE ? Port_ModesCount() > 0 : Port_ExtraCount() > 0)) {
+            sLast = EXTRA_ONLINE;
+            fprintf(stderr, "bt3: extra fighter: not in this fight (%s)\n", kWhy[EXTRA_ONLINE]);
+        }
+        return 0;
+    }
+    if (list != NULL) {
+        sFightFrom = "BT3_EXTRA_FIGHTERS";
+        fight_from_list(list);
+        asked = 1;
+    } else if (env != NULL) {
+        int team = 1, level = -1;
+
+        sFightFrom = "BT3_THIRD_FIGHTER";
+        if ((e = getenv("BT3_THIRD_TEAM")) != NULL) {
+            team = atoi(e) < 0 || atoi(e) > 2 ? 1 : atoi(e);
+        }
+        if ((e = getenv("BT3_THIRD_LEVEL")) != NULL) {
+            level = atoi(e);
+        }
+        if (atoi(env) >= 0) {
+            fight_add(atoi(env), 0, team, level, -1);
+            asked = 1;
+        }
+    } else if (roster) {
+        /* The sides' own members, all at once. (A fight of one member a side is the game's own fight of two.) */
+        if (members0 + members1 > 2) {
+            asked = 1;
+            if (!forced && mode != 0) {
+                last = EXTRA_MODE;
+            } else if (script) {
+                last = EXTRA_SCRIPT;
+            } else if (split) {
+                last = EXTRA_SPLIT;
+            } else if (replay) {
+                last = EXTRA_REPLAY;
+            } else {
+                sFightRoster = page;
+                sFightFrom = Port_ModesName(page);
+                return page;
+            }
         }
     } else if (page != PORT_MODE_NONE ? Port_ModesCount() > 0 : Port_ExtraCount() > 0) {
+        int count = page != PORT_MODE_NONE ? Port_ModesCount() : Port_ExtraCount();
+
         asked = 1;
-        if (Port_NetActive()) {
-            last = EXTRA_ONLINE;
-        } else if (page != PORT_MODE_NONE ? mode != (page == PORT_MODE_TRAINING ? 6 : 0) : mode != 0 && mode != 6) {
+        if (!forced && (page != PORT_MODE_NONE ? mode != 6 : mode != 0 && mode != 6)) {
             last = EXTRA_MODE; /* (the page's choice is for the kind of fight it led into, and no other) */
         } else if (script) {
             last = EXTRA_SCRIPT;
@@ -167,36 +295,23 @@ void Port_ExtraSetup(int mode, int members0, int members1, int split, int replay
         } else if (replay) {
             last = EXTRA_REPLAY;
         } else {
-            int team = Port_ExtraTeam(0);
-            sChara = Port_ExtraChara(0);
-            sTeam = team < 0 ? 2 : team; /* (a team of its own: the first number no player has) */
-            sLevel = Port_ExtraLevel(0);
+            sFightFrom = page != PORT_MODE_NONE ? "the modes page: Training" : "the settings";
+            for (i = 0; i < count; i++) {
+                int team = Port_ExtraTeam(i);
+                /* (a team of its own: the first number no player and no extra fighter before it has) */
+                fight_add(Port_ExtraChara(i), 0, team < 0 ? 2 + i : team, Port_ExtraLevel(i), -1);
+            }
         }
     }
-    if ((e = getenv("BT3_THIRD_TEAM")) != NULL) {
-        sTeam = atoi(e) < 0 || atoi(e) > 2 ? 1 : atoi(e);
-    }
-    if ((e = getenv("BT3_THIRD_LEVEL")) != NULL) {
-        sLevel = atoi(e) > 29 ? 29 : atoi(e);
-    }
-    if (sChara >= 0 && Port_NetActive()) {
-        sChara = -1;
-        last = EXTRA_ONLINE;
-    }
-    if (sChara >= 0 && !Port_ExtraCharaOk(sChara, why, sizeof(why))) {
-        sChara = -1;
-        last = EXTRA_FILES;
-    }
-    if (sChara >= 0) {
+    if (sFightCount > 0) {
         last = EXTRA_IN;
-        fprintf(stderr, "bt3: extra fighter: character %d, team %d, level %d (%s%s)\n", sChara, sTeam, sLevel,
-                env != NULL ? "BT3_THIRD_FIGHTER" : page != PORT_MODE_NONE ? "the modes page: " : "the settings",
-                env == NULL && page != PORT_MODE_NONE ? Port_ModesName(page) : "");
+        fight_log();
     } else if (asked) {
-        static const char *const kWhy[] = {"", "", "this mode's fights are left as the game's own", "a side has more than one member",
-                                           "the picture is split for two players", "a replay is being played",
-                                           "the fight has a script", "an online match", ""};
-        fprintf(stderr, "bt3: extra fighter: not in this fight (%s)\n", last == EXTRA_FILES ? why : kWhy[last]);
+        if (sLast == EXTRA_FILES) {
+            last = EXTRA_FILES;
+        } else {
+            fprintf(stderr, "bt3: extra fighter: not in this fight (%s)\n", kWhy[last]);
+        }
     }
     sLast = last;
     if (getenv("BT3_EXTRA_FLIP") != NULL) {
@@ -205,6 +320,24 @@ void Port_ExtraSetup(int mode, int members0, int members1, int split, int replay
            without in turn. */
         Port_SettingSave("extra_fighters", Port_ExtraCount() > 0 ? 0 : 1);
     }
+    return 0;
+}
+
+/* The loader hands over a member of a side's team (Port_ExtraSetup returned a roster mode): `side` and `index`
+   say which. Its team is its side in a Team Battle and its own in a Free-for-All; its level is the member's, where the member has one (a player's own team has none: -1, and the
+   battle code gives it the other side's). Returns 1 if it is in the fight. */
+int Port_ExtraAdd(int side, int index, int chara, int costume, int level) {
+    if (sFightRoster == 0) {
+        return 0;
+    }
+    return fight_add(chara, costume, sFightRoster == PORT_MODE_FFA ? 2 + sFightCount : side != 0, level < 0 ? -1 : level,
+                     side * 8 + index);
+}
+void Port_ExtraDone(void) {
+    if (sFightCount > 0) {
+        sLast = EXTRA_IN;
+        fight_log();
+    }
 }
 
 /* What the last fight's set-up decided (EXTRA_*), for the window. */
@@ -212,15 +345,70 @@ int Port_ExtraLast(void) {
     return sLast;
 }
 
-/* The battle code's three questions, answered for the fight being loaded or fought. */
+/* The battle code's questions, answered for the fight being loaded or fought. */
+int Port_FightExtras(void) {
+    return sFightCount;
+}
+int Port_FightChara(int k) {
+    return k >= 0 && k < sFightCount ? sFight[k].chara : -1;
+}
+int Port_FightCostume(int k) {
+    return k >= 0 && k < sFightCount ? sFight[k].costume : 0;
+}
+int Port_FightTeam(int k) {
+    return k >= 0 && k < sFightCount ? sFight[k].team : 1;
+}
+int Port_FightLevel(int k) { /* -1: its side's own */
+    return k >= 0 && k < sFightCount ? sFight[k].level : -1;
+}
+int Port_FightMember(int k) {
+    return k >= 0 && k < sFightCount ? sFight[k].member : -1;
+}
+int Port_FightRoster(void) {
+    return sFightCount > 0 ? sFightRoster : 0;
+}
+/* (extra 0 by its older name) */
 int Port_ThirdFighter(void) {
-    return sChara;
+    return Port_FightChara(0);
 }
-int Port_ThirdLevel(void) { /* -1: its side's own */
-    return sLevel;
+int Port_ThirdLevel(void) {
+    return Port_FightLevel(0);
 }
-int Port_ThirdTeam(void) { /* 0 with player 1, 1 with player 2, 2 on its own */
-    return sTeam;
+int Port_ThirdTeam(void) {
+    return Port_FightTeam(0);
+}
+
+/* BT3_TEAM_ROSTER=<character>,<character>,.../<character>,... (the tests): the members of the two sides' teams,
+   as the team select would have left them, for a fight that was set up without it (the demo fight). Member
+   `index` of `side`, -1 past the last or when the variable is not set. */
+int Port_TestRoster(int side, int index) {
+    const char *p = getenv("BT3_TEAM_ROSTER");
+    int i;
+
+    if (p == NULL || side < 0 || side > 1 || index < 0 || index >= 5) {
+        return -1;
+    }
+    if (side == 1) {
+        p = strchr(p, '/');
+        if (p == NULL) {
+            return -1;
+        }
+        p++;
+    }
+    for (i = 0; i < index; i++) {
+        while (*p != ',' && *p != '/' && *p != '\0') {
+            p++;
+        }
+        if (*p != ',') {
+            return -1;
+        }
+        p++;
+    }
+    if (*p < '0' || *p > '9') {
+        return -1;
+    }
+    i = atoi(p);
+    return i >= 0 && i < CHARA_COUNT ? i : -1;
 }
 
 /* ---- the characters' names -------------------------------------------------------------------------------------- */

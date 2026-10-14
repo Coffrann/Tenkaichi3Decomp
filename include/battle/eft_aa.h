@@ -195,11 +195,23 @@ typedef struct EftCharSlot {
 
 /* gEftCharSlot (0x50 bytes): one slot per kind and fighter. */
 typedef struct EftCharSlots {
+#ifdef PORT
+    /* The experiment of more than two fighters: a slot for every object id there can be (BTL_OBJ_MAX). With two
+       a row, the third fighter's kind-0 slot was the first fighter's kind-1 slot, and so on down the table; the
+       eighth fighter's kind-3 slot lay past the block (a crash in EftCharaFx_Stop). The block is allocated by
+       its size. */
+    EftCharSlot kind0[12];
+    EftCharSlot kind1[12];
+    EftCharSlot kind2[12];
+    EftCharSlot kind3[12];
+    EftCharSlot absorb[12];
+#else
     /* 0x00 */ EftCharSlot kind0[2];
     /* 0x10 */ EftCharSlot kind1[2];
     /* 0x20 */ EftCharSlot kind2[2];
     /* 0x30 */ EftCharSlot kind3[2];
     /* 0x40 */ EftCharSlot absorb[2]; /* the drain glow (EftAbsorb, eft_l_c.c) */
+#endif
 } EftCharSlots;
 
 /* ---- blade trail ---------------------------------------------------------------------------------------- */

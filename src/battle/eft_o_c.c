@@ -299,11 +299,20 @@ s32 EftBodyFx_Stop(s32 objId) {
 
 /* ---- disc: manager, init and update ------------------------------------------------------------------------ */
 
+#ifdef PORT
+/* The experiment of more than two fighters: the block also holds, behind what this file knows of it, the lists
+   of held discs by fighter (EftDiscMgr.head / tail, include/battle/eft_p.h): twelve entries each there instead
+   of two, 80 bytes more. */
+#define EFT_DISC_RES_SIZE (0x660 + 2 * 10 * 4)
+#else
+#define EFT_DISC_RES_SIZE 0x660
+#endif
+
 /* Init callback of the manager: two texture sets, two model templates, a list of 20 discs. */
 void EftDiscMgr_Init(EftOTask *task) {
     gEftDisc = BtlPool_Alloc(BtlPool_GetCurrent(), sizeof(EftODiscMgr));
     gEftDisc->res = NULL;
-    gEftDisc->res = BtlPool_Alloc(BtlPool_GetCurrent(), 0x660);
+    gEftDisc->res = BtlPool_Alloc(BtlPool_GetCurrent(), EFT_DISC_RES_SIZE);
     gEftDisc->res->packTexA = BtlScene_GetCommonEntry(0x238);
     gEftDisc->res->packTexB = BtlScene_GetCommonEntry(0x23A);
     gEftDisc->res->packModelA = BtlScene_GetCommonEntry(0x239);
