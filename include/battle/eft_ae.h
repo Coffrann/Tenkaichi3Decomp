@@ -133,7 +133,15 @@ typedef struct EftAeVramEntry {
 
 /* The effect VRAM allocator (gEftVram): a list rebuilt every frame. */
 typedef struct EftAeVram {
-    /* 0x000 */ EftAeVramEntry entry[128];
+#ifdef PORT
+    /* The experiment of more than two fighters: ten fighters' effects ask for more than 128 textures in a frame
+       (the 129th entry was written over the count and the cursors behind the table: a crash). The block is
+       allocated by its size; EftVram_Init says how the list is kept inside it. */
+#define EFT_VRAM_ENTRIES 512
+#else
+#define EFT_VRAM_ENTRIES 128
+#endif
+    /* 0x000 */ EftAeVramEntry entry[EFT_VRAM_ENTRIES];
     /* 0x800 */ u32 count;
     /* 0x804 */ s32 imageNext;  /* next free block for images, 0x2B00 at the start of a frame (grows up) */
     /* 0x808 */ s32 clutNext;   /* next free block for CLUTs, 0x2A00 at the start of a frame (grows up) */

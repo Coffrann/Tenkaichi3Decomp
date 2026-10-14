@@ -15,6 +15,7 @@
 #include <time.h>
 #include <time.h>
 #include "port_addr.h"
+#include "port_fighters.h"
 extern void Port_StateTouch(void *p, unsigned long n); /* gs/state.c */
 
 /* ---- second processor (IOP): heap and remote calls ---- */
@@ -537,9 +538,11 @@ int Port_ThirdChara(void) {
 }
 /* The experiment of a third fighter of its own beside player 2's (src/battle: battle.c, battle_load.c,
    battle_work.c, btl_char_mgr.c). Who it is and whether a fight has it (BT3_THIRD_FIGHTER=<character id>, or the
-   settings): plat_fighters.c. gPortThirdSlot / gPortThirdObj: its resource slot and battle object, set by the
-   loader. */
-int gPortThirdSlot = -1, gPortThirdObj = -1;
+   settings): plat_fighters.c. Now any number of them (port/include/port_fighters.h): gPortExtraSlot[k] /
+   gPortExtraObj[k] are extra fighter k's resource slot and battle object, set by the loader, and gPortExtraObjs
+   says how many have an object. */
+int gPortExtraSlot[PORT_EXTRA_MAX] = {-1, -1, -1, -1, -1, -1, -1, -1}, gPortExtraObj[PORT_EXTRA_MAX] = {-1, -1, -1, -1, -1, -1, -1, -1};
+int gPortExtraObjs;
 /* (the experiment's tool) Walks the game's heap and says where its chain of blocks first breaks: the block before
    the break is the one that was written past its end. Called with a label from points of a fight's set-up and
    frame (BT3_HEAPCHK=1); says each fault once. */
@@ -555,6 +558,16 @@ void Port_Dbg3(const char *what, int a, int b, int c, int d) {
     if (getenv("BT3_HEAPCHK") != NULL) {
         fprintf(stderr, "bt3: dbg: %s: %d %#x %#x %d\n", what, a, b, c, d);
     }
+}
+/* An arena of the effect scene was asked for more than it holds (src/battle/btl_pool.c): what is written there
+   lands in the arena behind it. Always said: it is a fault, not a measurement. */
+void Port_PoolFull(int slot, int size, int used) {
+    fprintf(stderr, "bt3: EFFECT ARENA %d IS FULL: %d bytes, %d asked for\n", slot, size, used);
+}
+/* The effect scene asked for more textures in one frame than it has room for (src/battle/eft_ae.c): `what` 0 the
+   list, 1 VRAM. The texture is left out for the frame. */
+void Port_VramFull(int what, int asked, int room) {
+    fprintf(stderr, "bt3: effect textures: more than fit in one frame (%s: %d of %d)\n", what == 0 ? "textures in the list" : "the images end at VRAM block", asked, room);
 }
 int Port_HeapCheck(const char *where) {
     static int on = -1, said;

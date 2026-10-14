@@ -2171,7 +2171,7 @@ void Port_TestHealth(void) {
     extern int Port_TestHp(int i); /* port/src/plat_stub.c */
     s32 i;
 
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < BtlChar_GetCount(); i++) {
         BtlCapiBChr *chr = BtlChar_Get(i);
         if (Port_TestHp(i) > 0 && chr != NULL) {
             BtlMember_GetActiveGauge(chr)->hp = Port_TestHp(i);

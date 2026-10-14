@@ -18,17 +18,21 @@
 /* (70000: past the end of the second archive, which has 65,201 files. It was 30000, taken for free; those are
    the training mode's guide voice lines, and with n stages added the first n of them were replaced by stage
    files. Found 2026-10-08 while listing the file ids for added characters.) */
-extern int Port_ThirdFighter(void); /* port/src/plat_fighters.c: the experiment of a third fighter */
-extern void Port_ExtraSetup(int mode, int members0, int members1, int split, int replay, int script);
+#include "port_fighters.h" /* port/include: the experiment of more than two fighters (plat_fighters.c) */
+extern int Port_ExtraSetup(int mode, int members0, int members1, int split, int replay, int script);
+extern int Port_ExtraAdd(int side, int index, int chara, int costume, int level);
+extern void Port_ExtraDone(void);
+extern int Port_TestRoster(int side, int index);
+extern int Port_TestDemoMode(void);
 extern void Port_TargetReset(void); /* btl_char_flag_opp.c */
-extern int gPortThirdSlot, gPortThirdObj;
-static int sPortThirdScene; /* the third fighter's effect set exists in the scene of now */
+static u8 sPortExtraScene[PORT_EXTRA_MAX]; /* extra fighter k's effect set exists in the scene of now */
+static s32 sPortExtraAsked;                /* extra fighters whose files the first load has asked for */
+static void Port_LoadExtras(void);
+static s32 Port_LoadExtraFiles(void);
 /* The experiment of more than two fighters, character changes (a transformation, the damaged costume). A side has
    a fixed resource slot, an object and a current form in the battle setup; a fighter past the second (roster
-   index 2 on) has a heap slot, an object of its own and its form here. The loader's change path asks through
-   these, so that it serves every fighter of the roster. One fighter of this kind exists today (the third:
-   gPortThirdSlot, gPortThirdObj); the table is sized for the ten the experiment aims at. */
-#define PORT_FIGHTER_MAX 10
+   index 2 on: extra fighter 0 on) has a heap slot (gPortExtraSlot), an object of its own (gPortExtraObj) and its
+   form here. The loader's change path asks through these, so that it serves every fighter of the roster. */
 typedef struct PortFighterForm {
     s32 chara, costume, variant;                /* the files it has now */
     s32 startChara, startCostume, startVariant; /* the files it starts a fight with */
@@ -47,11 +51,11 @@ extern void Port_Dbg3(const char *what, int a, int b, int c, int d); /* port/src
 extern int Port_HeapFree(int *largest);
 /* The resource slot of roster entry i (2 on), -1 if it has none. */
 static s32 Port_FighterSlot(s32 i) {
-    return i == 2 ? gPortThirdSlot : -1;
+    return i >= 2 && i < 2 + Port_FightExtras() ? gPortExtraSlot[i - 2] : -1;
 }
 /* How many fighters the loader serves: the two sides, and the roster's others once it exists. */
 static s32 Port_LoadFighters(void) {
-    return gPortThirdObj >= 0 ? BtlChar_GetCount() : 2;
+    return gPortExtraObjs > 0 ? BtlChar_GetCount() : 2;
 }
 /* The object of fighter i: a side's from the battle setup, another fighter's from the roster. */
 static s32 Port_LoadObj(s32 i) {
@@ -508,8 +512,8 @@ s32 BtlLoad_StepChara(BtlJob *job) {
 #ifdef PORT
         if (job->side >= 2) {
             /* The experiment of more than two fighters: the swap for a fighter that is not a side's. Its new
-               files go into its slot, its object is bound to them, and only then are the old files freed (the
-               object reads its old model a last time when it is bound again). The rest is what a side gets
+               files go into its slot and its object is bound to them; the old files are kept (the object reads
+               its old model a last time when it is bound again, and see below). The rest is what a side gets
                below, without the voice bank and the member block, which such a fighter does not have. */
             s32 obj = Port_LoadObj(job->side);
             s32 slot = Port_FighterSlot(job->side);
@@ -530,11 +534,15 @@ s32 BtlLoad_StepChara(BtlJob *job) {
                    old ones) */
                 BtlScene_FreeChar(obj);
                 BtlScene_CreateChar(obj);
-                if (obj == gPortThirdObj) {
-                    sPortThirdScene = 1;
-                }
+                sPortExtraScene[job->side - 2] = 1;
             }
-            Port_ResReleaseOld(slot);
+            /* The old files are NOT given back here. A camera cut that was running when the change came (the
+               transformation's own, played from the fighter's animation file) goes on reading them for a while
+               after the swap; with several fighters changing one after the other the next one's files were read
+               into the very block just freed, under the cut (a crash in DemoCam_EvalAnim, seen with ten
+               fighters). They stay until this fighter's next change (Port_ResReload frees them first), a
+               restart, or the end of the fight: one set of files more for a fighter that has changed, in the
+               port's memory. */
             Port_Dbg3("fighter change, bound: fighter / model file of its slot now / only the model / new files", job->side,
                       Port_ResModelFile(slot), job->modelOnly, got);
             BtlJob_Free(job);
@@ -563,12 +571,18 @@ s32 BtlLoad_StepChara(BtlJob *job) {
             BtlAiMgr_ResetSide(job->side);
             BtlScene_CreateChar(job->side);
 #ifdef PORT
-            /* The third-fighter experiment: its effect set is made when side 2's is (the scene has just been
-               reset or side 2 streamed in; the third fighter's files stay as they are). */
-            if (job->side == 1 && gPortThirdObj == 2 && !sPortThirdScene) {
-                BtlScene_CreateChar(gPortThirdObj);
-                BtlAiMgr_ResetSide(gPortThirdObj); /* (and its controller, as side 2's just above) */
-                sPortThirdScene = 1;
+            /* The extra fighters' effect sets are made when side 2's is (the scene has just been reset or side 2
+               streamed in; the extra fighters' files stay as they are). */
+            if (job->side == 1) {
+                s32 k;
+
+                for (k = 0; k < gPortExtraObjs; k++) {
+                    if (!sPortExtraScene[k]) {
+                        BtlScene_CreateChar(gPortExtraObj[k]);
+                        BtlAiMgr_ResetSide(gPortExtraObj[k]); /* (and its controller, as side 2's just above) */
+                        sPortExtraScene[k] = 1;
+                    }
+                }
             }
 #endif
             if (!BtlCtrl_IsSwitching(job->side)) {
@@ -599,6 +613,9 @@ s32 BtlLoad_StepInitial(BtlJob *job) {
 
     switch (job->state) {
     case 0:
+#ifdef PORT
+        Port_LoadExtras(); /* (who fights in it, before the first file of a fighter is asked for) */
+#endif
         res->sndCommon = File_Request3(BTL_FILE_SND_COMMON, NULL, 0);
         res->sndStage = File_Request3(BTL_STAGE_BANK(Battle_GetStartStage()), NULL, 0);
         res->sndChara[0] = File_Request3(BattleSide_GetStartChara(0) + ((gSaveData->flags & SAVE_FLAG_VOICE) ? BTL_FILE_VOICE_ALT : BTL_FILE_VOICE), NULL, 0);
@@ -636,22 +653,15 @@ s32 BtlLoad_StepInitial(BtlJob *job) {
         BattleSide_SetModelSlot(0, BtlObj_RequestCharaModel(0, BattleSide_GetStartChara(0), BattleSide_GetStartCostume(0), BattleSide_GetStartVariant(0)));
         BattleSide_SetModelSlot(1, BtlObj_RequestCharaModel(1, BattleSide_GetStartChara(1), BattleSide_GetStartCostume(1), BattleSide_GetStartVariant(1)));
 #ifdef PORT
-        /* The experiment's third fighter: its model and its two animation files into a slot of the heap's (the
-           two fixed slots are the sides'), read with the rest of this step. (The slot is of the heap's kind;
-           the files themselves are in the port's memory: Port_ResRequest, btl_obj.c.) */
-        gPortThirdSlot = gPortThirdObj = -1;
-        sPortThirdScene = 0;
-        Port_TargetReset();
-        /* Whether this fight has one is decided here, once, for the whole of it (the settings may change while
-           it is fought; never in an online match, and from the settings only in a plain one against one). */
-        Port_ExtraSetup(Battle_GetMode(), BattleSide_GetMemberCount(0), BattleSide_GetMemberCount(1), Battle_IsSplitScreen(),
-                        BattleReplay_IsActive(), Battle_GetScript() >= 0);
-        if (Port_ThirdFighter() >= 0) {
-            s32 c = Port_ThirdFighter();
-            gPortThirdSlot = Port_ResRequest(c * 10 + 0x590, c * 10 + 0x598, c * 10 + 0x599);
-            memset(&sPortFighter[2], 0, sizeof(PortFighterForm)); /* (what a restart brings it back to) */
-            sPortFighter[2].chara = sPortFighter[2].startChara = c;
+        /* The extra fighters' slots and objects are the loader's to make: none yet. Their files are asked for
+           in step 5, behind the ones of this step (Port_LoadExtraFiles). */
+        for (i = 0; i < PORT_EXTRA_MAX; i++) {
+            gPortExtraSlot[i] = gPortExtraObj[i] = -1;
+            sPortExtraScene[i] = 0;
         }
+        gPortExtraObjs = 0;
+        sPortExtraAsked = 0;
+        Port_TargetReset();
 #endif
 #ifdef PORT
         {
@@ -719,6 +729,11 @@ s32 BtlLoad_StepInitial(BtlJob *job) {
         if (!File_UpdateRequests()) {
             return 0;
         }
+#ifdef PORT
+        if (Port_LoadExtraFiles()) {
+            return 0; /* (more files were asked for: this step waits for them too) */
+        }
+#endif
         for (side = 0; side < 2; side++) {
             for (i = 0; (u32)i < (u32)BattleSide_GetMemberCount(side); i++) {
                 m = BattleSide_GetMember(side, i);
@@ -926,9 +941,13 @@ void BtlLoad_Reload(void) {
             job->initial = 1;
             BtlScene_FreeChar(side);
 #ifdef PORT
-            if (side == 1 && gPortThirdObj == 2 && sPortThirdScene) { /* (the third fighter's set goes and comes with side 2's) */
-                BtlScene_FreeChar(gPortThirdObj);
-                sPortThirdScene = 0;
+            if (side == 1) { /* (the extra fighters' sets go and come with side 2's) */
+                for (i = 0; i < gPortExtraObjs; i++) {
+                    if (sPortExtraScene[i]) {
+                        BtlScene_FreeChar(gPortExtraObj[i]);
+                        sPortExtraScene[i] = 0;
+                    }
+                }
             }
 #endif
             Job_Push((Job *)job);
@@ -1255,6 +1274,85 @@ static inline BattleMember *Member(s32 n, s32 i) {
 
     return &side->members[i];
 }
+
+#ifdef PORT
+/* The first load, step 0: who fights. Port_ExtraSetup (port/src/plat_fighters.c) decides once for the whole fight
+   (the settings may change while it is fought; never in an online match).
+   When it says the fight is of the sides' own team rosters (Team Battle, Free-for-All), every member of both teams
+   is on the field at once: the first member of each side is the side's fighter as always, the others are handed
+   over as extra fighters, and each side is left with ONE member, so that the game has nobody to switch to and
+   nobody to send in when a fighter is knocked out (the members' entries stay where they are: an extra fighter
+   takes its health and items from its own, BtlChar_Reset). */
+static void Port_LoadExtras(void) {
+    BattleSetup *setup = SETUP();
+    s32 s, i, roster;
+
+    /* (the tests' tool, BT3_DEMO_MODE=<n>: the demo fight is of that battle mode, 0 the versus menu's, so that a
+       fight without a pad runs the sequence and the rules of a real one) */
+    if (Battle_GetMode() == 7 && Port_TestDemoMode() >= 0) {
+        setup->rule.mode = Port_TestDemoMode();
+    }
+    /* (the tests' tool, BT3_TEAM_ROSTER: the two teams as the team select would have left them) */
+    for (s = 0; s < 2; s++) {
+        BattleSide *side = &setup->sides[s];
+        s32 level = side->members[side->lead].cpuLevel;
+
+        for (i = 0; i < BTL_MEMBER_MAX && Port_TestRoster(s, i) >= 0; i++) {
+            BtlMember_Init(&side->members[i], Port_TestRoster(s, i), 0, 0, level, 100.0f, NULL);
+        }
+        if (i > 0) {
+            side->memberCount = i;
+            side->lead = 0;
+            side->startForm.chara = side->form.chara = side->members[0].chara;
+            side->startForm.costume = side->form.costume = 0;
+            side->startForm.variant = side->form.variant = 0;
+        }
+    }
+    roster = Port_ExtraSetup(Battle_GetMode(), setup->sides[0].memberCount, setup->sides[1].memberCount, Battle_IsSplitScreen(),
+                             BattleReplay_IsActive(), Battle_GetScript() >= 0);
+    if (roster == 0) {
+        return;
+    }
+    for (s = 0; s < 2; s++) {
+        BattleSide *side = &setup->sides[s];
+
+        if (side->lead != 0) { /* (the one that starts is member 0 from here on) */
+            BattleMember first = side->members[side->lead];
+
+            side->members[side->lead] = side->members[0];
+            side->members[0] = first;
+            side->lead = 0;
+        }
+        for (i = 1; i < side->memberCount && i < BTL_MEMBER_MAX; i++) {
+            BattleMember *m = &side->members[i];
+
+            Port_ExtraAdd(s, i, m->chara, m->costume, m->cpuLevel);
+        }
+        side->memberCount = 1;
+    }
+    Port_ExtraDone();
+}
+
+/* The first load, step 5: the reader has nothing left to read. Asks for the files of the extra fighters that
+   have none yet: each one's model and two animation files into a slot of the heap's kind (the two fixed slots
+   are the sides'; the files themselves are in the port's memory: Port_ResRequest, btl_obj.c). The reader's queue
+   holds FILE_REQ_MAX requests (32) and ten fighters have 30 files, so they are asked for in turns of what fits.
+   Returns 1 if it asked for any. */
+static s32 Port_LoadExtraFiles(void) {
+    s32 asked = 0;
+
+    for (; sPortExtraAsked < Port_FightExtras() && (asked + 1) * 3 <= FILE_REQ_MAX; sPortExtraAsked++, asked++) {
+        s32 k = sPortExtraAsked;
+        s32 c = Port_FightChara(k);
+
+        gPortExtraSlot[k] = Port_ResRequest(c * 10 + Port_FightCostume(k) + 0x590, c * 10 + 0x598, c * 10 + 0x599);
+        memset(&sPortFighter[2 + k], 0, sizeof(PortFighterForm)); /* (what a restart brings it back to) */
+        sPortFighter[2 + k].chara = sPortFighter[2 + k].startChara = c;
+        sPortFighter[2 + k].costume = sPortFighter[2 + k].startCostume = Port_FightCostume(k);
+    }
+    return asked;
+}
+#endif
 
 /* Adds one to result.frames on the frame after event 0x48 of side 0 is newly raised. */
 void BattleResult_CountFrame(void) {

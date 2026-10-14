@@ -30,7 +30,16 @@
  * Entries of free ids are NULL.
  */
 
+#ifdef PORT
+/* The experiment of more than two fighters: eight more objects, for the eight extra fighters. The table also
+   holds the fusion partners' bodies and every model an effect shows (a ki blast that is a model: EftObj_Create),
+   ten of them beside two fighters; with ten fighters in the game's twelve there were two, and a volley of such
+   blasts was handed "no object" (-1), which nobody checks: a crash. gBtlObjTbl is the game's own table of twelve
+   at a fixed place; btl_obj.c keeps the longer one for this build. */
+#define BTL_OBJ_MAX 20
+#else
 #define BTL_OBJ_MAX 12
+#endif
 #define BTL_OBJ_VIEW_MAX 2
 #ifdef PORT
 #define BTL_OBJ_WORK_SIZE sizeof(BtlObjWork) /* (it holds a third fighter's work block: see charaWork) */

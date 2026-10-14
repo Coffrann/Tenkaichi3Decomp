@@ -677,6 +677,24 @@ void ObjShadow_LoadProg(ObjMdlObj *obj, ObjShadowWork *work) {
 void ObjShadow_Alloc(ObjMdlObj *obj) {
     if (obj->flags & 0x10000000) {
         obj->shadow = BtlObjPool3_Alloc();
+#ifdef PORT
+        if (obj->shadow == NULL) {
+            /* The experiment of more than two fighters: the pool has five shadows, and the sixth object that
+               throws one had none (every user of it takes it for there). One more is made as ObjShadow_InitPool
+               makes the five, in memory that goes back with the objects' work block (btl_obj.c). */
+            extern void *Port_ObjExtraAlloc(s32 size);
+            s32 size = ObjShadow_CalcPacketWords(OBJ_SHADOW_PKT_TRIS) * 4;
+            ObjShadow *sh = Port_ObjExtraAlloc(sizeof(ObjShadow));
+            ObjShadowWork *work = Port_ObjExtraAlloc(sizeof(ObjShadowWork) + 0x40 + 2 * (size + 0x40));
+
+            if (sh != NULL && work != NULL) {
+                sh->work = work;
+                work->pkt[0] = (void *)(((u32)work + sizeof(ObjShadowWork) + 0x3F) & ~0x3F);
+                work->pkt[1] = (void *)(((u32)work->pkt[0] + size + 0x3F) & ~0x3F);
+                obj->shadow = sh;
+            }
+        }
+#endif
     }
 }
 

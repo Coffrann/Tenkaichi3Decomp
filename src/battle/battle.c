@@ -172,9 +172,8 @@ s32 Battle_Init(void) {
 #ifdef PORT
     PORT_HEAPCHK("before BtlChar_AllocAll");
     {
-        extern int Port_ThirdFighter(void);
-        extern int gPortThirdObj;
-        BtlChar_AllocAll(Port_ThirdFighter() >= 0 && gPortThirdObj >= 0 ? 3 : 2); /* (the experiment's third fighter) */
+        extern int gPortExtraObjs; /* port/src/plat_stub.c: the extra fighters that have an object */
+        BtlChar_AllocAll(2 + gPortExtraObjs); /* (the experiment of more than two fighters) */
     }
 #else
     BtlChar_AllocAll(2);

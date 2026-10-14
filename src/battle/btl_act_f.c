@@ -2123,6 +2123,57 @@ void BtlAct_SuperRushStrikeHandler(ActGChr *chr, s32 phase) {
  * leave: flags 0x37 and 0xCD; the attacker also runs BtlSuper_Leave, lands or goes airborne (held flag 0xE),
  * releases the partner object and adds 3 s to the stage timer.
  */
+#ifdef PORT
+/* More than two fighters. The two of a sequence wait for each other's model loads by asking "is your request
+   loaded" at their own step, and that is only true while the request is the active one: the two have to reach
+   the step in the same frames, as two fighters alone always do. With more in the fight one of the pair can be
+   held back by somebody else's doing (seen with ten: the victim reached the step after the attacker's partner
+   had come and its request was over, and waited in action 0x13A for ever; a fighter in the sequence holds the
+   battle clock, so the fight never ended). The one that waits for the OTHER's load also goes on when the other
+   is already past this step, or has left the sequence. */
+extern s32 BtlChar_GetCount(void);
+extern void Port_Dbg3(const char *what, int a, int b, int c, int d); /* port/src/plat_stub.c (BT3_HEAPCHK) */
+static s32 Port_RushLoaded(ActGChr *chr, s32 side, s32 level) {
+    ActGChr *other;
+    s32 action;
+
+    if (BtlChange_IsLoadedFor(side)) {
+        return 1;
+    }
+    if (BtlChar_GetCount() <= 2 || side == chr->player || (u32)side >= (u32)BtlChar_GetCount()) {
+        return 0;
+    }
+    other = (ActGChr *)BtlChar_Get(side);
+    action = BtlAct_GetCurrent(other);
+    if (!((action >= 0x12D && action <= 0x12F) || (action >= 0x139 && action <= 0x13B)) ||
+        BtlAct_GetMotionLevel(other, BtlAnim_GetId(other)) > level) {
+        Port_Dbg3("rush sequence: fighter / goes on without the load of / that one's action / step", chr->player, side, action, level);
+        return 1;
+    }
+    return 0;
+}
+#define RUSH_LOADED(chr, side, level) Port_RushLoaded(chr, side, level)
+
+/* The other fighter of the rush sequence fighter i is in (attacker 0x12D..0x12F, victim 0x139..0x13B: the throw
+   block names both), -1 when it is in none. btl_char_flag_opp.c keeps the two each other's opponent with it. */
+s32 Port_SequencePartner(s32 i) {
+    ActGChr *chr = (ActGChr *)BtlChar_Get(i);
+    s32 action = BtlAct_GetCurrent(chr);
+    s32 other;
+
+    if (action >= 0x12D && action <= 0x12F) {
+        other = chr->thr.defSide;
+    } else if (action >= 0x139 && action <= 0x13B) {
+        other = chr->thr.atkSide;
+    } else {
+        return -1;
+    }
+    return (u32)other < (u32)BtlChar_GetCount() && other != i ? other : -1;
+}
+#else
+#define RUSH_LOADED(chr, side, level) BtlChange_IsLoadedFor(side)
+#endif
+
 void BtlAct_SuperRushSequenceHandler(ActGChr *chr, s32 phase) {
     s32 *stepA = &chr->work[3];
     s32 *stepB = &chr->work[2];
@@ -2186,7 +2237,7 @@ void BtlAct_SuperRushSequenceHandler(ActGChr *chr, s32 phase) {
         }
         if (level == chr->thr.unk18) {
             if (BtlAnim_Advance(chr, 0)) {
-                if (BtlChange_IsLoadedFor(chr->thr.atkSide)) {
+                if (RUSH_LOADED(chr, chr->thr.atkSide, level)) {
                     if (chr->work[0] & 2) {
                         BtlChange_SetReady(chr->player);
                     }
@@ -2209,7 +2260,7 @@ void BtlAct_SuperRushSequenceHandler(ActGChr *chr, s32 phase) {
                         }
                         break;
                     case 1:
-                        if (BtlChange_IsLoadedFor(chr->thr.atkSide)) {
+                        if (RUSH_LOADED(chr, chr->thr.atkSide, level)) {
                             if (chr->work[0] & 1) {
                                 BtlChange_SetReady(chr->thr.atkSide);
                                 BtlAnim_Request(chr, BtlAnim_GetId(chr), 0.0f);
@@ -2262,7 +2313,7 @@ void BtlAct_SuperRushSequenceHandler(ActGChr *chr, s32 phase) {
                         }
                         break;
                     case 1:
-                        if (BtlChange_IsLoadedFor(chr->thr.defSide)) {
+                        if (RUSH_LOADED(chr, chr->thr.defSide, level)) {
                             if (!(chr->work[0] & 1)) {
                                 BtlChar_ResetUnk1310(chr);
                                 BtlChange_SetReady(chr->thr.defSide);
@@ -2300,7 +2351,7 @@ void BtlAct_SuperRushSequenceHandler(ActGChr *chr, s32 phase) {
                         }
                         break;
                     case 1:
-                        if (BtlChange_IsLoadedFor(chr->thr.atkSide)) {
+                        if (RUSH_LOADED(chr, chr->thr.atkSide, level)) {
                             if (chr->work[0] & 1) {
                                 BtlChar_ResetUnk1310(chr);
                                 BtlChange_SetReady(chr->thr.atkSide);

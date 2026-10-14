@@ -1905,7 +1905,10 @@ void HudGauge_DrawExtras(void) {
     }
     count = BtlChar_GetCount();
     for (i = 2; i < count && i < PORT_FIGHTER_MAX; i++) {
-        s32 place = HUD_SCR(Port_Team(i) == 0 ? 0 : 1);
+        /* (player 1's team under player 1's gauge, player 2's under player 2's; a fighter of another team, which
+           is everybody in a free-for-all, goes to the side that has fewer rows, the right one first) */
+        s32 team = Port_Team(i);
+        s32 place = team == 0 ? HUD_SCR(0) : team == 1 ? HUD_SCR(1) : used[HUD_SCR(1)] <= used[HUD_SCR(0)] ? HUD_SCR(1) : HUD_SCR(0);
         s32 n;
 
         /* (one row a fighter; BT3_HUD_ROWS=<n>, testing, draws it n times to show a full stack) */

@@ -888,6 +888,16 @@ void EftWater_UpdateBlast(EftWaterBlast *rec) {
     }
 }
 
+#ifdef PORT
+/* The experiment of more than two fighters: a wake for every object id there can be (BTL_OBJ_MAX; gEftDust->wake is
+   indexed by the fighter's object id, and the third fighter's was written past the two). */
+#define EFT_WAKE_CHRS 12
+#define EFT_WAKE_BYTES (EFT_WAKE_CHRS * sizeof(EftWaterWake))
+#else
+#define EFT_WAKE_CHRS 2
+#define EFT_WAKE_BYTES 0x18
+#endif
+
 /* Water task init (layer 0, sub-task 7): allocates the state and the particle pools, loads the textures. The task
    ends at once on a stage whose pack has no entry 0x12. */
 void EftWater_Init(void *task) {
@@ -898,8 +908,8 @@ void EftWater_Init(void *task) {
         memset(gEftDust, 0, sizeof(EftWater));
     }
     if (gEftDust->wake == NULL) {
-        gEftDust->wake = BtlPool_Alloc(BtlPool_GetCurrent(), 0x18);
-        memset(gEftDust->wake, 0, 0x18);
+        gEftDust->wake = BtlPool_Alloc(BtlPool_GetCurrent(), EFT_WAKE_BYTES);
+        memset(gEftDust->wake, 0, EFT_WAKE_BYTES);
     }
     if (gEftDust->splash == NULL) {
         gEftDust->splash = BtlPool_Alloc(BtlPool_GetCurrent(), 0x280);
@@ -1045,7 +1055,7 @@ void EftWater_UpdateWakes(void) {
 
     if (!EFT_PAUSED()) {
         wake = gEftDust->wake;
-        for (n = 0; n < 2; n++, wake++) {
+        for (n = 0; n < EFT_WAKE_CHRS; n++, wake++) {
             if (wake->on != 0) {
                 BtlCharApi_GetPos(wake->objId, (Vec4 *)&pos);
                 if (EftWater_GetSurfaceY(&y)) {

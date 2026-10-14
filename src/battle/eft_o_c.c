@@ -1,4 +1,19 @@
 #include "common.h"
+
+#ifndef EFT_OWNER_TAG
+#ifdef PORT
+/* More than two fighters: whose a task is. The game has two tags, "object 0's" and "anybody else's", and ends a
+   fighter's effects by resetting every task of its tag: with more fighters one fighter's change of model ended
+   the techniques of all the others past the first (a beam gone, and a technique's camera cut left running with
+   its data freed under it: a crash). Every extra fighter (objects 2..9) has a tag and a reset group of its own
+   (BtlTaskList_Reset, BtlScene_Reset); any other object keeps "anybody else's". */
+#define EFT_OWNER_TAG(n) ((n) == 0 ? 0x800 : ((u32)(n) - 2 < 8) ? (0x100000 << ((n) - 2)) : 0x1000)
+#define EFT_OWNER_RESET(n) ((n) == 0 ? 2 : ((u32)(n) - 2 < 8) ? (n) + 3 : 3)
+#else
+#define EFT_OWNER_TAG(n) n == 0 ? 0x800 : 0x1000
+#define EFT_OWNER_RESET(n) n == 0 ? 2 : 3
+#endif
+#endif
 #include "battle/eft_o.h"
 
 /*
@@ -167,7 +182,7 @@ void EftBodyFx_Init(EftOTask *task, EftBodyFxArg *arg) {
     EftEmit_SetNode(&w->nodes, 0, 3, NULL);
     w->flags |= 8;
     w->endLife = EftEmit_GetEndFrames(w->set);
-    BtlTask_SetOwnerTag(task, arg->objId == 0 ? 0x800 : 0x1000);
+    BtlTask_SetOwnerTag(task, EFT_OWNER_TAG(arg->objId));
 }
 
 /* Term callback. */
@@ -299,11 +314,20 @@ s32 EftBodyFx_Stop(s32 objId) {
 
 /* ---- disc: manager, init and update ------------------------------------------------------------------------ */
 
+#ifdef PORT
+/* The experiment of more than two fighters: the block also holds, behind what this file knows of it, the lists
+   of held discs by fighter (EftDiscMgr.head / tail, include/battle/eft_p.h): twelve entries each there instead
+   of two, 80 bytes more. */
+#define EFT_DISC_RES_SIZE (0x660 + 2 * 10 * 4)
+#else
+#define EFT_DISC_RES_SIZE 0x660
+#endif
+
 /* Init callback of the manager: two texture sets, two model templates, a list of 20 discs. */
 void EftDiscMgr_Init(EftOTask *task) {
     gEftDisc = BtlPool_Alloc(BtlPool_GetCurrent(), sizeof(EftODiscMgr));
     gEftDisc->res = NULL;
-    gEftDisc->res = BtlPool_Alloc(BtlPool_GetCurrent(), 0x660);
+    gEftDisc->res = BtlPool_Alloc(BtlPool_GetCurrent(), EFT_DISC_RES_SIZE);
     gEftDisc->res->packTexA = BtlScene_GetCommonEntry(0x238);
     gEftDisc->res->packTexB = BtlScene_GetCommonEntry(0x23A);
     gEftDisc->res->packModelA = BtlScene_GetCommonEntry(0x239);
@@ -421,7 +445,7 @@ void EftDisc_Init(EftOTask *task, EftODiscArg *arg) {
     }
     EftDisc_SetTex(w, w->tex, arg->texA, arg->texB);
     w->flags |= EFT_ODISC_ALIVE;
-    BtlTask_SetOwnerTag(task, arg->objId == 0 ? 0x800 : 0x1000);
+    BtlTask_SetOwnerTag(task, EFT_OWNER_TAG(arg->objId));
 }
 
 /* The roll decay block needs its own zero / clamp variable `k` (not the function-wide `t`) and the clamp written

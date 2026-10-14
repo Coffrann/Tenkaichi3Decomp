@@ -1,4 +1,19 @@
 #include "common.h"
+
+#ifndef EFT_OWNER_TAG
+#ifdef PORT
+/* More than two fighters: whose a task is. The game has two tags, "object 0's" and "anybody else's", and ends a
+   fighter's effects by resetting every task of its tag: with more fighters one fighter's change of model ended
+   the techniques of all the others past the first (a beam gone, and a technique's camera cut left running with
+   its data freed under it: a crash). Every extra fighter (objects 2..9) has a tag and a reset group of its own
+   (BtlTaskList_Reset, BtlScene_Reset); any other object keeps "anybody else's". */
+#define EFT_OWNER_TAG(n) ((n) == 0 ? 0x800 : ((u32)(n) - 2 < 8) ? (0x100000 << ((n) - 2)) : 0x1000)
+#define EFT_OWNER_RESET(n) ((n) == 0 ? 2 : ((u32)(n) - 2 < 8) ? (n) + 3 : 3)
+#else
+#define EFT_OWNER_TAG(n) n == 0 ? 0x800 : 0x1000
+#define EFT_OWNER_RESET(n) n == 0 ? 2 : 3
+#endif
+#endif
 #include "battle/eft_i.h"
 
 /*
@@ -1570,7 +1585,7 @@ void EftSweep_Init(EftTask *task, EftOwner *owner) {
     }
     w->life = EftEmit_GetEndFrames(w->set);
     EftSweep_InitPath(task);
-    BtlTask_SetOwnerTag(task, owner->objId == 0 ? 0x800 : 0x1000);
+    BtlTask_SetOwnerTag(task, EFT_OWNER_TAG(owner->objId));
 }
 
 /* Instance term. */
@@ -1836,7 +1851,7 @@ void EftFollow_Init(EftTask *task, EftOwner *owner) {
         w->flags |= EFT_FOLLOW_OWN_WIDTH;
     }
     w->life = EftEmit_GetEndFrames(w->set);
-    BtlTask_SetOwnerTag(task, owner->objId == 0 ? 0x800 : 0x1000);
+    BtlTask_SetOwnerTag(task, EFT_OWNER_TAG(owner->objId));
 }
 
 /* Instance term. */

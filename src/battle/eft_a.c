@@ -984,6 +984,13 @@ void EftCam_Clear(void) {
     }
 }
 
+#ifdef PORT
+/* The fighter whose technique the running cut belongs to, -1: none (btl_scene.c, Port_SceneResetCam). */
+s32 Port_EftCamOwner(void) {
+    return gEftCam != NULL && gEftCam->active ? gEftCam->objId : -1;
+}
+#endif
+
 /* Starts a camera cut: plays arg->anim on the demo camera, timed by fighter arg->objId's technique timer if any. */
 void EftCam_Start(EftCamArg *arg) {
     gEftCam->arg = *arg;

@@ -1063,19 +1063,21 @@ void BtlHit_TestHit(HitChr *chr) {
         s32 oppIdx = BtlOpp_GetPlayer(chr);
         HitChr *opp = BtlChar_Get(oppIdx);
 #ifdef PORT
-        /* The third-fighter experiment: who was touched is in the bits (0x18 + the object's id). Player 1's attack
-           lands on whichever fighter of side 2 it touched, the one it is aimed at first; one it is not aimed at
-           is hit whatever way the attacker faces. */
+        /* More than two fighters: who was touched is kept by the body test, a bit for each object
+           (gPortBodyTouch, eft_det_a.c). An attack lands on whichever enemy it touched, the one it is aimed at
+           first; one it is not aimed at is hit whatever way the attacker faces. */
         s32 other = 0;
         if (BtlChar_GetCount() >= 3) {
             extern void Port_TargetHit(s32 attacker, s32 victim); /* btl_char_flag_opp.c */
             extern s32 Port_IsEnemy(s32 a, s32 b);
+            extern u16 gPortBodyTouch[];
             s32 k;
-            s32 hit = (obj->work->unk18020 & (1 << (0x18 + opp->objId))) != 0;
+            s32 touched = (u32)chr->objId < 12 ? gPortBodyTouch[chr->objId] : 0;
+            s32 hit = (touched & (1 << opp->objId)) != 0;
             if (!hit) {
                 for (k = 0; k < BtlChar_GetCount(); k++) {
                     HitChr *c = BtlChar_Get(k);
-                    if (k != oppIdx && Port_IsEnemy(chr->player, k) && (obj->work->unk18020 & (1 << (0x18 + c->objId)))) {
+                    if (k != oppIdx && Port_IsEnemy(chr->player, k) && (touched & (1 << c->objId))) {
                         oppIdx = k;
                         opp = c;
                         other = 1;

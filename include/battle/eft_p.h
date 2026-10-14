@@ -190,8 +190,13 @@ typedef struct EftDiscMgr {
     /* 0x420 */ u8 modelA[0x90];    /* model template of kinds 0 and 1 */
     /* 0x4B0 */ u8 modelB[0xA0];    /* model template of kinds 2 and 3 */
     /* 0x550 */ void *list;         /* task list of the discs */
+#ifdef PORT /* (the experiment of more than two fighters: one for every object id, BTL_OBJ_MAX; allocated by its size) */
+    /* 0x554 */ EftDiscNode *head[12]; /* per fighter */
+    /* 0x55C */ EftDiscNode *tail[12];
+#else
     /* 0x554 */ EftDiscNode *head[2]; /* per fighter */
     /* 0x55C */ EftDiscNode *tail[2];
+#endif
     /* 0x564 */ EftDiscNode node[20];
     /* 0x654 */ u8 cursor;
 } EftDiscMgr;

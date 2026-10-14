@@ -1705,13 +1705,16 @@ void EftShotMgr_Init(EftTask *task) {
     c = gEftShot->chr + 1;
     c->task = BtlTaskList_AddTail(gEftShot->list, gEftShotCharClass, &arg[1]);
 #ifdef PORT
-    if (gEftShot->count >= 3) {
-        /* The third-fighter experiment: the original makes the tasks of characters 0 and 1 by name. Without its
-           task the third fighter had no shot data, and its first skill wrote through an empty entry. */
-        s32 third = 2;
+    {
+        /* The experiment of more than two fighters: the original makes the tasks of characters 0 and 1 by name.
+           Without its task the third fighter had no shot data, and its first skill wrote through an empty
+           entry. One for every fighter past the two. */
+        s32 n;
 
-        c = gEftShot->chr + 2;
-        c->task = BtlTaskList_AddTail(gEftShot->list, gEftShotCharClass, &third);
+        for (n = 2; n < gEftShot->count; n++) {
+            c = gEftShot->chr + n;
+            c->task = BtlTaskList_AddTail(gEftShot->list, gEftShotCharClass, &n);
+        }
     }
 #endif
 }
@@ -1726,7 +1729,13 @@ void EftShotMgr_Term(void) {
     BtlPool_Reset(4);
     BtlPool_Reset(5);
 #ifdef PORT
-    BtlPool_Reset(9);
+    {
+        s32 k;
+
+        for (k = 0; k < (BTL_POOL_SLOT_COUNT - 9) / 2; k++) { /* (the extra fighters' own) */
+            BtlPool_Reset(BTL_POOL_EXTRA_SHOT(k));
+        }
+    }
 #endif
 }
 
@@ -1780,8 +1789,8 @@ void EftShot_SetCharPool(s32 chr) {
         pool = 5;
     }
 #ifdef PORT
-    if (chr >= 2) { /* (the third fighter's own: side 2's is emptied when side 2 changes its model) */
-        pool = 9;
+    if (chr >= 2) { /* (an extra fighter's own: side 2's is emptied when side 2 changes its model) */
+        pool = BTL_POOL_EXTRA_SHOT(chr - 2);
     }
 #endif
     BtlPool_SetCurrent(pool);
@@ -1797,8 +1806,8 @@ void EftShot_ResetCharPool(s32 chr) {
         pool = 5;
     }
 #ifdef PORT
-    if (chr >= 2) { /* (the third fighter's own: side 2's is emptied when side 2 changes its model) */
-        pool = 9;
+    if (chr >= 2) { /* (an extra fighter's own: side 2's is emptied when side 2 changes its model) */
+        pool = BTL_POOL_EXTRA_SHOT(chr - 2);
     }
 #endif
     BtlPool_Reset(pool);
