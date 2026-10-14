@@ -622,6 +622,9 @@ void BtlChar_ResetObjWork(BtlMgrChr *chr) {
 void BtlChars_UpdateFreeze(void) {
 #ifdef PORT
     s32 level[10]; /* (PORT_FIGHTER_MAX: one per fighter; the third's was written past the two) */
+    s32 local[10]; /* (a hold that is not about a player: its target only) */
+    extern s32 Port_AboutPlayer(s32 i); /* btl_char_api.c */
+    extern s32 gPortTarget[];           /* btl_char_flag_opp.c */
 #else
     s32 level[2];
 #endif
@@ -646,6 +649,16 @@ void BtlChars_UpdateFreeze(void) {
                (btl_char_ctl_b.c, Port_ChangeOwner). */
             extern s32 Port_ChangeOwner(void);
             if (level[i] != 0 && BtlChar_GetCount() > 2 && Port_ChangeOwner() >= 0 && Port_ChangeOwner() != i) {
+                level[i] = 0;
+            }
+            /* The start of a super holds every other fighter still (and BtlChars_UpdateObjFlag2 hides them): in
+               the game that is its opponent, while its camera has the screen. With more than two fighters and a
+               technique that is not about a player its camera stays off the screen (btl_char_api.c), and the
+               player stood still and vanished for a second for a fight elsewhere (seen by the user). There it
+               holds only its target, below; the hold of everyone is kept for what is about a player. */
+            local[i] = 0;
+            if (level[i] != 0 && BtlChar_GetCount() > 2 && !Port_AboutPlayer(i)) {
+                local[i] = level[i];
                 level[i] = 0;
             }
         }
@@ -686,6 +699,21 @@ void BtlChars_UpdateFreeze(void) {
             }
         }
     }
+#ifdef PORT
+    for (i = 0; i < BtlChar_GetCount() && i < 10; i++) {
+        s32 t = gPortTarget[i];
+
+        if (local[i] > 0 && (u32)t < (u32)BtlChar_GetCount() && t != i && level[t] + local[t] < local[i]) {
+            chr = BtlChar_Get(t);
+            if (!(local[i] == 1 && BtlChar_TestFlag(chr, 0x127))) {
+                extern void Port_HoldLog(int fighter, int target, int level);
+                chr->freezeNext = 1;
+                chr->freezeDelay = 0;
+                Port_HoldLog(i, t, local[i]);
+            }
+        }
+    }
+#endif
     for (i = 0; i < BtlChar_GetCount(); i++) {
         chr = BtlChar_Get(i);
         if (chr->freeze > 0) {
@@ -714,7 +742,13 @@ void BtlChars_UpdateObjFlag2(void) {
     BtlMgrChr *chr;
 
     for (i = 0; i < BtlChar_GetCount(); i++) {
+#ifdef PORT
+        /* (only for a technique about a player: see BtlChars_UpdateFreeze) */
+        extern s32 Port_AboutPlayer(s32 i);
+        if (BtlChar_TestFlag(BtlChar_Get(i), 0x12A) && Port_AboutPlayer(i)) {
+#else
         if (BtlChar_TestFlag(BtlChar_Get(i), 0x12A)) {
+#endif
             found = i;
             break;
         }

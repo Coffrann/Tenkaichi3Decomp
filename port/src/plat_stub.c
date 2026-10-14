@@ -763,6 +763,29 @@ void Port_CamLog(int fighter, int target, int shown) {
             shown ? "takes the screen" : "kept off the screen");
 }
 
+/* BT3_CAM_LOG=1, too: a technique not about a player holding only its target still (btl_char_mgr.c), one line
+   each time the one held or the level changes, and a count of the frames. */
+void Port_HoldLog(int fighter, int target, int level) {
+    static int on = -1, frames;
+    static int last[16];
+    int v = 1 + target * 3 + level;
+
+    if (on < 0) {
+        const char *e = getenv("BT3_CAM_LOG");
+        on = e != NULL && e[0] == '1';
+    }
+    if (!on || fighter < 0 || fighter >= 16) {
+        return;
+    }
+    frames++;
+    if (last[fighter] == v) {
+        return;
+    }
+    last[fighter] = v;
+    fprintf(stderr, "bt3: camera: fighter %d's hold (level %d) on fighter %d only (%d frames held so far)\n",
+            fighter, level, target, frames);
+}
+
 void Port_FreezeLog(int i, int level, int action, int frozen, int count) {
     static int on = -1, calls;
     if (on < 0) { on = getenv("BT3_FREEZE_LOG") != NULL; }

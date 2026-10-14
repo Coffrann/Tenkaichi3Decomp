@@ -622,13 +622,21 @@ static s32 Port_IsWatched(s32 i) {
     return 0;
 }
 extern void Port_CamLog(int fighter, int target, int shown); /* port/src/plat_stub.c (BT3_CAM_LOG) */
+/* 1 when what fighter i does is about a player: i is one, or its target is (always 1 with two fighters). Also
+   asked by the freeze and the hiding of a technique's start (btl_char_mgr.c). */
+s32 Port_AboutPlayer(s32 i) {
+    if (BtlChar_GetCount() < 3 || (u32)i >= (u32)BtlChar_GetCount()) {
+        return 1;
+    }
+    return Port_IsWatched(i) || Port_IsWatched(gPortTarget[i]);
+}
 static s32 Port_CutShown(s32 i) {
     s32 shown;
 
     if (BtlChar_GetCount() < 3 || (u32)i >= (u32)BtlChar_GetCount()) {
         return 1;
     }
-    shown = Port_IsWatched(i) || Port_IsWatched(gPortTarget[i]);
+    shown = Port_AboutPlayer(i);
     Port_CamLog(i, gPortTarget[i], shown);
     return shown;
 }

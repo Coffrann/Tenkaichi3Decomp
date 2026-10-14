@@ -234,3 +234,9 @@ ultimate) gets it only when it is a player's own or its fighter's target is a pl
 is not computer-controlled; in a demo, fighter 0). Before, any such camera took the screen, so a fight elsewhere on
 the field cut the player's picture away. `BtlCharApi_HasCamPriority` and `BtlCharApi_AnyCamPriority` ask
 `Port_CutShown` (btl_char_api.c); with two fighters every camera passes. `BT3_CAM_LOG=1` prints each decision.
+
+The start of a super (flags 0x125 / 0x126: everyone else held still; 0x12A: everyone else hidden) works the same
+way: about a player it is the game's own, otherwise it holds only its own target and hides nobody
+(`BtlChars_UpdateFreeze`, `BtlChars_UpdateObjFlag2`; `Port_AboutPlayer` in btl_char_api.c). Before, with the camera
+kept on the player, the player stood still and vanished for a second for a super elsewhere. `BT3_CAM_LOG=1` also
+prints each such hold.
