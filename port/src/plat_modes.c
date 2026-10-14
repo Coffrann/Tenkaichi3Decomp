@@ -48,6 +48,7 @@ static volatile int sSet;    /* the main menu shows the extra modes' entries */
 static volatile int sCursor; /* ... and its cursor is on this one (0..2) */
 static int sReady;           /* the menu's label sheets can be given the modes' names */
 static int sRows[PORT_MODE_COUNT - 1]; /* the label rows that have them now */
+static int sEntered;         /* the progress mode the main menu left for with the mode that is on, 0: none */
 static unsigned sReads;      /* pad 1 reads so far (BT3_MODES_LOG) */
 
 static int logging(void) { /* BT3_MODES_LOG=1: what happened at which pad read and frame (for making test input) */
@@ -161,18 +162,24 @@ int Port_ModesChoose(int entry) {
     Port_SettingsWrite();
     fprintf(stderr, "bt3: modes: %s chosen: to the game's %s\n", Port_ModesName(mode),
             mode == PORT_MODE_TRAINING ? "training character select" : "team character select");
-    return mode == PORT_MODE_TRAINING ? PROGRESS_TRAINING_SELECT : PROGRESS_TEAM_SELECT;
+    sEntered = mode == PORT_MODE_TRAINING ? PROGRESS_TRAINING_SELECT : PROGRESS_TEAM_SELECT;
+    return sEntered;
 }
 
 /* The main menu starts: a mode chosen there before is over (and one left by a run that was closed in the middle of
-   such a fight goes the same way: every start of the program comes through here before a fight). */
-void Port_ModesLeave(void) {
+   such a fight goes the same way: every start of the program comes through here before a fight). Returns the
+   progress mode that was entered for a mode chosen in THIS run and dropped now, else 0. */
+int Port_ModesLeave(void) {
+    int entered = sEntered;
+
+    sEntered = 0;
     if (Port_Setting("modes_fight", 0) != 0 || Port_Setting("modes_extras", 0) != 0) {
         Port_SettingSave("modes_fight", 0);
         Port_SettingSave("modes_extras", 0);
         Port_SettingsWrite();
         fprintf(stderr, "bt3: modes: back at the main menu: fights are the game's own again\n");
     }
+    return entered;
 }
 
 /* The menus have set a battle up and hand over to it. With a mode on, and the battle of the kind the mode leads to

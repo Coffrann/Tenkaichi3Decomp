@@ -10,7 +10,7 @@ extern void Port_ModesSheets(int off, int on);
 extern void Port_ModesShow(const int *rows);
 extern void Port_ModesCursor(int entry);
 extern int Port_ModesChoose(int entry);
-extern void Port_ModesLeave(void);
+extern int Port_ModesLeave(void);
 #include "battle/col_c.h" /* FontStyle / FONT_ALIGN_* / FONT_SHADOW_*, for the extra modes line in the message window */
 #endif
 #include "sys/pad.h"
@@ -52,6 +52,7 @@ static struct {
     s32 cursor;
     s32 extra;
 } sPortModesOwn;
+static s32 sPortModesDuel[2]; /* the versus menu's two answers as the player left them, while Team Battle or Free-for-All is on */
 #endif
 
 /* Starts the idle loop of the seven dragon balls (all seven collected). */
@@ -666,6 +667,8 @@ static s32 MainMenu_PortModes(void) {
         next = Port_ModesChoose(gMainMenu->cursor);
         if (next == 40) {
             /* the versus menu's two answers (DuelProgress, include/menu/menu_g.h): 1P vs COM, a team battle */
+            sPortModesDuel[0] = *(s32 *)((u8 *)gProgress + 0x620);
+            sPortModesDuel[1] = *(s32 *)((u8 *)gProgress + 0x624);
             *(s32 *)((u8 *)gProgress + 0x620) = 0;
             *(s32 *)((u8 *)gProgress + 0x624) = 1;
         } else if (next == 45) {
@@ -693,7 +696,12 @@ s32 MainMenu_Run(s32 section) {
     if (Port_NetSession()) {
         Port_NetLeave(); /* an online session lives in the versus mode: back at the main menu it is over (no return) */
     }
-    Port_ModesLeave(); /* a mode chosen from the extra modes ends here too: Duel is the game's own again */
+    /* a mode chosen from the extra modes ends here too: Duel is the game's own again, and its menu opens on what
+       the player chose there last, not on the team battle the mode was entered with */
+    if (Port_ModesLeave() == 40) {
+        *(s32 *)((u8 *)gProgress + 0x620) = sPortModesDuel[0];
+        *(s32 *)((u8 *)gProgress + 0x624) = sPortModesDuel[1];
+    }
 #endif
     MainMenu_Init(section);
     ColorFade_StartIn(0, 0, 0, 0x14);
