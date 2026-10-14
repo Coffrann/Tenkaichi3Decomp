@@ -5,9 +5,13 @@ extern void Port_NetMenuOpen(void);
 extern int Port_NetMenuListed(void);
 extern int Port_NetSession(void);
 extern void Port_NetLeave(void);
-extern int Port_ModesMenu(int select); /* port/src/plat_modes.c: the page of extra modes */
-extern int Port_ModesSound(void);
+extern int Port_ModesMenu(void); /* port/src/plat_modes.c: the extra modes, this menu's second set of entries */
+extern void Port_ModesSheets(int off, int on);
+extern void Port_ModesShow(const int *rows);
+extern void Port_ModesCursor(int entry);
+extern int Port_ModesChoose(int entry);
 extern void Port_ModesLeave(void);
+#include "battle/col_c.h" /* FontStyle / FONT_ALIGN_* / FONT_SHADOW_*, for the extra modes line in the message window */
 #endif
 #include "sys/pad.h"
 #include "sys/save.h"
@@ -25,6 +29,30 @@ MainMenu *gMainMenu = NULL;
 
 /* The item under the cursor. */
 #define MAINMENU_CUR(m) ((m)->items[((m)->top + (m)->cursor + 1) % (m)->itemCount])
+
+#ifdef PORT
+/* The extra modes (fights with more than two fighters: Team Battle, Free-for-All, Training) are a second set of
+   entries of this menu; SELECT switches to it and back. The set is this menu with a list of three: the plates,
+   the cursor, the sounds and the movie are the menu's own. Each mode sits on the plate of one of the menu's
+   entries, whose icon it shows, and the port draws the mode's name where that entry's name is
+   (port/src/gs/menu_text.c). */
+#define PORTMODES_NUM 3
+static const s32 sPortModesItem[PORTMODES_NUM] = { 3, 2, 6 }; /* the plates of Duel, Dragon World Tour, Ultimate Training */
+static char *const sPortModesHelp[PORTMODES_NUM] = {
+    "Teams of up to five fighters,\nall in the fight at the same time.",
+    "Fill both lists with fighters.\nEvery one fights for itself.",
+    "Training, with the extra fighter\nset up in the settings (F1).",
+};
+static s32 sPortModes; /* 0 the menu's own entries, 1 the extra modes, 2 its own again from this frame on */
+/* the menu's own list while the extra modes are showing */
+static struct {
+    s32 items[MAINMENU_ITEM_MAX];
+    s32 itemCount;
+    s32 top;
+    s32 cursor;
+    s32 extra;
+} sPortModesOwn;
+#endif
 
 /* Starts the idle loop of the seven dragon balls (all seven collected). */
 void MainMenu_StartBallLoops(void) {
@@ -172,6 +200,12 @@ void MainMenu_Init(s32 section) {
     for (i = 0; i < 4; i++) {
         gMainMenu->blink[i] = Rand_Range(0x20);
     }
+#ifdef PORT
+    /* the sheets with the first eight entries' names: tex[8] as the plates not under the cursor have them
+       ("mc_menu_text_off"), tex[12] as the plate under it has ("mc_menu_text_on") */
+    sPortModes = 0;
+    Port_ModesSheets((s32)(u32)gMainMenu->tex[8], (s32)(u32)gMainMenu->tex[12]);
+#endif
 }
 
 /* Frees the screen.
@@ -197,6 +231,46 @@ void MainMenu_Term(void) {
     }
 }
 
+#ifdef PORT
+/* The extra modes' list is three long and sits on the first three rows. The plates around them (the one above,
+   the fourth row, the one below, the one that scrolls in) and the two scroll arrows are taken out of the picture
+   while it is up, and put back when the menu's own list is. */
+static void MainMenu_PortModesPlates(s32 show) {
+    static const s32 plates[4] = { 1, 5, 6, 7 };
+    MFlashRef ref;
+    char name[64];
+    s32 i;
+    MFlash *flash = &gMainMenu->flash[0];
+
+    for (i = 0; i < 4; i++) {
+        sprintf(name, "mc_menu_plate_%d", plates[i]);
+        Flash_FindLabel(flash, NULL, name, &ref);
+        Flash_ClipSetFlags(flash, &ref, 2, show);
+    }
+    for (i = 0; i < 2; i++) {
+        Flash_FindLabel(flash, NULL, i ? "mc_menu_yajirusi_down" : "mc_menu_yajirusi_up", &ref);
+        Flash_ClipSetFlags(flash, &ref, 2, show);
+    }
+}
+
+/* The message window's line while the extra modes are up: what the mode under the cursor is, printed with the
+   game's font where the window has the guides' lines (which are not spoken then). */
+static void MainMenu_PortModesHelp(void) {
+    extern void Font_PrintAsciiAt(s32 x, s32 y, char *str);
+    extern FontStyle gFontStyle;
+    FontStyle saved = gFontStyle;
+
+    gFontStyle.align = FONT_ALIGN_LEFT;
+    gFontStyle.color = 0x80FFFFFF;
+    gFontStyle.shadowMode = FONT_SHADOW_DROP;
+    gFontStyle.shadowColor = 0x80000000;
+    gFontStyle.shadowDx = 1;
+    gFontStyle.shadowDy = 1;
+    Font_PrintAsciiAt(25, 369, sPortModesHelp[gMainMenu->cursor]);
+    gFontStyle = saved;
+}
+
+#endif
 /* Draws the background, sets up every clip of the movie for this frame and draws it and the two windows. */
 void MainMenu_Draw(void) {
     MFlashRef ref;
@@ -336,10 +410,23 @@ void MainMenu_Draw(void) {
         FlashAnim_Scroll(flash, &ref, &uv, &gMainMenu->cloud[i], NULL, i ? -0.18962963f : -0.35555556f, 0.0f);
     }
 
+#ifdef PORT
+    if (sPortModes != 0) {
+        MainMenu_PortModesPlates(sPortModes == 2);
+        if (sPortModes == 2) {
+            sPortModes = 0;
+        }
+    }
+#endif
     for (i = 0; i < MAINMENU_FLASH_NUM; i++) {
         Flash_Draw(&gMainMenu->flash[i]);
     }
     IconWin_Draw();
+#ifdef PORT
+    if (sPortModes == 1 && (gMainMenu->flash[0].flags & MFLASH_PAD)) {
+        MainMenu_PortModesHelp(); /* (drawn with the window's own text: MsgWin_Draw ends with the font's queue) */
+    }
+#endif
     MsgWin_Draw(0, 0, gMainMenu->voiceLine);
 }
 
@@ -495,37 +582,106 @@ void MainMenu_Input(s32 *result) {
 }
 
 #ifdef PORT
-/* The port's page of extra modes (fights with more than two fighters; port/src/plat_modes.c, drawn over this
-   screen by port/src/gs/ui.cpp). SELECT opens it, here and nowhere else: this is asked only on the frames the
-   menu takes input. While the page is up the pads are the page's and this menu is given none. The page's Start is
-   a choice of this menu, made the way an entry's is (MAINMENU_CHOOSE), but for the character select of the
-   versus mode (39) or of the training mode (45) and not for the menu in front of it: what that menu would have
-   left in gProgress is set here. Returns 1 when this frame's input was the page's. */
+/* Switches the list: to the extra modes (`on`), or back to the menu's own entries where they were left. The plate
+   under the cursor goes dark and the one under the new cursor lights up, as when the cursor moves. */
+static void MainMenu_PortModesSwitch(s32 on) {
+    extern void Voice_StopWithLip(void);
+    s32 i;
+
+    MainMenu_PlateGoto(0, "fl_off_start");
+    gMainMenu->iconTimer = 0;
+    gMainMenu->iconFrame = 0;
+    if (on) {
+        for (i = 0; i < MAINMENU_ITEM_MAX; i++) {
+            sPortModesOwn.items[i] = gMainMenu->items[i];
+        }
+        sPortModesOwn.itemCount = gMainMenu->itemCount;
+        sPortModesOwn.top = gMainMenu->top;
+        sPortModesOwn.cursor = gMainMenu->cursor;
+        sPortModesOwn.extra = gMainMenu->extra;
+        for (i = 0; i < PORTMODES_NUM; i++) {
+            gMainMenu->items[i] = sPortModesItem[i];
+        }
+        gMainMenu->itemCount = PORTMODES_NUM;
+        gMainMenu->top = PORTMODES_NUM - 1; /* (the first of the list on the first row) */
+        gMainMenu->cursor = 0;
+        gMainMenu->extra = 0;
+        /* the guides have no lines for these entries: the one being spoken stops, and its subtitle goes */
+        Voice_StopWithLip();
+        gMainMenu->voiceLine = -1;
+        sPortModes = 1;
+        Port_ModesShow(sPortModesItem);
+        Snd_PlaySe(1, 1);
+    } else {
+        for (i = 0; i < MAINMENU_ITEM_MAX; i++) {
+            gMainMenu->items[i] = sPortModesOwn.items[i];
+        }
+        gMainMenu->itemCount = sPortModesOwn.itemCount;
+        gMainMenu->top = sPortModesOwn.top;
+        gMainMenu->cursor = sPortModesOwn.cursor;
+        gMainMenu->extra = sPortModesOwn.extra;
+        /* a guide reads out the entry the cursor is back on, as after a move */
+        gMainMenu->guide = Rand_Range(4);
+        gMainMenu->voiceLine = MAINMENU_CUR(gMainMenu) * 4 + gMainMenu->guide + 0x10;
+        Voice_PlayWithSubtitle(gMainMenu->subtitles, MAINMENU_VOICE_BASE, gMainMenu->voiceLine);
+        sPortModes = 2;
+        Port_ModesShow(NULL);
+        Snd_PlaySe(1, 2);
+    }
+    MainMenu_PlateGoto(0, "fl_on_start");
+}
+
+/* The pad on the frames the menu takes input, before MainMenu_Input. SELECT switches to the extra modes; while
+   they are up the pad is theirs: up / down move the cursor over the three (no scrolling), confirm chooses, cancel,
+   Circle or SELECT goes back to the menu's own entries. A choice is made the way an entry's is (MAINMENU_CHOOSE), but for
+   the character select behind the versus menu (40, the team select) or behind the training menu (45), and what
+   that menu would have left in gProgress is set here. Returns 1 when this frame's input was taken. */
 static s32 MainMenu_PortModes(void) {
     s32 next;
-    s32 se;
+    s32 move;
 
-    if (!(gMainMenu->flash[0].flags & MFLASH_PAD)) {
+    if (!(gMainMenu->flash[0].flags & MFLASH_PAD) || !(gMainMenu->flags & MAINMENU_STARTED)) {
         return 0;
     }
-    next = Port_ModesMenu((gPad[0].gamePressed & 0x2000) != 0);
-    se = Port_ModesSound();
-    if (se >= 0) {
-        Snd_PlaySe(1, se); /* (the page moves, chooses and cancels with this menu's sounds) */
+    if (!Port_ModesMenu()) {
+        return 0; /* (not offered: an online session) */
     }
-    if (next > 0) {
-        if (next == 39) {
-            /* the versus menu's two answers (DuelProgress, include/menu/menu_g.h): 1P vs COM, a single battle */
+    if (sPortModes != 1) {
+        if (gPad[0].gamePressed & 0x2000) {
+            MainMenu_PortModesSwitch(1);
+            return 1;
+        }
+        return 0;
+    }
+    move = (gPad[0].gameRepeat & 8) ? -1 : (gPad[0].gameRepeat & 4) ? 1 : 0;
+    if (move != 0) {
+        MainMenu_PlateGoto(0, "fl_off_start");
+        gMainMenu->iconTimer = 0;
+        gMainMenu->iconFrame = 0;
+        gMainMenu->cursor = (gMainMenu->cursor + move + PORTMODES_NUM) % PORTMODES_NUM;
+        MainMenu_PlateGoto(0, "fl_on_start");
+        Port_ModesCursor(gMainMenu->cursor);
+        Snd_PlaySe(1, 0);
+    } else if (gPad[0].gamePressed & 0x200) {
+        next = Port_ModesChoose(gMainMenu->cursor);
+        if (next == 40) {
+            /* the versus menu's two answers (DuelProgress, include/menu/menu_g.h): 1P vs COM, a team battle */
             *(s32 *)((u8 *)gProgress + 0x620) = 0;
-            *(s32 *)((u8 *)gProgress + 0x624) = 0;
-        } else {
+            *(s32 *)((u8 *)gProgress + 0x624) = 1;
+        } else if (next == 45) {
             /* the training menu's note that it was left for the character select (MPTRAIN_SELECT,
                include/menu/menu_i.h): going back from the select, that menu opens as it does after its own entry */
             *(s32 *)((u8 *)gProgress + 0x7D4) |= 0x10;
         }
-        MAINMENU_CHOOSE(next);
+        if (next > 0) {
+            MAINMENU_CHOOSE(next);
+            MainMenu_PlateGoto(0, "fl_ok");
+            Snd_PlaySe(1, 1);
+        }
+    } else if (gPad[0].gamePressed & (0x400 | 0x100 | 0x2000)) {
+        MainMenu_PortModesSwitch(0);
     }
-    return next != 0;
+    return 1;
 }
 
 #endif
@@ -537,7 +693,7 @@ s32 MainMenu_Run(s32 section) {
     if (Port_NetSession()) {
         Port_NetLeave(); /* an online session lives in the versus mode: back at the main menu it is over (no return) */
     }
-    Port_ModesLeave(); /* a fight asked for on the page of extra modes ends here too: Duel is the game's own again */
+    Port_ModesLeave(); /* a mode chosen from the extra modes ends here too: Duel is the game's own again */
 #endif
     MainMenu_Init(section);
     ColorFade_StartIn(0, 0, 0, 0x14);
@@ -592,6 +748,14 @@ s32 MainMenu_Run(s32 section) {
         }
     }
     sceGsSyncPath(0, 0);
+#ifdef PORT
+    if (sPortModes == 1) {
+        /* left through an extra mode: the cursor comes back where it was among the menu's own entries */
+        gProgress->mainMenuItem = sPortModesOwn.items[(sPortModesOwn.top + sPortModesOwn.cursor + 1) % sPortModesOwn.itemCount];
+        Port_ModesShow(NULL);
+    }
+    sPortModes = 0;
+#endif
     MainMenu_Term();
     Dma_ResetBuffers();
     return result;

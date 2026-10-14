@@ -40,6 +40,12 @@ uint8_t *MenuText_RenderGlyphs(const uint8_t *rgba, int width, int height, int t
 /* Packed glyph x/y/width/height, top/bottom padding, atlas width/height, in logical pixels. */
 int MenuText_MapGlyph(int tbp, int cbp, int width, int height,
                      float u0, float v0, float u1, float v1, float *rect);
+/* The main menu's entries with other words (its second set, the extra modes). The menu hands over its two label
+   sheets (the addresses of their texture entries): 1 when their rows can be given other words. Then a row (0..7,
+   the entry's number) reads `text` until it is given NULL; drawn from the Menu font, or with "Original" from the
+   first font of the list that can be used. */
+int MenuText_RelabelSheets(unsigned offEntry, unsigned onEntry);
+void MenuText_Relabel(int row, const char *text);
 /* External song name in the disc's 512x32 row, using the selected vector font.
    Skips missing glyphs. Returns allocated ordinary RGBA (255 opaque), or NULL for Original/no usable text. */
 uint8_t *MenuText_RenderSong(const char *text, int selected, int scale, int *outWidth, int *outHeight);

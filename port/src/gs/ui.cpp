@@ -899,16 +899,6 @@ int Ui_Event(const SDL_Event *ev) {
                ev->type == SDL_EVENT_MOUSE_BUTTON_DOWN || ev->type == SDL_EVENT_MOUSE_BUTTON_UP || ev->type == SDL_EVENT_MOUSE_WHEEL;
     }
     if (!sOpen) {
-        // the page of extra modes is worked through the game's buttons (the player's keys for them); Esc, which is
-        // none of them, goes back a step on it
-        PortModesView modes;
-        Port_ModesView(&modes);
-        if (modes.screen != 0 && ev->type == SDL_EVENT_KEY_DOWN && ev->key.scancode == SDL_SCANCODE_ESCAPE) {
-            if (!ev->key.repeat) {
-                Port_ModesKey(1);
-            }
-            return 1;
-        }
         return 0;
     }
     if (sCapKind != 0) { // the next key or button is the binding; Esc leaves it as it was, Delete clears it
@@ -1425,13 +1415,14 @@ static void experiments_tab(void) {
     }
     ImGui::Spacing();
     ImGui::TextWrapped("A change here is used by the next fight that starts; a fight that is on keeps what it started with.");
-    // the page of extra modes edits the same rows; its Start does not touch the switch
-    ImGui::TextWrapped("SELECT on the game's main menu opens the page of extra modes, which sets up the same fighters for "
-                       "the fights started from it. This switch is for every Duel and training fight.");
+    // the main menu's extra modes: Training takes its extra fighter from the row above whatever the switch says
+    ImGui::TextWrapped("SELECT on the game's main menu shows the extra modes. Team Battle and Free-for-All take their fighters "
+                       "from the game's team select; Training adds the fighter set up here. This switch is for every Duel "
+                       "and training fight.");
     if (Port_ModesFight() != PORT_MODE_NONE) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.3f, 1.0f));
-        ImGui::TextWrapped("%s from the page of extra modes is on: its fights have the extra fighters whatever the switch says, "
-                           "until you are back at the main menu.", Port_ModesName(Port_ModesFight()));
+        ImGui::TextWrapped("%s from the main menu's extra modes is on, until you are back at the main menu.",
+                           Port_ModesName(Port_ModesFight()));
         ImGui::PopStyleColor();
     }
     if (last > 0 && last < (int)(sizeof(kLast) / sizeof(kLast[0])) && (on || last == 1)) {
@@ -1748,19 +1739,19 @@ static void build(void) {
     }
 }
 
-// ---- the page of extra modes ---------------------------------------------------------------------------------------
-// SELECT on the game's main menu opens it (plat_modes.c, which also works it: the pad reads are its input, so
-// nothing here takes a press). This only draws what Port_ModesView says: the hint on the main menu, the list of
-// modes, a mode's set-up. It is drawn into the game's picture, behind the settings window, in the picture's own
-// 512 x 448 units so that it is the same at every window size.
+// ---- the hint of the extra modes -----------------------------------------------------------------------------------
+// SELECT on the game's main menu switches the menu to the extra modes' entries and back (src/menu/menu_a.c,
+// plat_modes.c; the entries are the menu's own plates, their names drawn by menu_text.c). Here only the small plate
+// in the corner of the menu's message window that says so. It is drawn into the game's picture, behind the settings
+// window, in the picture's own 512 x 448 units so that it is the same at every window size.
 struct ModesBox { float x, y, kx, ky; }; // the 4:3 page in the window: its corner, and window pixels per unit
 
 static ImVec2 modes_at(const ModesBox &b, float x, float y) {
     return ImVec2(b.x + x * b.kx, b.y + y * b.ky);
 }
 
-// A line of text; align 0 from x, 1 centred on x, 2 ending at x. Made narrower when it is wider than `fit` units.
-static void modes_text(ImDrawList *dl, const ModesBox &b, float size, float x, float y, ImU32 colour, const char *text, int align, float fit = 0.0f, bool outline = false) {
+// A line of text; align 0 from x, 1 centred on x. Made narrower when it is wider than `fit` units.
+static void modes_text(ImDrawList *dl, const ModesBox &b, float size, float x, float y, ImU32 colour, const char *text, int align, float fit) {
     ImFont *font = ImGui::GetFont();
     float px = size * b.ky;
     ImVec2 ext = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text);
@@ -1769,81 +1760,15 @@ static void modes_text(ImDrawList *dl, const ModesBox &b, float size, float x, f
         ext = font->CalcTextSizeA(px, FLT_MAX, 0.0f, text);
     }
     ImVec2 at = modes_at(b, x, y);
-    at.x -= align == 1 ? ext.x * 0.5f : align == 2 ? ext.x : 0.0f;
+    at.x -= align == 1 ? ext.x * 0.5f : 0.0f;
     at.y += (size * b.ky - px) * 0.5f;
-    if (outline) {
-        float o = px * 0.06f + 1.0f;
-        for (int k = 0; k < 8; k++) {
-            static const float dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1}, dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
-            dl->AddText(font, px, ImVec2(at.x + dx[k] * o, at.y + dy[k] * o), IM_COL32(60, 20, 0, 255), text);
-        }
-    }
     dl->AddText(font, px, at, colour, text);
 }
 
-// A row's plate: lit under the cursor, as the game's menus light theirs.
-static void modes_plate(ImDrawList *dl, const ModesBox &b, float x0, float y0, float x1, float y1, bool lit) {
-    ImVec2 p0 = modes_at(b, x0, y0), p1 = modes_at(b, x1, y1);
-    float r = 5.0f * b.ky;
-    if (lit) {
-        dl->AddRectFilled(p0, p1, IM_COL32(246, 150, 30, 255), r);
-        dl->AddRectFilled(ImVec2(p0.x, p0.y), ImVec2(p1.x, (p0.y + p1.y) * 0.5f), IM_COL32(255, 205, 90, 110), r, ImDrawFlags_RoundCornersTop);
-        dl->AddRect(p0, p1, IM_COL32(255, 240, 180, 255), r, 0, 1.5f * b.ky);
-    } else {
-        dl->AddRectFilled(p0, p1, IM_COL32(120, 160, 255, 38), r);
-    }
-}
-
-static void modes_chara(char *out, size_t size, int chara) {
-    const char *name = Port_CharaName(chara);
-    if (name[0] != '\0') {
-        snprintf(out, size, "%s", name);
-    } else {
-        snprintf(out, size, "Character %d", chara);
-    }
-}
-
-// The text of a set-up row: what it is, and its value ("" for Start and Back).
-static void modes_row_text(const PortModesView &v, int row, char *label, size_t labelSize, char *value, size_t valueSize) {
-    int who, kind = Port_ModesRow(v.mode, v.count, row, &who);
-    value[0] = '\0';
-    switch (kind) {
-    case PORT_MODES_ROW_COUNT:
-        snprintf(label, labelSize, "Extra fighters");
-        snprintf(value, valueSize, "%d  (of %d)", v.count, PORT_EXTRA_MAX);
-        break;
-    case PORT_MODES_ROW_CHARA: // (the two players are fighters 1 and 2)
-        snprintf(label, labelSize, "Fighter %d", who + 3);
-        modes_chara(value, valueSize, v.chara[who]);
-        break;
-    case PORT_MODES_ROW_TEAM:
-        snprintf(label, labelSize, "    Team");
-        snprintf(value, valueSize, "%s", v.team[who] == 0 ? "Yours" : v.team[who] == 1 ? "The opponent's" : "Its own");
-        break;
-    case PORT_MODES_ROW_LEVEL:
-        snprintf(label, labelSize, "    Computer level");
-        snprintf(value, valueSize, "%d  (0 to 29)", v.level[who]);
-        break;
-    case PORT_MODES_ROW_START:
-        snprintf(label, labelSize, "Start");
-        break;
-    default:
-        snprintf(label, labelSize, "Back");
-        break;
-    }
-}
-
 static void modes_draw(const PortModesView &v) {
-    static const char *const kAbout[PORT_MODE_COUNT] = {
-        "Back to the main menu.",
-        "Extra fighters join a team: yours or the opponent's.",
-        "Every fighter is on a team of its own: each against all the others.",
-        "The training mode's free practice, with extra fighters.",
-    };
-    static char said[200];
+    static int said = -1; // the entry the screen reader was told last, -1: the set is not showing
     ImDrawList *dl = ImGui::GetBackgroundDrawList();
     ModesBox b;
-    char label[96], value[96], line[200], speak[200];
     float pw = (float)gUiPresentW, ph = (float)gUiPresentH;
 
     if (pw <= 0.0f || ph <= 0.0f) {
@@ -1856,117 +1781,24 @@ static void modes_draw(const PortModesView &v) {
         b.kx = w / 512.0f;
         b.ky = ph / 448.0f;
     }
-    if (v.screen == 0) { // the hint, in the corner of the main menu's message window
-        if (v.hint) {
-            ImVec2 p0 = modes_at(b, 330.0f, 416.0f), p1 = modes_at(b, 502.0f, 440.0f), k0 = modes_at(b, 336.0f, 420.0f), k1 = modes_at(b, 392.0f, 436.0f);
-            dl->AddRectFilled(p0, p1, IM_COL32(6, 14, 40, 215), 12.0f * b.ky);
-            dl->AddRect(p0, p1, IM_COL32(246, 150, 30, 255), 12.0f * b.ky, 0, 1.5f * b.ky);
-            dl->AddRectFilled(k0, k1, IM_COL32(230, 235, 245, 255), 8.0f * b.ky);
-            modes_text(dl, b, 12.0f, 364.0f, 421.5f, IM_COL32(20, 24, 40, 255), "SELECT", 1, 50.0f);
-            modes_text(dl, b, 14.0f, 399.0f, 420.5f, IM_COL32(255, 240, 200, 255), "More modes", 0, 96.0f);
-        }
-        said[0] = '\0';
-        return;
+    if (v.hint) {
+        ImVec2 p0 = modes_at(b, 330.0f, 416.0f), p1 = modes_at(b, 502.0f, 440.0f), k0 = modes_at(b, 336.0f, 420.0f), k1 = modes_at(b, 392.0f, 436.0f);
+        dl->AddRectFilled(p0, p1, IM_COL32(6, 14, 40, 215), 12.0f * b.ky);
+        dl->AddRect(p0, p1, IM_COL32(246, 150, 30, 255), 12.0f * b.ky, 0, 1.5f * b.ky);
+        dl->AddRectFilled(k0, k1, IM_COL32(230, 235, 245, 255), 8.0f * b.ky);
+        modes_text(dl, b, 12.0f, 364.0f, 421.5f, IM_COL32(20, 24, 40, 255), "SELECT", 1, 50.0f);
+        modes_text(dl, b, 14.0f, 399.0f, 420.5f, IM_COL32(255, 240, 200, 255), v.set ? "Back" : "More modes", 0, 96.0f);
     }
-    // the menu underneath is dimmed, and the page is a panel of its own on it
-    dl->AddRectFilled(ImVec2((float)gUiPresentX, (float)gUiPresentY), ImVec2((float)gUiPresentX + pw, (float)gUiPresentY + ph), IM_COL32(0, 4, 20, 165));
-    {
-        ImVec2 p0 = modes_at(b, 56.0f, 30.0f), p1 = modes_at(b, 456.0f, 418.0f);
-        dl->AddRectFilledMultiColor(p0, p1, IM_COL32(16, 40, 104, 240), IM_COL32(16, 40, 104, 240), IM_COL32(6, 12, 40, 240), IM_COL32(6, 12, 40, 240));
-        dl->AddRect(p0, p1, IM_COL32(246, 150, 30, 255), 0.0f, 0, 2.0f * b.ky);
-        dl->AddLine(modes_at(b, 76.0f, 84.0f), modes_at(b, 436.0f, 84.0f), IM_COL32(246, 150, 30, 200), 1.5f * b.ky);
-        dl->AddLine(modes_at(b, 76.0f, 392.0f), modes_at(b, 436.0f, 392.0f), IM_COL32(246, 150, 30, 120), 1.0f * b.ky);
-    }
-    speak[0] = '\0';
-    if (v.screen == 1) {
-        modes_text(dl, b, 30.0f, 256.0f, 44.0f, IM_COL32(255, 196, 60, 255), "Extra Modes", 1, 340.0f, true);
-        for (int i = 0; i < PORT_MODE_COUNT; i++) { // the modes, then Back
-            const char *name = i < PORT_MODE_COUNT - 1 ? Port_ModesName(i + 1) : "Back";
-            float y = 100.0f + (float)i * 46.0f;
-            bool lit = i == v.cursor;
-            modes_plate(dl, b, 96.0f, y, 416.0f, y + 38.0f, lit);
-            modes_text(dl, b, 21.0f, 116.0f, y + 8.0f, lit ? IM_COL32(48, 20, 0, 255) : IM_COL32(232, 238, 255, 255), name, 0, 280.0f);
-            if (lit) {
-                snprintf(speak, sizeof(speak), "%s, %d of %d", name, i + 1, PORT_MODE_COUNT);
-            }
-        }
-        {
-            int at = v.cursor >= 0 && v.cursor < PORT_MODE_COUNT - 1 ? v.cursor + 1 : 0;
-            modes_text(dl, b, 12.5f, 256.0f, 300.0f, IM_COL32(255, 255, 255, 255), kAbout[at], 1, 372.0f);
-            if (at != 0) {
-                snprintf(line, sizeof(line), "The computer plays them. This build: %d extra fighter%s, so %d in a fight.", PORT_EXTRA_MAX,
-                         PORT_EXTRA_MAX == 1 ? "" : "s", PORT_EXTRA_MAX + 2);
-                modes_text(dl, b, 12.5f, 256.0f, 320.0f, IM_COL32(190, 205, 240, 255), line, 1, 372.0f);
-                modes_text(dl, b, 12.5f, 256.0f, 340.0f, IM_COL32(190, 205, 240, 255),
-                           "You pick your fighter, the opponent and the stage in the game's own select.", 1, 372.0f);
-            }
-        }
-        modes_text(dl, b, 11.5f, 256.0f, 398.0f, IM_COL32(200, 210, 235, 255), "D-pad: move      Cross: choose      Circle / SELECT: back", 1, 372.0f);
-    } else {
-        enum { SHOWN = 8 }; // rows that fit; with more the list moves with the cursor
-        int total = 0, first, who, kind = Port_ModesRow(v.mode, v.count, v.cursor, &who);
-        while (Port_ModesRow(v.mode, v.count, total, NULL) >= 0) {
-            total++;
-        }
-        first = v.cursor - SHOWN / 2;
-        first = first > total - SHOWN ? total - SHOWN : first;
-        first = first < 0 ? 0 : first;
-        modes_text(dl, b, 30.0f, 256.0f, 44.0f, IM_COL32(255, 196, 60, 255), Port_ModesName(v.mode), 1, 340.0f, true);
-        for (int row = first; row < total && row < first + SHOWN; row++) {
-            float y = 96.0f + (float)(row - first) * 30.0f;
-            bool lit = row == v.cursor;
-            int rowKind = Port_ModesRow(v.mode, v.count, row, NULL);
-            ImU32 colour = lit ? IM_COL32(48, 20, 0, 255) : IM_COL32(232, 238, 255, 255);
-            modes_row_text(v, row, label, sizeof(label), value, sizeof(value));
-            modes_plate(dl, b, 76.0f, y, 436.0f, y + 26.0f, lit);
-            if (rowKind == PORT_MODES_ROW_START || rowKind == PORT_MODES_ROW_BACK) {
-                modes_text(dl, b, 16.0f, 256.0f, y + 4.5f, colour, label, 1, 300.0f);
-            } else {
-                modes_text(dl, b, 15.0f, 88.0f, y + 5.0f, colour, label, 0, 150.0f);
-                if (lit) { // the value can be changed: left and right
-                    modes_text(dl, b, 15.0f, 246.0f, y + 5.0f, colour, "<", 0);
-                    modes_text(dl, b, 15.0f, 428.0f, y + 5.0f, colour, ">", 2);
-                }
-                modes_text(dl, b, 15.0f, 338.0f, y + 5.0f, colour, value, 1, 158.0f);
-            }
-            if (lit) {
-                snprintf(speak, sizeof(speak), "%s%s%s", label + (label[0] == ' ' ? 4 : 0), value[0] != '\0' ? ": " : "", value);
-            }
-        }
-        if (first > 0) {
-            modes_text(dl, b, 10.0f, 256.0f, 86.0f, IM_COL32(246, 150, 30, 255), "more above", 1);
-        }
-        if (first + SHOWN < total) {
-            modes_text(dl, b, 10.0f, 256.0f, 96.0f + SHOWN * 30.0f - 3.0f, IM_COL32(246, 150, 30, 255), "more below", 1);
-        }
-        if (v.refused > 0 && v.refused <= PORT_EXTRA_MAX) { // Start did not take a character
-            char why[160];
-            if (!Port_ExtraCharaOk(v.chara[v.refused - 1], why, sizeof(why))) {
-                snprintf(line, sizeof(line), "Fighter %d cannot be used: %s.", v.refused + 2, why);
-                modes_text(dl, b, 12.5f, 256.0f, 350.0f, IM_COL32(255, 130, 110, 255), line, 1, 372.0f);
-            }
-        } else {
-            const char *about = kind == PORT_MODES_ROW_COUNT ? "How many fighters the computer adds to the fight." :
-                                kind == PORT_MODES_ROW_CHARA ? "Left and right: the next character. L1 and R1: ten at a time." :
-                                kind == PORT_MODES_ROW_TEAM ? "Whose side it fights on. Fighters of one team do not hit each other." :
-                                kind == PORT_MODES_ROW_LEVEL ? "How well the computer plays it. The game's own five levels are 0, 6, 13, 21 and 29." :
-                                kind == PORT_MODES_ROW_START ? (v.mode == PORT_MODE_TRAINING ? "To the training mode's character select." :
-                                                                                               "To Duel's character select, against the computer.") :
-                                                               "Back to the list of modes.";
-            modes_text(dl, b, 12.5f, 256.0f, 350.0f, IM_COL32(255, 255, 255, 255), about, 1, 372.0f);
-            if (kind == PORT_MODES_ROW_START) {
-                modes_text(dl, b, 12.5f, 256.0f, 368.0f, IM_COL32(190, 205, 240, 255),
-                           "They stay for the fights from that select, until you are back at the main menu.", 1, 372.0f);
-            }
-        }
-        modes_text(dl, b, 11.5f, 256.0f, 398.0f, IM_COL32(200, 210, 235, 255), "D-pad: move, change      Cross: choose      Circle / SELECT: back", 1, 372.0f);
-    }
-    if (speak[0] != '\0' && strcmp(speak, said) != 0) { // the screen reader: the row under the cursor, when it changes
-        if (said[0] == '\0') {
+    if (!v.set || !v.hint) { // the screen reader: the set when it comes up, then the entry under the cursor when it changes
+        said = -1;
+    } else if (v.cursor != said && v.cursor >= 0 && v.cursor < PORT_MODE_COUNT - 1) {
+        char speak[96];
+        snprintf(speak, sizeof(speak), "%s, %d of %d", Port_ModesName(v.cursor + 1), v.cursor + 1, PORT_MODE_COUNT - 1);
+        if (said < 0) {
             PortA11y_Say(PortA11y_Label("Extra modes"), 1);
         }
-        PortA11y_Say(speak, said[0] == '\0' ? 0 : 1);
-        SDL_strlcpy(said, speak, sizeof(said));
+        PortA11y_Say(speak, said < 0 ? 0 : 1);
+        said = v.cursor;
     }
 }
 
@@ -2162,9 +1994,9 @@ static bool frame_build(void) {
     // the players' names under the gauges of an online fight
     bool names = sReady && Port_NetActive() && BtlChar_FindByObjId(0) != NULL && (Port_NetName(0)[0] != '\0' || Port_NetName(1)[0] != '\0');
     bool bars = sReady && bars_on();
-    PortModesView modes; // the page of extra modes, or its hint on the main menu
+    PortModesView modes; // the main menu's hint of the extra modes
     Port_ModesView(&modes);
-    bool modesOn = sReady && (modes.screen != 0 || modes.hint);
+    bool modesOn = sReady && modes.hint;
     meter_count();
     sBuilt = false;
     if (!sReady || (!sOpen && !sQuit && !notice && !overlay && !meter && !names && !bars && !modesOn)) {

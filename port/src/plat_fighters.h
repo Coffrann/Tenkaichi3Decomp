@@ -1,12 +1,12 @@
-/* Extra fighters (plat_fighters.c) and the page of extra modes that sets them up (plat_modes.c). C and C++. */
+/* Extra fighters (plat_fighters.c) and the extra modes of the main menu that lead to such fights (plat_modes.c). C and C++. */
 #ifndef PORT_PLAT_FIGHTERS_H
 #define PORT_PLAT_FIGHTERS_H
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* How many extra fighters a fight can have in this build. THE one number: the settings' rows, the page's count
-   control and the Experiments tab are all held to it. (The battle code itself carries one so far.) */
+/* How many extra fighters a fight can have in this build. THE one number: the settings' rows and the Experiments
+   tab are held to it. (The battle code itself carries one so far.) */
 #define PORT_EXTRA_MAX 1
 
 /* plat_fighters.c: the settings, held to their ranges */
@@ -20,26 +20,18 @@ int Port_ExtraCharaOk(int chara, char *why, int size); /* its files are in the g
 int Port_ExtraLast(void);                              /* what the last fight's set-up decided */
 const char *Port_CharaName(int chara); /* a character's name from the game data ("" if it gave none); the window's thread only */
 
-/* plat_modes.c: the page of extra modes (SELECT on the game's main menu) */
+/* plat_modes.c: the extra modes, the main menu's second set of entries (SELECT there) */
 enum { PORT_MODE_NONE, PORT_MODE_TEAM, PORT_MODE_FFA, PORT_MODE_TRAINING, PORT_MODE_COUNT };
-/* the rows of a mode's set-up screen */
-enum { PORT_MODES_ROW_COUNT, PORT_MODES_ROW_CHARA, PORT_MODES_ROW_TEAM, PORT_MODES_ROW_LEVEL, PORT_MODES_ROW_START, PORT_MODES_ROW_BACK };
 
-typedef struct PortModesView { /* the page as it is now, for the code that draws it (gs/ui.cpp) */
-    int hint;   /* the game's main menu is up and takes input: "SELECT: more modes" is shown */
-    int screen; /* 0 the page is closed, 1 the list of modes, 2 a mode's set-up */
-    int cursor; /* the row the cursor is on */
-    int mode;   /* PORT_MODE_ of the set-up */
-    int count;  /* extra fighters chosen */
-    int chara[PORT_EXTRA_MAX], team[PORT_EXTRA_MAX], level[PORT_EXTRA_MAX];
-    int refused; /* 1 + the extra fighter whose character Start did not take (its files are missing); 0 none */
+typedef struct PortModesView { /* what the main menu shows now, for the code that draws the hint (gs/ui.cpp) */
+    int hint;   /* the game's main menu is up and takes input: the hint is shown */
+    int set;    /* 1: the menu shows the extra modes' entries, 0: its own */
+    int cursor; /* the extra mode the cursor is on, 0..2 */
 } PortModesView;
 
 void Port_ModesView(PortModesView *out);
-int Port_ModesRow(int mode, int count, int row, int *fighter); /* PORT_MODES_ROW_ of a set-up row (and whose), -1 past the last */
-void Port_ModesKey(int back);  /* a key the bindings do not carry: Escape (back) */
-int Port_ModesFight(void);     /* PORT_MODE_ the fights of now were asked with on the page, 0: none */
-int Port_ModesCount(void);     /* ... and with how many extra fighters */
+int Port_ModesFight(void);     /* PORT_MODE_ the fights of now were chosen with on the main menu, 0: none (and none online) */
+int Port_ModesCount(void);     /* ... and how many of the Experiments tab's extra fighters such a fight gets besides */
 const char *Port_ModesName(int mode);
 
 #ifdef __cplusplus

@@ -1128,42 +1128,185 @@ static void row_paste(uint8_t *dst, int stride, int x, int y, int rowWidth, int 
     }
 }
 
-uint8_t *MenuText_Render(const uint8_t *rgba, int width, int height, int indexed, int scale, int *outWidth, int *outHeight) {
+/* ---------------------------------------------------------------- entries of a menu with other words */
+
+/* The main menu's second set of entries (the extra modes, src/menu/menu_a.c) is the menu's own plates with other
+   words on them. A plate's words are a row of a label sheet, so while that set is showing the rows it uses are
+   drawn here with the new words, the same way the "Menu font" setting draws the disc's words: in the row's place,
+   size and colours, so that the plate's animation, tint and lighting go on working. This does not wait for the
+   setting: there is no picture of the new words on the disc, so with "Original" they are drawn from the first
+   font of the list that can be used, and the other rows of the sheet stay the disc's pixels.
+   The two sheets (plates not under the cursor, the plate under it) are known by their pixels: the menu hands over
+   its two textures when it is set up, and they are decoded as the renderer will decode them. */
+#define RELABEL_WIDTH 512
+#define RELABEL_HEIGHT 256
+#define RELABEL_ROWS 8 /* rows of 32 */
+extern unsigned char *NameFont_DecodeSheet(unsigned entry); /* namefont.c */
+
+static uint64_t sRelabelHash[2];             /* [0] not under the cursor, [1] under it; 0: not known */
+static char sRelabelText[RELABEL_ROWS][64];  /* the words of a row, "": the disc's */
+static volatile uint32_t sRelabelKey;        /* 0: no row has other words; else a number of the words */
+static Face sRelabelFace;                    /* the font for them while the setting is on "Original" */
+static int sRelabelFaceState;                /* 0 not tried, 1 open, -1 none can be used */
+
+static uint64_t pixels_hash(const uint8_t *rgba, size_t bytes) {
     uint64_t hash = UINT64_C(14695981039346656037);
-    size_t i, bytes;
-    int n, x, y, changed = 0, rw, rh;
-    uint8_t *result = NULL;
-    if (sFontChoice == 0 || !indexed) { return NULL; } /* Original: use the untouched game sprites. */
+    size_t i;
+    for (i = 0; i < bytes; i++) { hash = (hash ^ rgba[i]) * UINT64_C(1099511628211); }
+    return hash;
+}
+
+/* With the lock held: the font the words are drawn from when the setting has none. The bold one of the list first
+   (the menu's own lettering is heavy), then any. */
+static Face *relabel_face(void) {
+    int pass, i;
+    if (sFontChoice != 0) { return &sFont; }
+    if (sRelabelFaceState == 0) {
+        sRelabelFaceState = -1;
+        for (pass = 0; pass < 2 && sRelabelFaceState < 0; pass++) {
+            for (i = 0; i < sFontCount; i++) {
+                if (!(sFonts[i].usage & 1) || (pass == 0) != (strstr(sFonts[i].file, "Bold") != NULL)) { continue; }
+                if (font_open(&sRelabelFace, i + 1)) {
+                    sRelabelFaceState = 1;
+                    break;
+                }
+            }
+        }
+    }
+    return sRelabelFaceState > 0 ? &sRelabelFace : NULL;
+}
+
+/* The menu's two label sheets (addresses of their texture entries in the game's memory). Returns 1 when their
+   rows can be given other words: both are of the layout that is decoded here, and there is a font to draw with.
+   (In a run without a picture no font was looked for and nothing is drawn: that counts as ready.) */
+int MenuText_RelabelSheets(unsigned offEntry, unsigned onEntry) {
+    unsigned entry[2];
+    int i, ok = 1;
+    entry[0] = offEntry;
+    entry[1] = onEntry;
     pthread_mutex_lock(&sLock);
-    if (sFontChoice == 0 || sCount == 0 || rgba == NULL || !label_size(width, height) || scale < 1 || scale > 4 ||
-        outWidth == NULL || outHeight == NULL) {
+    for (i = 0; i < 2; i++) {
+        unsigned char *px = NameFont_DecodeSheet(entry[i]);
+        sRelabelHash[i] = px != NULL ? pixels_hash(px, (size_t)RELABEL_WIDTH * RELABEL_HEIGHT * 4) : 0;
+        free(px);
+        ok = ok && sRelabelHash[i] != 0;
+    }
+    if (ok && sFontsLoaded && relabel_face() == NULL) { ok = 0; }
+    pthread_mutex_unlock(&sLock);
+    return ok;
+}
+
+/* The words of row `row` (0..7) of those sheets from now on; NULL or "": the disc's again. */
+void MenuText_Relabel(int row, const char *text) {
+    uint32_t key = 2166136261u;
+    int any = 0, i, k;
+    if (row < 0 || row >= RELABEL_ROWS) { return; }
+    pthread_mutex_lock(&sLock);
+    snprintf(sRelabelText[row], sizeof(sRelabelText[row]), "%s", text != NULL ? text : "");
+    for (i = 0; i < RELABEL_ROWS; i++) {
+        any |= sRelabelText[i][0] != '\0';
+        for (k = 0; k == 0 || sRelabelText[i][k - 1] != '\0'; k++) { key = (key ^ (unsigned char)sRelabelText[i][k]) * 16777619u; }
+    }
+    sRelabelKey = any ? key | 1 : 0;
+    pthread_mutex_unlock(&sLock);
+}
+
+/* With the lock held: row `row` of sheet `which` with its other words, as menu_text_row draws a label. The row's
+   measures are the disc label's when the list of labels has it (so a changed style in labels.json is followed),
+   else the ones measured on the USA disc. */
+static int relabel_row(int which, int row, uint64_t hash, int scale, Row *out) {
+    MenuLabel label;
+    Face *face = relabel_face(), keep;
+    int n, ok;
+    if (face == NULL) { return 0; }
+    memset(&label, 0, sizeof(label));
+    label.width = label.rowWidth = RELABEL_WIDTH;
+    label.height = RELABEL_HEIGHT;
+    label.rowHeight = 32;
+    label.y = row * 32;
+    label.cap = which ? 17 : 13;
+    label.baseline = which ? 23 : 22;
+    label.margin = 8;
+    label.widthMilli = 1000;
+    label.top = which ? 0xF4EF89 : 0xCBCBCB;
+    label.bottom = which ? 0xD2684B : 0xCBCBCB;
+    label.outline = which ? 0x2C151B : 0x5E236D;
+    label.outlineMilli = -1;
+    label.shadow = 1;
+    menu_text_labels();
+    for (n = 0; n < sCount; n++) {
+        if (sLabels[n].hash == hash && sLabels[n].y == label.y && sLabels[n].width == RELABEL_WIDTH && sLabels[n].height == RELABEL_HEIGHT &&
+            sLabels[n].x == 0 && sLabels[n].rowWidth == RELABEL_WIDTH && sLabels[n].rowHeight == 32) {
+            label = sLabels[n];
+            label.artWidth = 0; /* (the width of the disc's words is not these words') */
+            break;
+        }
+    }
+    snprintf(label.text, sizeof(label.text), "%s", sRelabelText[row]);
+    keep = sFont; /* (menu_text_row draws from sFont) */
+    sFont = *face;
+    ok = menu_text_row(&label, scale, out);
+    sFont = keep;
+    return ok;
+}
+
+/* The original, each pixel a block of scale x scale. */
+static uint8_t *pixels_blocks(const uint8_t *rgba, int width, int height, int scale) {
+    int rw = width * scale, x, y, k;
+    uint8_t *result = malloc((size_t)rw * height * scale * 4);
+    if (result == NULL) { return NULL; }
+    for (y = 0; y < height; y++) {
+        const uint8_t *src = rgba + (size_t)y * width * 4;
+        uint8_t *dst = result + (size_t)y * scale * rw * 4;
+        for (x = 0; x < width; x++) {
+            for (k = 0; k < scale; k++) { memcpy(dst + ((size_t)x * scale + k) * 4, src + (size_t)x * 4, 4); }
+        }
+        for (k = 1; k < scale; k++) { memcpy(dst + (size_t)k * rw * 4, dst, (size_t)rw * 4); }
+    }
+    return result;
+}
+
+uint8_t *MenuText_Render(const uint8_t *rgba, int width, int height, int indexed, int scale, int *outWidth, int *outHeight) {
+    uint64_t hash;
+    int n, changed = 0, rw, rh, which = -1, labels;
+    int relabel = sRelabelKey != 0 && width == RELABEL_WIDTH && height == RELABEL_HEIGHT;
+    uint8_t *result = NULL;
+    if ((sFontChoice == 0 && !relabel) || !indexed) { return NULL; } /* Original: use the untouched game sprites. */
+    pthread_mutex_lock(&sLock);
+    relabel = sRelabelKey != 0 && width == RELABEL_WIDTH && height == RELABEL_HEIGHT;
+    labels = sFontChoice != 0 && sCount != 0 && label_size(width, height);
+    if ((!labels && !relabel) || rgba == NULL || scale < 1 || scale > 4 || outWidth == NULL || outHeight == NULL) {
         pthread_mutex_unlock(&sLock);
         return NULL;
     }
-    bytes = (size_t)width * height * 4;
     rw = width * scale; rh = height * scale;
-    for (i = 0; i < bytes; i++) { hash = (hash ^ rgba[i]) * UINT64_C(1099511628211); }
-    for (n = 0; n < sCount; n++) {
+    hash = pixels_hash(rgba, (size_t)width * height * 4);
+    if (relabel) { which = hash == sRelabelHash[0] ? 0 : hash == sRelabelHash[1] ? 1 : -1; }
+    for (n = 0; labels && n < sCount; n++) {
         const MenuLabel *label = &sLabels[n];
         Row row;
         int owned;
         if (label->hash != hash || label->width != width || label->height != height) { continue; }
         if (result == NULL) {
-            result = malloc((size_t)rw * rh * 4);
+            result = pixels_blocks(rgba, width, height, scale);
             if (result == NULL) { break; }
-            for (y = 0; y < height; y++) { /* the original, each pixel a block */
-                const uint8_t *src = rgba + (size_t)y * width * 4;
-                uint8_t *dst = result + (size_t)y * scale * rw * 4;
-                int k;
-                for (x = 0; x < width; x++) {
-                    for (k = 0; k < scale; k++) { memcpy(dst + ((size_t)x * scale + k) * 4, src + (size_t)x * 4, 4); }
-                }
-                for (k = 1; k < scale; k++) { memcpy(dst + (size_t)k * rw * 4, dst, (size_t)rw * 4); }
-            }
         }
         if (row_get(n, scale, &row, &owned)) {
             row_paste(result, rw, label->x * scale, label->y * scale, label->rowWidth * scale, label->rowHeight * scale, &row);
             if (owned) { free(row.px); }
+            changed++;
+        }
+    }
+    for (n = 0; which >= 0 && n < RELABEL_ROWS; n++) { /* the rows with other words, over whatever the row had */
+        Row row;
+        if (sRelabelText[n][0] == '\0') { continue; }
+        if (result == NULL) {
+            result = pixels_blocks(rgba, width, height, scale);
+            if (result == NULL) { break; }
+        }
+        if (relabel_row(which, n, hash, scale, &row)) {
+            row_paste(result, rw, 0, n * 32 * scale, RELABEL_WIDTH * scale, 32 * scale, &row);
+            free(row.px);
             changed++;
         }
     }
@@ -1271,8 +1414,11 @@ static SharedSheet *shared_sheet(int tbp, int cbp) {
    settings on "Original", and for every texture neither setting would touch. */
 uint32_t MenuText_TexKey(int width, int height, int indexed, int tbp, int cbp, int scale) {
     uint32_t key = 0;
-    if (sFontChoice == 0 && sSharedChoice == 0) { return 0; }
+    if (sFontChoice == 0 && sSharedChoice == 0 && sRelabelKey == 0) { return 0; }
     pthread_mutex_lock(&sLock);
+    if (sRelabelKey != 0 && indexed && width == RELABEL_WIDTH && height == RELABEL_HEIGHT) {
+        key ^= sRelabelKey ^ (sFontChoice == 0 ? (uint32_t)scale * 0x9E3779B9u : 0); /* (with a font the scale is in below) */
+    }
     if (sFontChoice != 0 && indexed && label_size(width, height)) {
         key ^= (uint32_t)scale * 0x9E3779B9u ^ (uint32_t)sFontChoice * 0x85EBCA6Bu;
     }

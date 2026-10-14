@@ -41,6 +41,7 @@
 #define NameFont_Ready MenuLabels_NameReady_
 #define NameFont_Has MenuLabels_NameHas_
 #define NameFont_Compose MenuLabels_NameCompose_
+#define NameFont_DecodeSheet MenuLabels_NameDecodeSheet_
 #include "namefont.c"
 
 #define ML_FILES 10

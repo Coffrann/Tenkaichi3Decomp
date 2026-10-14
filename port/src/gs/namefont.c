@@ -152,6 +152,12 @@ static uint8_t *sheet_decode(const uint8_t *e) {
     return out;
 }
 
+/* A 512x256 sheet of the game (the address of its texture entry) as the renderer decodes it, malloc'ed; NULL when
+   it is not of that layout. For menu_text.c, which knows the main menu's label sheets by their pixels. */
+unsigned char *NameFont_DecodeSheet(unsigned entry) {
+    return entry != 0 ? sheet_decode((const uint8_t *)Port_Ptr(entry)) : NULL;
+}
+
 static void test_run(void);
 
 void Port_NameFontSheets(int stage, int song, int songLit) {

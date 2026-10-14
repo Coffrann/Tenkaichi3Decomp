@@ -214,6 +214,13 @@ s32 Progress_Main(s32 arg) {
         }
     } while (!done);
 
+#ifdef PORT
+    {
+        /* a fight of one of the extra modes (chosen on the main menu) says in the log who is in it */
+        extern void Port_ModesFightLog(void); /* port/src/plat_modes.c */
+        Port_ModesFightLog();
+    }
+#endif
     Pad_SetRepeat(0x14, 1);
     Snd_UnloadBank(2);
     MENU_ARC_FREE(gMenuArc0);
