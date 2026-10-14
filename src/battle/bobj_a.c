@@ -1251,8 +1251,9 @@ void BtlObjHit_BuildVolumes(BobjObj *obj) {
 #ifdef PORT
     {
         extern u16 gPortBodyTouch[]; /* eft_det_a.c: who this object's strike touched, for more than four fighters */
-        if ((u32)obj->id < 12) {
-            gPortBodyTouch[obj->id] = 0;
+        s32 id = *(s32 *)((u8 *)obj + 0x10); /* (the object's index in gBtlObjTbl: BtlObj.id, inside unk04 here) */
+        if ((u32)id < 12) {
+            gPortBodyTouch[id] = 0;
         }
     }
 #endif
