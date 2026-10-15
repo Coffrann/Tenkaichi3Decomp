@@ -227,7 +227,7 @@ static void vblank_wait(void) {
 }
 
 #undef next
-static unsigned char sPadLast[2][18]; /* (defined with the pads below) */
+static unsigned char sPadLast[4][18]; /* (defined with the pads below) */
 
 /* ---- "Low input lag" (setting late_input, F1 > Video; BT3_LATE_INPUT=0/1) ------------------------------------
  * The game reads the pads, computes the tick, and THEN waits for its vertical blanks (two in a fight) before the
@@ -394,7 +394,8 @@ long Port_PadPlayPos(void) { return sPadPlay != NULL ? ftell(sPadPlay) : -1; }
 void Port_PadPlaySeek(long pos) { if (sPadPlay != NULL) { fseek(sPadPlay, pos >= 0 ? pos : 0, SEEK_SET); } }
 
 /* The pads as the game last read them (for BT3_PAD_TABLE, below). */
-static unsigned char sPadLast[2][18] = {{0xFF, 0xFF, 0x80, 0x80, 0x80, 0x80}, {0xFF, 0xFF, 0x80, 0x80, 0x80, 0x80}};
+static unsigned char sPadLast[4][18] = {{0xFF, 0xFF, 0x80, 0x80, 0x80, 0x80}, {0xFF, 0xFF, 0x80, 0x80, 0x80, 0x80},
+                                        {0xFF, 0xFF, 0x80, 0x80, 0x80, 0x80}, {0xFF, 0xFF, 0x80, 0x80, 0x80, 0x80}};
 static int pad_read(int socket, unsigned char *data);
 
 int scePad2Read(int socket, unsigned char *data) {
@@ -414,7 +415,7 @@ int scePad2Read(int socket, unsigned char *data) {
         n = pad_read(socket, data);
         Port_ModesPad(socket); /* (counts the reads: the main menu's hint of the extra modes goes when the reads are not the menu's) */
     }
-    if (socket >= 0 && socket < 2) {
+    if (socket >= 0 && socket < 4) {
         memcpy(sPadLast[socket], data, 18);
     }
     return n;

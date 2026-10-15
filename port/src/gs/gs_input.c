@@ -54,11 +54,13 @@ static const struct { const char *name, *label; unsigned bit; int key; int pad; 
     {"rs_left", "Right stick left", 0, 0, -1}, {"rs_right", "Right stick right", 0, 0, -1},
 };
 
-static int sKeys[2][PORT_ACTIONS], sPadBtn[2][PORT_PAD_BUTTONS], sPadSlot[2];
+/* (four players: the game's two ports and, for fights of more than two fighters, two more; port_fighters.h) */
+#define PORT_PLAYERS 4
+static int sKeys[PORT_PLAYERS][PORT_ACTIONS], sPadBtn[PORT_PLAYERS][PORT_PAD_BUTTONS], sPadSlot[PORT_PLAYERS];
 /* Per player: the deadzone of the left and of the right stick (-1 = the game's own, as the pad's bytes always were
    passed; 0..PORT_DEADZONE_MAX = a round one of that many percent, stick_bytes below), and vibration (on, strength
    in percent). */
-static int sDeadzone[2][2], sVib[2][2];
+static int sDeadzone[PORT_PLAYERS][2], sVib[PORT_PLAYERS][2];
 /* What opens and closes the settings window: a key (F1) and a controller button (none), both of the settings
    window's list; and START + SELECT of any controller together, always. */
 static int sOverlayKey = SDL_SCANCODE_F1, sOverlayPad = -1;
@@ -91,7 +93,7 @@ static int range(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; 
 static void load(void) {
     char name[32];
     int p, a;
-    for (p = 0; p < 2; p++) {
+    for (p = 0; p < PORT_PLAYERS; p++) {
         defaults(p);
         for (a = 0; a < PORT_ACTIONS; a++) {
             snprintf(name, sizeof(name), "key_p%d_%s", p + 1, kActions[a].name);
@@ -327,7 +329,7 @@ void PortInput_ResetDefaults(int player) { pthread_once(&sLoadOnce, load); defau
 void PortInput_Save(void) {
     char name[32];
     int p, a;
-    for (p = 0; p < 2; p++) {
+    for (p = 0; p < PORT_PLAYERS; p++) {
         for (a = 0; a < PORT_ACTIONS; a++) {
             snprintf(name, sizeof(name), "key_p%d_%s", p + 1, kActions[a].name);
             Port_SettingSave(name, sKeys[p][a]);
@@ -565,7 +567,7 @@ static void clash_square(int socket, unsigned *btn, unsigned char *lx, unsigned 
     extern void *BtlChar_FindByObjId(int objId); /* the game: the fighter of a side, NULL outside a fight */
     extern int BtlAct_GetCurrent(void *chr);     /* its action */
     extern int Port_NetActive(void), Port_NetMe(void);
-    static int dir[2], was[2], credit[2]; /* (credit: quarters of a point owed beyond the press's own) */
+    static int dir[PORT_PLAYERS], was[PORT_PLAYERS], credit[PORT_PLAYERS]; /* (credit: quarters of a point owed beyond the press's own) */
     int side = Port_NetActive() ? Port_NetMe() : socket, in = 0, down = (*btn & B_SQUARE) != 0, extra = 0;
     void *chr;
 
@@ -762,7 +764,7 @@ void PortInput_StickView(int player, PortStickView *out) {
  * controller, which is the one that plays there.
  */
 #define RUMBLE_MS 250
-static struct { SDL_Gamepad *pad; Uint16 low, high; Uint64 at; int lastLarge, lastSmall; } sRumble[2];
+static struct { SDL_Gamepad *pad; Uint16 low, high; Uint64 at; int lastLarge, lastSmall; } sRumble[PORT_PLAYERS];
 
 static void rumble_send(int player, SDL_Gamepad *g, Uint16 low, Uint16 high, int why) {
     Uint64 now = SDL_GetTicks();
@@ -813,7 +815,7 @@ void Port_PadVibrate(int socket, int small, int large) {
     int player = socket, why = 0;
     unsigned low, high;
 
-    if (!sInit || gPortResim || socket < 0 || socket > 1) {
+    if (!sInit || gPortResim || socket < 0 || socket >= PORT_PLAYERS) {
         return;
     }
     if (Port_NetActive()) {
@@ -879,7 +881,7 @@ int Port_PadRead(int socket, unsigned char *data) {
     SDL_Gamepad *g;
     int a;
 
-    if (!GsGpu_Enabled() || socket < 0 || socket > 1) {
+    if (!GsGpu_Enabled() || socket < 0 || socket >= PORT_PLAYERS) {
         return 0;
     }
     pthread_once(&sLoadOnce, load);
@@ -919,7 +921,7 @@ int Port_PadRead(int socket, unsigned char *data) {
     if (sKeySwallow) {
         const bool *ks = SDL_GetKeyboardState(NULL);
         int p, held = 0;
-        for (p = 0; p < 2; p++) {
+        for (p = 0; p < PORT_PLAYERS; p++) {
             for (a = 0; a < PORT_ACTIONS; a++) {
                 held = held || (sKeys[p][a] > 0 && sKeys[p][a] < SDL_SCANCODE_COUNT && ks[sKeys[p][a]]);
             }

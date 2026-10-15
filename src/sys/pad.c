@@ -14,6 +14,52 @@ extern s32 sceVibGetProfile(s32 socket, u8 *profile);
 extern s32 sceVibSetActParam(s32 socket, s32 profileSize, u8 *profile, s32 dataSize, void *data);
 
 extern u32 Pad_CalcRepeat(u32 held, u32 pressed, s32 *timer, u32 *last, s32 delay, s32 interval);
+
+#ifdef PORT
+/* Controllers 3 and 4 (include/sys/pad.h). They are read as the game reads its two, by the game's own code: once a
+   frame, after the game's, they are put in the places of the two (and those kept aside), Pad_Update is run again
+   for them, and everything goes back. Only while a fight has a fighter on one of them (port/src/plat_fighters.c,
+   Port_ExtraPadsOn): a recording of the pads then has their reads too, and has none otherwise. */
+Pad gPortPad[PORT_PAD_EXTRA];
+
+Pad *Port_Pad(s32 pad) {
+    return pad >= PAD_COUNT && pad < PAD_COUNT + PORT_PAD_EXTRA ? &gPortPad[pad - PAD_COUNT] : &gPad[pad < 0 ? 0 : pad];
+}
+
+u32 Port_PadPressed(s32 pad) {
+    return pad >= 0 && pad < PAD_COUNT + PORT_PAD_EXTRA ? Port_Pad(pad)->pressed : 0;
+}
+
+static void Port_PadUpdateExtra(void) {
+    extern int Port_ExtraPadsOn(void);
+    extern void Pad_Update(void);
+    static s32 inside;
+    static Pad kept[PAD_COUNT];
+    s32 i;
+
+    if (inside || !Port_ExtraPadsOn()) {
+        return;
+    }
+    if (gPortPad[0].repeatDelay == 0) {
+        for (i = 0; i < PORT_PAD_EXTRA; i++) {
+            gPortPad[i].socket = PAD_COUNT + i; /* (the PC build's sockets are the port numbers: plat_stub.c) */
+            gPortPad[i].repeatDelay = 20;
+            gPortPad[i].repeatInterval = 1;
+        }
+    }
+    inside = 1;
+    for (i = 0; i < PAD_COUNT; i++) {
+        kept[i] = gPad[i];
+        gPad[i] = gPortPad[i];
+    }
+    Pad_Update();
+    for (i = 0; i < PAD_COUNT; i++) {
+        gPortPad[i] = gPad[i];
+        gPad[i] = kept[i];
+    }
+    inside = 0;
+}
+#endif
 extern void Pad_UpdateGameButtons(s32 pad);
 
 /* Starts libdbc/libpad2, opens one socket per controller port and sets the default key repeat. */
@@ -152,6 +198,9 @@ void Pad_Update(void) {
         }
         Pad_SendActuator(i);
     }
+#ifdef PORT
+    Port_PadUpdateExtra();
+#endif
 }
 
 /* True when any button of mask is down. */

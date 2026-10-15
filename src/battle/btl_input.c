@@ -519,9 +519,17 @@ u32 BtlInput_GetKeyMask(BtlInputChr *chr, s32 action) {
     s32 i;
 
     for (i = 0; i < SAVE_KEY_COUNT; i++) {
+#ifdef PORT
+        /* (the save has a key config for each of the two players: a fighter past those, player 1's; it read past
+           the table) */
+        if (gSaveData->key[chr->player < SAVE_PAD_COUNT ? chr->player : 0][i] == action) {
+            return padBit[i];
+        }
+#else
         if (gSaveData->key[chr->player][i] == action) {
             return padBit[i];
         }
+#endif
     }
     return 0;
 }

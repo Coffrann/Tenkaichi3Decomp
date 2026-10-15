@@ -623,7 +623,10 @@ static s32 Port_IsWatched(s32 i) {
     if (i == 0 || i == 1) {
         return !BattleSide_IsCpu(i) || (i == 0 && BattleSide_IsCpu(1));
     }
-    return 0;
+    {
+        extern s32 Port_TargetHuman(s32 i); /* (an extra fighter on a controller: players 3 and 4) */
+        return Port_TargetHuman(i);
+    }
 }
 extern void Port_CamLog(int fighter, int target, int shown); /* port/src/plat_stub.c (BT3_CAM_LOG) */
 /* 1 when what fighter i does is about a player: i is one, or its target is (always 1 with two fighters). Also

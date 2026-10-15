@@ -340,7 +340,11 @@ void BtlChar_Reset(BtlMgrChr *chr) {
     BtlChar_SetStage(chr, BTL_CHR_STAGE_RESET);
     chr->optA = BattleSide_GetOptionA(side);
     chr->optBOff = BattleSide_GetOptionB(side) == 0;
+#ifdef PORT /* (a save flag of each of the two players: controllers 3 and 4 take player 1's) */
+    chr->padFlagA = (gSaveData->flags & (2 << (chr->pad < 2 ? chr->pad : 0))) != 0;
+#else
     chr->padFlagA = (gSaveData->flags & (2 << chr->pad)) != 0;
+#endif
     chr->unk1590 = -1;
     chr->unk1594 = -1;
     BtlInput_Init(chr);
@@ -349,8 +353,13 @@ void BtlChar_Reset(BtlMgrChr *chr) {
 #ifdef PORT
     {
         extern int Port_ThirdAi(void); /* port/src/plat_stub.c: BT3_THIRD_AI, 1 unless set to 0 */
-        if (side >= 2) { /* (the experiment's third fighter is the computer's, whoever has side 2) */
-            chr->injectOn = Port_ThirdAi();
+        extern int Port_FightPad(int k); /* port/src/plat_fighters.c: extra k's controller, -1 the computer */
+        if (side >= 2) { /* (an extra fighter is the computer's, unless a controller was given to it) */
+            chr->injectOn = Port_FightPad(side - 2) >= 0 ? 0 : Port_ThirdAi();
+        }
+        {
+            extern void Port_PlayerLog(int fighter, int pad, int cpu); /* port/src/plat_fighters.c */
+            Port_PlayerLog(side, chr->pad, chr->injectOn);
         }
     }
 #endif
@@ -1485,7 +1494,11 @@ void BtlChar_ResetAll(void) {
             /* The experiment's third fighter. The second number of a fighter is the VIEW it belongs to (the
                screen's half in split screen; the screen filters, the radial blur and the like are kept per
                view, two of them): it has no view of its own and is given its side's. */
+            extern int Port_FightPad(int k);
             chr->index = 1;
+            if (Port_FightPad(i - 2) >= 0) {
+                chr->pad = Port_FightPad(i - 2); /* (a player's: its controller) */
+            }
         }
 #endif
         BtlChar_BindObject(chr);

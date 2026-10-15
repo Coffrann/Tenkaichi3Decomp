@@ -367,6 +367,52 @@ int Port_FightMember(int k) {
 int Port_FightRoster(void) {
     return sFightCount > 0 ? sFightRoster : 0;
 }
+/* Extra k's controller: 0..3 (a player plays it), -1 the computer. For now from BT3_HUMAN_PADS=<fighter>:<pad>,...
+   (fighter numbers 2..9 as in the logs, controllers 1..4), e.g. 2:3,6:4: fighter 2 on controller 3, fighter 6 on
+   controller 4. */
+int Port_FightPad(int k) {
+    const char *p = getenv("BT3_HUMAN_PADS");
+
+    if (k < 0 || k >= sFightCount || p == NULL) {
+        return -1;
+    }
+    while (*p != '\0') {
+        int f = atoi(p), pad = -1;
+        const char *c = strchr(p, ':');
+        if (c != NULL) {
+            pad = atoi(c + 1) - 1;
+        }
+        if (f == k + 2 && pad >= 0 && pad < 4) {
+            return pad;
+        }
+        p = strchr(p, ',');
+        if (p == NULL) {
+            break;
+        }
+        p++;
+    }
+    return -1;
+}
+
+/* (more than two fighters) A fighter played from a controller, said once a fight when it is set up. */
+void Port_PlayerLog(int fighter, int pad, int cpu) {
+    if (sFightCount > 0 && !cpu) {
+        fprintf(stderr, "bt3: fighter %d is played on controller %d\n", fighter, pad + 1);
+    }
+}
+
+/* A fighter of this fight is on controller 3 or 4 (src/sys/pad.c reads those then). */
+int Port_ExtraPadsOn(void) {
+    int k;
+
+    for (k = 0; k < sFightCount; k++) {
+        if (Port_FightPad(k) >= 2) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* (extra 0 by its older name) */
 int Port_ThirdFighter(void) {
     return Port_FightChara(0);

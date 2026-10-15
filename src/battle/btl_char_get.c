@@ -221,7 +221,11 @@ Vec4 *BtlChar_GetPos(BtlCharGetChr *chr) {
 
 /* The fighter's controller. */
 Pad *BtlChar_GetPad(BtlCharGetChr *chr) {
+#ifdef PORT
+    return Port_Pad(chr->pad); /* (pads 2 and 3: the PC build's controllers 3 and 4) */
+#else
     return &gPad[chr->pad];
+#endif
 }
 
 /* 1 while the fighter's freeze counter is running. */
