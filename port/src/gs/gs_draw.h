@@ -21,7 +21,10 @@ extern int gsScale;
 #define MAX_TARGETS 24
 #define MAX_VU_VERTS (1 << 19)
 #define MAX_VU_IDX (1 << 20)
-#define MAX_VU_UNIFORMS 8192
+/* (a block a model part: a split-screen frame of ten fighters took 7300 of 8192, four quarters ran out and the
+   last quarters' fighters lost parts; 32768 at most: the interpolation keeps block numbers in 16 bits, signed in
+   sInterpPair) */
+#define MAX_VU_UNIFORMS 32768
 #define MAX_TEX 8192
 #define TEX_BUCKETS 32768 /* a power of two, four times MAX_TEX */
 #define MAX_CLUTS 64

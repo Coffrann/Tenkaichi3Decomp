@@ -1249,6 +1249,16 @@ static void vk_frame_end(void) {
     for (i = 0; i < gsTargetCount; i++) {
         gsTargets[i].draws = 0;
     }
+    {
+        /* (a frame that filled one of the tables: what came after was not drawn; said once, with the numbers) */
+        static int said;
+        if (!said && (gsVuUniCount >= MAX_VU_UNIFORMS || gsDrawCount >= MAX_DRAWS || gsVuVertCount + 64 > MAX_VU_VERTS)) {
+            said = 1;
+            fprintf(stderr, "bt3: a frame filled the renderer's tables (model blocks %d/%d, draws %d/%d, model vertices %d/%d): "
+                            "the rest of it was not drawn\n", (int)gsVuUniCount, MAX_VU_UNIFORMS, (int)gsDrawCount, MAX_DRAWS,
+                    (int)gsVuVertCount, MAX_VU_VERTS);
+        }
+    }
     gsVertCount = 0;
     gsVuVertCount = 0;
     gsVuIdxCount = 0;
