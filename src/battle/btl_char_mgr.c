@@ -706,7 +706,10 @@ void BtlChars_UpdateFreeze(void) {
 
         if (local[i] > 0 && (u32)t < (u32)BtlChar_GetCount() && t != i && level[t] + local[t] < local[i]) {
             chr = BtlChar_Get(t);
-            if (!(local[i] == 1 && BtlChar_TestFlag(chr, 0x127))) {
+            /* (a fighter busy with its own technique, 0x127, is not held: a beam stops while its fighter is
+               frozen, and one fighter's super start stood another's beam still for its whole charge; the user:
+               "the beam freezes until that one is done") */
+            if (!BtlChar_TestFlag(chr, 0x127)) {
                 extern void Port_HoldLog(int fighter, int target, int level);
                 chr->freezeNext = 1;
                 chr->freezeDelay = 0;

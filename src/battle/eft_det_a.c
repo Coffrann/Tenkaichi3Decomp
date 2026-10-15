@@ -992,6 +992,81 @@ s32 EftDet_HitFighterMulti(EftDetRec *rec, s32 target, s32 idx) {
  * (found by EftDet_StagePass, which ran before) is dropped. Then the fighter answers, first yes wins: dodge
  * (nothing reported), deflect (0x40), reflect (0x80), absorb (0x20), then guard (2) or hit (1).
  * (The mix of `rec->` and `list->rec[i].` is what reproduces the original's two induction pointers.) */
+#ifdef PORT
+/* More than two fighters: a technique's beam hits every enemy it passes through (the user: "the super attack beams
+   don't hit enemies, I think just one person"). A record is tested against one fighter, and the first hit ends a
+   single-hit beam (task flag 1) and puts its head at that fighter; so it never reached anybody behind. Here, before
+   the game's own test, every OTHER enemy of the owner that the record touches (not behind a stage contact) takes a
+   guard or a hit straight away, without touching the record's task: the beam's life, its counters and its head
+   stay the game's, decided by its own victim. An extra victim can dodge; it cannot deflect, reflect or absorb (that
+   would act on the whole beam). Each beam (by its task) hits each fighter once, a multi-hit one again after its
+   interval; nobody of the owner's own team. Ki blasts (type 0) keep the game's rule: they burst on the first. */
+#define PORT_SHOT_MEMO 32
+static struct {
+    void *task;
+    u32 hit;     /* fighters this beam has hit (bit = roster index) */
+    u32 at[10];  /* the pass it last hit each of them */
+    u32 last;    /* the pass it was last seen in */
+} sPortShotMemo[PORT_SHOT_MEMO];
+static u32 sPortShotPass, sPortShotNext;
+
+static s32 Port_ShotMemo(void *task) {
+    s32 m;
+
+    for (m = 0; m < PORT_SHOT_MEMO; m++) {
+        if (sPortShotMemo[m].task == task) {
+            if (sPortShotPass - sPortShotMemo[m].last > 30) {
+                sPortShotMemo[m].hit = 0; /* (a task used again by a new beam) */
+            }
+            sPortShotMemo[m].last = sPortShotPass;
+            return m;
+        }
+    }
+    m = (s32)(sPortShotNext++ % PORT_SHOT_MEMO);
+    memset(&sPortShotMemo[m], 0, sizeof(sPortShotMemo[m]));
+    sPortShotMemo[m].task = task;
+    sPortShotMemo[m].last = sPortShotPass;
+    return m;
+}
+
+static void Port_ShotExtraVictims(EftDetRec *rec, s32 primary, s32 (*test)(EftDetObj *, EftDetShape *)) {
+    extern s32 Port_FighterObjId(s32 i);
+    extern s32 Port_IsEnemy(s32 a, s32 b);
+    extern s32 BtlChar_GetCount(void);
+    extern void Port_TargetHit(s32 attacker, s32 victim);
+    s32 owner = rec->objId, k, m = Port_ShotMemo(rec->task);
+    s32 multi = EftHit_IsMultiHit(rec);
+    s32 interval = EftHit_GetDefUnkB(rec) > 0 ? EftHit_GetDefUnkB(rec) : 8;
+
+    for (k = 0; k < BtlChar_GetCount() && k < 10; k++) {
+        s32 obj = Port_FighterObjId(k);
+
+        if (obj == primary || !Port_IsEnemy(owner, k) || !test(BtlObj_Get(obj), &rec->shape)) {
+            continue;
+        }
+        if ((rec->shape.hitFlags & EFT_DET_HIT_STAGE) && rec->shape.dist >= rec->shape.stageDist) {
+            continue;
+        }
+        if ((sPortShotMemo[m].hit & (1u << k)) && (!multi || sPortShotPass - sPortShotMemo[m].at[k] < (u32)interval)) {
+            continue;
+        }
+        sPortShotMemo[m].hit |= 1u << k;
+        sPortShotMemo[m].at[k] = sPortShotPass;
+        {
+            extern void Port_BeamLog(int owner, int victim, int primary); /* port/src/plat_stub.c: BT3_BEAM_LOG */
+            Port_BeamLog(owner, obj, primary);
+        }
+        Port_TargetHit(owner, obj);
+        if (BtlColl_TryDodge(obj, rec)) {
+            continue;
+        }
+        if (!BtlColl_TryGuard(obj, rec)) {
+            BtlColl_Hit(obj, rec);
+        }
+    }
+}
+#endif
+
 void EftDet_FighterPass(void) {
     s32 (*test[7])(EftDetObj *, EftDetShape *) = {
         EftDet_SpheresVsFighter, EftDet_CapsuleVsFighter, EftDet_NoneVsFighter, EftDet_NoneVsFighter,
@@ -1002,6 +1077,9 @@ void EftDet_FighterPass(void) {
     s32 i;
 
     list = EftHit_GetList();
+#ifdef PORT
+    sPortShotPass++;
+#endif
     for (i = 0; i < list->count; i++) {
         rec = &list->rec[i];
         if (EftHit_CanHit(rec, 1)) {
@@ -1043,6 +1121,11 @@ void EftDet_FighterPass(void) {
                                 break;
                             }
                         }
+                    }
+                    /* (the other enemies a technique's beam passes through; the test of its own victim below
+                       is made again after these, so the record's contact is that victim's) */
+                    if (list->rec[i].type == 1) {
+                        Port_ShotExtraVictims(rec, target, test[list->rec[i].shape.type]);
                     }
                 }
             }

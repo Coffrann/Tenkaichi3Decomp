@@ -352,8 +352,27 @@ s32 EftHit_ClashTech(EftHitRec *a, EftHitRec *b) {
     Vec4_Sub(&d, &b->prevPos, &a->prevPos);
     if (Vec3_Dot(&moveA, &d) > 0.0f && Vec3_Dot(&moveA, &moveB) < 0.0f) {
         result = 4;
+#ifdef PORT
+        {
+            /* More than two fighters: the timers of the two whose techniques met head on, not fighters 0 and 1
+               (whatever they were doing: a charge then ran to its time-out, a beam already fired never ended). */
+            extern s32 BtlChar_GetCount(void);
+            if (BtlChar_GetCount() > 2) {
+                if ((u32)a->objId < (u32)BtlChar_GetCount()) {
+                    EftTechEvt_RequestStop(a->objId);
+                }
+                if ((u32)b->objId < (u32)BtlChar_GetCount()) {
+                    EftTechEvt_RequestStop(b->objId);
+                }
+            } else {
+                EftTechEvt_RequestStop(0);
+                EftTechEvt_RequestStop(1);
+            }
+        }
+#else
         EftTechEvt_RequestStop(0);
         EftTechEvt_RequestStop(1);
+#endif
     } else {
         Vec4_Sub(&d, &a->pos, &b->pos);
         result = 2;
@@ -993,6 +1012,19 @@ s32 Port_EftCamOwner(void) {
 
 /* Starts a camera cut: plays arg->anim on the demo camera, timed by fighter arg->objId's technique timer if any. */
 void EftCam_Start(EftCamArg *arg) {
+#ifdef PORT
+    {
+        /* More than two fighters: a technique's camera cut (a beam or a rush that connects) plays on the one demo
+           camera and replaces the whole picture (BtlCam_UpdateOverride), whoever it is about: attacks elsewhere on
+           the field took the player's screen (the user: "some attacks still grab the camera"). Only one that is
+           about a player is started, as with the fighter cameras (btl_char_api.c, Port_CutShown). The technique
+           keeps its own time from its fighter, not from this camera. */
+        extern s32 Port_CutShownObj(s32 objId);
+        if (!Port_CutShownObj(arg->objId)) {
+            return;
+        }
+    }
+#endif
     gEftCam->arg = *arg;
     DemoCam_SetAnim(arg->anim);
     if (arg->objId != -1) {

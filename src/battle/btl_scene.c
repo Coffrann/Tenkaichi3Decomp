@@ -338,6 +338,15 @@ s32 BtlScene_IsCharStopped(s32 objId) {
 s32 BtlScene_IsAnyCharStopped(void) {
     s32 result = BtlCharApi_AnyFrozen() != 0;
 
+#ifdef PORT
+    {   /* (more than two fighters: only the two the player watches; btl_char_api.c, Port_WatchedStopped) */
+        extern s32 BtlChar_GetCount(void);
+        extern s32 Port_WatchedStopped(void);
+        if (BtlChar_GetCount() > 2) {
+            return Port_WatchedStopped() || (Battle_GetWork()->flags & BATTLE_FLAG_PAUSE) != 0;
+        }
+    }
+#endif
     if (Battle_GetWork()->flags & BATTLE_FLAG_PAUSE) {
         result = 1;
     }
@@ -597,6 +606,9 @@ s32 BtlScene_IsEffectHidden(s32 objId, s32 kind) {
     if (kind == 0) {
         if (BtlCharApi_AnyCamPriority()) {
             result = 1;
+        } else if (BtlChar_GetCount() > 2) {
+            extern s32 Port_WatchedStopped(void);
+            result = Port_WatchedStopped(); /* (a rush elsewhere hid effects over the whole field) */
         } else if (BtlCharApi_IsInRushSequence(0)) {
             result = 1;
         } else if (BtlCharApi_IsInRushSequence(1)) {

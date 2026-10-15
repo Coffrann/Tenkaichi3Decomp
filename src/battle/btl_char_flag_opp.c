@@ -767,10 +767,35 @@ s32 BtlOpp_GetClashCountB(BtlFlagChr *chr) {
     return OPPONENT(chr)->clashCountB;
 }
 
+#ifdef PORT
+/* 1 while fighter i has an enemy that stands. */
+static s32 Port_AnyEnemyStands(s32 i) {
+    s32 k;
+    for (k = 0; k < BtlChar_GetCount(); k++) {
+        if (Port_IsEnemy(i, k) && !BtlChar_IsDead(BtlChar_Get(k))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+#endif
+
 /* Copies what the opponent is doing into this fighter's flags 0xAC..0xB9 and 0xD6. */
 void BtlOpp_MirrorFlags(BtlFlagChr *chr) {
     BtlFlagChr *opp;
 
+#ifdef PORT
+    /* More than two fighters: "the opponent" here was fighter 1 for fighter 0 and fighter 0 for everybody else,
+       whoever they fought. Its state is copied into the fighter's flags every frame, and one of them (0xB1, "the
+       opponent is down") makes BtlInput_Fetch drop all of the fighter's input: once fighter 1 was down, fighter 0
+       stood still for the rest of the fight, and once fighter 0 was, every extra fighter did (the user: "an enemy
+       did a cutscene attack and it broke my inputs"). The opponent is the fighter's target, as everywhere else
+       (during a catch or a rush, the attacker), and 0xB1 means that no enemy stands, as it does with two. */
+    if (BtlChar_GetCount() > 2) {
+        s32 t = gPortTarget[chr->player];
+        opp = BtlChar_Get((u32)t < (u32)BtlChar_GetCount() && t != chr->player ? t : chr->player == 0 ? 1 : 0);
+    } else
+#endif
     if (chr->player == 0) {
         opp = BtlChar_Get(1);
     } else {
@@ -795,7 +820,11 @@ void BtlOpp_MirrorFlags(BtlFlagChr *chr) {
     if (BtlCharApi_IsInSkill(opp->objId)) {
         BtlChar_SetHeldFlag(chr, 0xB0);
     }
+#ifdef PORT
+    if (BtlChar_GetCount() > 2 ? !Port_AnyEnemyStands(chr->player) : BtlChar_IsDead(opp)) {
+#else
     if (BtlChar_IsDead(opp)) {
+#endif
         BtlChar_SetHeldFlag(chr, 0xB1);
     }
     if (BtlChar_TestFlag(opp, 0xCC)) {

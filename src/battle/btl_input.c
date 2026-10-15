@@ -483,6 +483,15 @@ void BtlInput_Fetch(BtlInputChr *chr, u32 *outButtons, u32 *outCommands, u8 *sti
         block = 1;
     }
 #endif
+#ifdef PORT
+    {   /* (the experiment's tool) BT3_B1_LOG=1: a fighter that stands whose input is dropped for "the opponent is down" */
+        extern void Port_B1Log(int fighter);
+        extern s32 BtlChar_IsDead(void *chr);
+        if (BtlChar_TestFlag(chr, 0xB1) && !BtlChar_IsDead(chr)) {
+            Port_B1Log(chr->player);
+        }
+    }
+#endif
     if ((Battle_GetWork()->flags & BTL_INPUT_FLAG_BLOCK) || BtlChar_TestFlag(chr, 0x11E) || BtlChar_TestFlag(chr, 0x11F) ||
         BtlChar_TestFlag(chr, 0xB1)) {
         block = 1;

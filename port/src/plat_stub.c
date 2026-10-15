@@ -849,6 +849,25 @@ void Port_SpectateLog(int p, int fighter, int why) {
     }
 }
 
+/* (the experiment's tool) BT3_BEAM_LOG=1: a technique's beam hits an enemy besides its own victim (eft_det_a.c) */
+void Port_BeamLog(int owner, int victim, int primary) {
+    static int on = -1;
+    if (on < 0) { on = getenv("BT3_BEAM_LOG") != NULL; }
+    if (on) {
+        fprintf(stderr, "bt3: beam of fighter %d also hits fighter %d (its own victim: %d)\n", owner, victim, primary);
+    }
+}
+
+void Port_B1Log(int fighter) {
+    static int on = -1;
+    static unsigned n[16];
+    if (on < 0) { on = getenv("BT3_B1_LOG") != NULL; }
+    if (!on || fighter < 0 || fighter >= 16) { return; }
+    if (n[fighter]++ % 300 == 0) {
+        fprintf(stderr, "bt3: fighter %d stands with its input dropped for 'the opponent is down' (%u frames)\n", fighter, n[fighter]);
+    }
+}
+
 void Port_FreezeCount(int held, int count) {
     static int on = -1, frame;
     if (on < 0) { on = getenv("BT3_FREEZE_COUNT") != NULL; }

@@ -646,6 +646,39 @@ static s32 Port_CutShown(s32 i) {
 }
 #endif
 
+#ifdef PORT
+/* For the effects that stand still while the fight does (btl_scene.c): with more than two fighters, 1 when one of
+   the two the player watches (Port_HudFighter: the player's, or the one it watches, and its target) is frozen, or
+   one of them is in a rush sequence. Somebody somewhere is in hit-stop nearly every frame with ten, and every ki
+   blast on the field stood still each time. */
+s32 Port_WatchedStopped(void) {
+    extern s32 Port_HudFighter(s32 side);
+    extern s32 BtlChar_IsFrozen(BtlCharApiChr *chr);
+    s32 s;
+
+    for (s = 0; s < 2; s++) {
+        s32 i = Port_HudFighter(s);
+        if ((u32)i < (u32)BtlChar_GetCount() &&
+            (BtlChar_IsFrozen(BtlChar_Get(i)) || BtlCharApi_IsInRushSequence(BtlChar_Get(i)->objId))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The same for a technique's camera cut (eft_a.c, EftCam_Start), which knows its fighter by object: 1 when the cut
+   may take the screen. */
+s32 Port_CutShownObj(s32 objId) {
+    BtlCharApiChr *chr;
+
+    if (BtlChar_GetCount() < 3 || objId < 0) {
+        return 1;
+    }
+    chr = BtlChar_FindByObjId(objId);
+    return chr == NULL || Port_CutShown(chr->side);
+}
+#endif
+
 /* Fighter flag 0xD3 as 0 / 1: this fighter's camera wants the whole screen. */
 s32 BtlCharApi_HasCamPriority(s32 objId) {
     BtlCharApiChr *chr = BtlChar_FindByObjId(objId);
