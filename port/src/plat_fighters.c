@@ -65,6 +65,7 @@ static FightExtra sFight[PORT_EXTRA_MAX];
 static int sFightCount;
 static int sFightRoster; /* PORT_MODE_TEAM or PORT_MODE_FFA while the sides' members are being handed over, and after */
 static const char *sFightFrom = ""; /* who asked, for the log */
+static int sFightSplit; /* the fight being set up is a split-screen one (two players) */
 /* What the last set-up decided, for the window (one of PORT_EXTRA_*; an int, the window is another thread's). */
 enum { EXTRA_NONE, EXTRA_IN, EXTRA_MODE, EXTRA_TEAMS, EXTRA_SPLIT, EXTRA_REPLAY, EXTRA_SCRIPT, EXTRA_ONLINE, EXTRA_FILES };
 static volatile int sLast = EXTRA_NONE;
@@ -81,6 +82,18 @@ static const char *setting_name(SettingName out, int index, const char *what) {
 int Port_ExtraCount(void) {
     int n = Port_Setting("extra_fighters", 0);
     return n < 0 ? 0 : n > EXTRA_MAX ? EXTRA_MAX : n;
+}
+
+/* Local players (the Experiments tab; setting local_players, 2..4): in a two-player Team Battle or Free-for-All of
+   the modes page, controller 3 plays team 1's second member and controller 4 team 2's; the screen is then in
+   quarters (src/battle/btl_cam.c). 2: the game's own two. */
+int Port_LocalPlayers(void) {
+    int n = Port_Setting("local_players", 2);
+    return n < 2 ? 2 : n > 4 ? 4 : n;
+}
+void Port_LocalPlayersSet(int n) {
+    Port_SettingSave("local_players", n < 2 ? 2 : n > 4 ? 4 : n);
+    Port_SettingsWrite();
 }
 int Port_ExtraChara(int index) {
     SettingName name;
@@ -235,6 +248,7 @@ int Port_ExtraSetup(int mode, int members0, int members1, int split, int replay,
     sFightCount = 0;
     sFightRoster = 0;
     sFightFrom = "";
+    sFightSplit = split;
     sLast = EXTRA_NONE;
     if (Port_NetActive()) {
         /* (nothing of this in an online match, whoever asks) */
@@ -270,7 +284,7 @@ int Port_ExtraSetup(int mode, int members0, int members1, int split, int replay,
                 last = EXTRA_MODE;
             } else if (script) {
                 last = EXTRA_SCRIPT;
-            } else if (split && getenv("BT3_HUMAN_PADS") == NULL) { /* (with players 3 and 4: four quarters) */
+            } else if (split && getenv("BT3_HUMAN_PADS") == NULL && Port_LocalPlayers() < 3) { /* (with players 3 and 4: four quarters) */
                 last = EXTRA_SPLIT;
             } else if (replay) {
                 last = EXTRA_REPLAY;
@@ -373,8 +387,16 @@ int Port_FightRoster(void) {
 int Port_FightPad(int k) {
     const char *p = getenv("BT3_HUMAN_PADS");
 
-    if (k < 0 || k >= sFightCount || p == NULL) {
+    if (k < 0 || k >= sFightCount) {
         return -1;
+    }
+    if (p == NULL) {
+        /* (the setting: a two-player fight of the sides' own members, each side's second member) */
+        int m = sFight[k].member, local = Port_LocalPlayers();
+        if (!sFightSplit || sFightRoster == 0 || m < 0 || m % 8 != 1) {
+            return -1;
+        }
+        return m / 8 == 0 && local >= 3 ? 2 : m / 8 == 1 && local >= 4 ? 3 : -1;
     }
     while (*p != '\0') {
         int f = atoi(p), pad = -1;

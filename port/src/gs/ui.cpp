@@ -1593,6 +1593,19 @@ static void experiments_tab(void) {
 
     ImGui::TextWrapped("Unfinished things to try. They change how the game plays, so none of them is ever used in an online match.");
     ImGui::Spacing();
+    ImGui::SeparatorText("Local players");
+    {
+        static const char *const kLocal[] = {"2 (the game's own)", "3", "4"};
+        int local = Port_LocalPlayers() - 2;
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::Combo("Players on this computer", &local, kLocal, 3)) {
+            Port_LocalPlayersSet(local + 2);
+        }
+        ImGui::TextWrapped("For a two-player Team Battle or Free-for-All of the modes page (SELECT on the main menu), with "
+                           "two members or more a team: controller 3 plays team 1's second member, controller 4 team 2's. "
+                           "The screen is split in four, one quarter a player.");
+    }
+    ImGui::Spacing();
     ImGui::SeparatorText("Extra fighters");
     if (ImGui::Checkbox("Third fighter (experimental)", &on)) {
         count = on ? 1 : 0;

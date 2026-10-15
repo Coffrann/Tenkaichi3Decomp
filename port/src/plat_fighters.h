@@ -12,6 +12,8 @@ extern "C" {
 
 /* plat_fighters.c: the settings, held to their ranges */
 int Port_ExtraCount(void);      /* the Experiments tab's switch: how many extra fighters every Duel / training fight gets */
+int Port_LocalPlayers(void);    /* 2..4: players 3 and 4 in a two-player Team Battle / Free-for-All */
+void Port_LocalPlayersSet(int n);
 int Port_ExtraChara(int index); /* extra fighter `index`: its character 0..160 */
 int Port_ExtraTeam(int index);  /* 0, 1: a player's team; -1: its own */
 int Port_ExtraLevel(int index); /* its computer level 0..29 */
