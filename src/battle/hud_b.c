@@ -2016,11 +2016,17 @@ static void HudExtra_DrawGaugeIn(HudMiniSlot *m, s32 *used, s32 i, s32 place, f3
     mtx[3][0] = dx; /* (the right side's mirroring is applied after this: the same corner on both) */
     mtx[3][1] = top;
     Vu0Cur_MulMtx(mtx);
-    Port_GsMarker(anchor);
     HudGfx_ClearAlpha();
     HudGauge_SelectSide(k);
-    HudNode_Update(gHudGauge->grp);
-    HudNode_Draw(gHudGauge->grp, 0);
+    Port_GsMarker(anchor); /* (after the side's own, which HudGauge_SelectSide sets) */
+    {
+        /* (placed from the middle: so are its life bar, ki and blast stock, which give their side's marker) */
+        extern void Port_GsMarkerForce(int effect);
+        Port_GsMarkerForce(anchor == PORT_2D_CENTER ? PORT_2D_CENTER : 0);
+        HudNode_Update(gHudGauge->grp);
+        HudNode_Draw(gHudGauge->grp, 0);
+        Port_GsMarkerForce(0);
+    }
     Vu0Cur_Pop();
     sHudMiniWho = -1;
     HudMini_Each(m, k, HudMini_Swap);
