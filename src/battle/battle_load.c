@@ -1312,6 +1312,17 @@ static void Port_LoadExtras(void) {
             side->startForm.variant = side->form.variant = 0;
         }
     }
+    {
+        /* (Local players 3 and 4, port/src/plat_fighters.c: a fight chosen for one player becomes the two players'
+           split-screen one, side 2 on controller 2, before its stage, made for the screen mode, is asked for) */
+        extern int Port_LocalQuadFight(int mode, int members0, int members1, int replay, int script);
+        if (!Battle_IsSplitScreen() && Port_LocalQuadFight(Battle_GetMode(), setup->sides[0].memberCount, setup->sides[1].memberCount,
+                                                          BattleReplay_IsActive(), Battle_GetScript() >= 0)) {
+            setup->rule.screenMode = 1;
+            setup->sides[1].control = BTL_CONTROL_PAD;
+            setup->sides[1].pad = 1;
+        }
+    }
     roster = Port_ExtraSetup(Battle_GetMode(), setup->sides[0].memberCount, setup->sides[1].memberCount, Battle_IsSplitScreen(),
                              BattleReplay_IsActive(), Battle_GetScript() >= 0);
     if (roster == 0) {

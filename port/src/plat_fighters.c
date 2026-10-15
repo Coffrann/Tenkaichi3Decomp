@@ -60,6 +60,7 @@ extern int PortA11y_Utf8(char *out, int cap, const uint16_t *str); /* gs/a11y.c:
 typedef struct FightExtra {
     int chara, costume, team, level;
     int member; /* side * 8 + index of the member of the battle setup it was made from, -1: none */
+    int pad;    /* the controller that plays it (Local players), -1: the computer */
 } FightExtra;
 static FightExtra sFight[PORT_EXTRA_MAX];
 static int sFightCount;
@@ -90,6 +91,18 @@ int Port_ExtraCount(void) {
 int Port_LocalPlayers(void) {
     int n = Port_Setting("local_players", 2);
     return n < 2 ? 2 : n > 4 ? 4 : n;
+}
+
+/* The loader asks before anything is loaded (battle_load.c, Port_LoadExtras): is this a fight of three or four
+   local players? A Team Battle or Free-for-All of the modes page with more than two fighters, Local players 3 or
+   4, chosen for one player or for two: the loader then makes it a two-player split-screen fight (side 2 played
+   on controller 2) and the screen goes into quarters. */
+static int fight_mode(int *forced);
+int Port_LocalQuadFight(int mode, int members0, int members1, int replay, int script) {
+    int forced = 0, page = fight_mode(&forced);
+
+    return !Port_NetActive() && Port_LocalPlayers() >= 3 && (page == PORT_MODE_TEAM || page == PORT_MODE_FFA) &&
+           members0 + members1 > 2 && (forced || mode == 0) && !replay && !script;
 }
 void Port_LocalPlayersSet(int n) {
     Port_SettingSave("local_players", n < 2 ? 2 : n > 4 ? 4 : n);
@@ -348,6 +361,27 @@ int Port_ExtraAdd(int side, int index, int chara, int costume, int level) {
                      side * 8 + index);
 }
 void Port_ExtraDone(void) {
+    int local = Port_LocalPlayers(), pad, k, pass;
+
+    /* Local players 3 and 4 (a split-screen fight of the sides' own members): controller 3 plays team 1's second
+       member, controller 4 team 2's; a team without one leaves its player the first fighter nobody plays. */
+    for (k = 0; k < sFightCount; k++) {
+        sFight[k].pad = -1;
+    }
+    for (pad = 2; sFightSplit && sFightRoster != 0 && pad < local; pad++) {
+        for (pass = 0; pass < 2; pass++) {
+            for (k = 0; k < sFightCount; k++) {
+                int m = sFight[k].member;
+                if (sFight[k].pad < 0 && (pass == 1 || m == (pad - 2) * 8 + 1)) {
+                    sFight[k].pad = pad;
+                    break;
+                }
+            }
+            if (k < sFightCount) {
+                break;
+            }
+        }
+    }
     if (sFightCount > 0) {
         sLast = EXTRA_IN;
         fight_log();
@@ -391,12 +425,7 @@ int Port_FightPad(int k) {
         return -1;
     }
     if (p == NULL) {
-        /* (the setting: a two-player fight of the sides' own members, each side's second member) */
-        int m = sFight[k].member, local = Port_LocalPlayers();
-        if (!sFightSplit || sFightRoster == 0 || m < 0 || m % 8 != 1) {
-            return -1;
-        }
-        return m / 8 == 0 && local >= 3 ? 2 : m / 8 == 1 && local >= 4 ? 3 : -1;
+        return sFight[k].pad; /* (the setting: Port_ExtraDone) */
     }
     while (*p != '\0') {
         int f = atoi(p), pad = -1;

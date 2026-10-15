@@ -5,9 +5,11 @@ Branch `tagteam-exp`, 2026-10-16 (4aecb72, 0345abd, 4ed4ad2, 7ef380c). Everythin
 
 ## How to play it
 
-Experiments tab, "Players on this computer": 3 or 4 (setting `local_players`). Then a two-player Team Battle or
-Free-for-All of the modes page (SELECT on the main menu), with two members or more a team. Controller 3 plays team
-1's second member, controller 4 team 2's; players 1 and 2 play the two leads as in the game's own two-player fight.
+Experiments tab, "Players on this computer": 3 or 4 (setting `local_players`). Then a Team Battle or Free-for-All
+of the modes page (SELECT on the main menu) with more than two fighters, chosen for one player or for two (one
+player's is made the two players' split-screen fight when it loads: side 2 on controller 2). Players 1 and 2 play
+the two leads; controller 3 plays team 1's second member, controller 4 team 2's (a team without one leaves its
+player the first fighter nobody plays).
 The screen is in four quarters, one a player (with three players the fourth quarter shows a fighter nobody's
 quarter shows). For tests, `BT3_HUMAN_PADS=<fighter>:<controller>,...` gives any extra fighter a controller, and
 `BT3_TEST_SCREEN=1` now also splits the demo fight (`BT3_DEMO_MODE=0`).
