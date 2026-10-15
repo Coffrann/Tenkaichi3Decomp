@@ -1925,7 +1925,7 @@ extern s32 BtlSide_GetMaxPower(s32 side);
 extern s32 BtlSide_GetParamUnk2C(s32 side);
 extern s32 BtlSide_TestFlagBE(s32 side);
 #define HUDM_SCALE 0.5f
-#define HUDM_TOP 62  /* the first small gauge's top, in the screen's 448 lines (under the side's own) */
+#define HUDM_TOP 74  /* the first small gauge's top, in the screen's 448 lines (a gap under the side's own: the user) */
 #define HUDM_STEP 30 /* from one to the next */
 typedef struct HudMiniSlot {
     HudBShake shake[3];
