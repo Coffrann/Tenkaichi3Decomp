@@ -859,6 +859,11 @@ void Port_BeamLog(int owner, int victim, int primary) {
     }
 }
 
+void Port_DmaOverflow(long used, long size) {
+    fprintf(stderr, "bt3: the frame's display list took %ld bytes, past its buffer of %ld: stopped\n", used, size);
+    abort();
+}
+
 void Port_B1Log(int fighter) {
     static int on = -1;
     static unsigned n[16];

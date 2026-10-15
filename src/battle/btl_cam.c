@@ -358,10 +358,95 @@ void BtlCam_Term(void) {
     DemoCam_Term();
 }
 
+#ifdef PORT
+/* Four local players (btl_char_flag_opp.c, Port_QuadMode): the screen in quarters. The game has two views; the
+   picture is made with them twice a frame: the update gives views 0 and 1 the top quarters (players 1 and 2), and
+   the drawing (battle.c) draws those, then gives the two views the bottom quarters (players 3 and 4) with their
+   objects' visibility, draws again, and puts the top ones back. A quarter is the whole screen's view at half its
+   size (half the distance to the screen, centred in the quarter): each player sees as much as on a full screen. */
+s32 gPortViewPass; /* 0: views 0 and 1 are the top quarters, 1: the bottom ones */
+static View sPortQuad[4];
+static s32 sPortQuadAspect = -1;
+
+static View *Port_QuadLayout(s32 q) {
+    s32 aspect = (s32)(Port_WideFactor() * 1000.0f);
+
+    if (sPortQuadAspect != aspect) {
+        s32 n;
+        Vec4 size;
+
+        sPortQuadAspect = aspect;
+        for (n = 0; n < 4; n++) {
+            View *v = &sPortQuad[n];
+            memset(v, 0, sizeof(View));
+            v->aspect = 1.1666667f;
+            Vec4_Set(&size, 1919.0f, 1935.0f, 0.1f, 16777215.0f);
+            View_SetProjection(v, &size, 433.0f * 0.5f, 1.0f, v->aspect, (n & 1) ? 2176.0f : 1920.0f,
+                               n < 2 ? 1936.0f : 2160.0f, 1.0f, 10877000.0f, 0.3f, 65536.0f, 1.0f);
+            v->scissorX0 = (n & 1) ? 257 : 0;
+            v->scissorX1 = (n & 1) ? 511 : 254;
+            v->scissorY0 = n < 2 ? 0 : 226;
+            v->scissorY1 = n < 2 ? 221 : 447;
+        }
+    }
+    return &sPortQuad[q];
+}
+
+/* Views 0 and 1 for pass `pass` (0 top, 1 bottom): their cameras. */
+void Port_QuadCams(s32 pass) {
+    s32 i;
+
+    gPortViewPass = pass;
+    for (i = 0; i < 2; i++) {
+        BtlCam_SelectView(i);
+        BtlCam_UpdateView(i);
+    }
+}
+
+/* The same, and their objects' visibility (also while the fight is paused, when the game itself leaves it as it
+   was: it would be the other pass's). */
+void Port_QuadViews(s32 pass) {
+    extern void BtlObj_UpdateVisibility(s32 view);
+    extern void BtlObj_FinishVisibility(s32 split);
+    u32 paused = Battle_GetWork()->flags & BATTLE_FLAG_PAUSE;
+    s32 i;
+
+    Port_QuadCams(pass);
+    Battle_GetWork()->flags &= ~BATTLE_FLAG_PAUSE;
+    for (i = 0; i < 2; i++) {
+        BtlCam_SelectView(i);
+        BtlCam_ApplyView(0);
+        BtlObj_UpdateVisibility(i);
+    }
+    BtlObj_FinishVisibility(1);
+    Battle_GetWork()->flags |= paused;
+}
+#endif
+
 /* Per frame: copies one side's fighter camera pose and priority into the selected view and builds it. */
 void BtlCam_UpdateView(s32 side) {
     BtlCamView *view = gBtlCam->cur;
     s32 objId = BattleSide_GetObjId(side);
+#ifdef PORT
+    {
+        extern s32 Port_QuadMode(void);
+        extern s32 Port_QuarterFighter(s32 q);
+        extern s32 Port_Spectated(s32 p);
+        extern s32 Port_FighterObjId(s32 i);
+        if (Port_QuadMode() && (side == 0 || side == 1)) {
+            s32 q = gPortViewPass * 2 + side;
+            s32 f = Port_Spectated(Port_QuarterFighter(q));
+
+            view->split = 1;
+            view->view = *Port_QuadLayout(q);
+            objId = Port_FighterObjId(f);
+            BtlCharApi_GetCamPose(objId, &view->pos, &view->rot);
+            view->priority = BtlCharApi_HasCamPriority(objId);
+            BtlCam_BuildView(view, 1);
+            return;
+        }
+    }
+#endif
 
     if (Battle_IsSplitScreen()) {
         BtlCam_SetLayout(1, 0);
@@ -572,6 +657,13 @@ s32 BtlCam_UpdateOverride(void) {
     } else {
         idx = BtlCam_GetPriorityView();
 #ifdef PORT
+        {
+            /* (four quarters: a fighter's camera asking for the screen keeps to its own quarter) */
+            extern s32 Port_QuadMode(void);
+            if (Port_QuadMode()) {
+                idx = -1;
+            }
+        }
         /* Online play: both machines run the two-player game with its two cameras, and each shows only its own
            player's view, full screen. That is this function's own case of "one view has priority", with the
            local player's view taking the place when the game itself gives none priority. */

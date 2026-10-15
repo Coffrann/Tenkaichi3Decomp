@@ -390,6 +390,52 @@ s32 Port_HudFighter(s32 side) {
     t = w == me ? Port_CamTarget(me) : gPortTarget[w];
     return (u32)t < (u32)BtlChar_GetCount() && t != w ? t : side;
 }
+/* Four local players (asked for by the user: "up to four local players", each with a quarter of the screen). The
+   picture is split in four when a split-screen fight (the game's two-player one) has extra fighters played from
+   controllers. Quarter q (0 top left, 1 top right, 2 bottom left, 3 bottom right) is controller q+1's: the fighter
+   played on it, else (a quarter nobody plays: three players, or a test) fighter 0 / 1 for the top ones and the
+   first fighter no quarter shows for the bottom ones. */
+s32 Port_QuadMode(void) {
+    extern s32 Battle_IsSplitScreen(void);
+    extern int Port_FightPad(int k);
+    s32 k;
+
+    if (BtlChar_GetCount() < 3 || !Battle_IsSplitScreen()) {
+        return 0;
+    }
+    for (k = 2; k < BtlChar_GetCount(); k++) {
+        if (Port_FightPad(k - 2) >= 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+s32 Port_QuarterFighter(s32 q) {
+    s32 slot[4] = { -1, -1, -1, -1 }, k, n;
+
+    for (k = 0; k < BtlChar_GetCount(); k++) {
+        s32 pad = BtlChar_Get(k)->pad;
+        if (Port_TargetHuman(k) && (u32)pad < 4 && slot[pad] < 0) {
+            slot[pad] = k;
+        }
+    }
+    for (n = 0; n < 4; n++) {
+        if (slot[n] >= 0) {
+            continue;
+        }
+        if (n < 2 && slot[0] != n && slot[1] != n && slot[2] != n && slot[3] != n) {
+            slot[n] = n;
+            continue;
+        }
+        for (k = 0; k < BtlChar_GetCount() && slot[n] < 0; k++) {
+            if (slot[0] != k && slot[1] != k && slot[2] != k && slot[3] != k) {
+                slot[n] = k;
+            }
+        }
+    }
+    return (u32)q < 4 && slot[q] >= 0 ? slot[q] : 0;
+}
+
 /* 1 when fighter i is watched by a player whose fighter is down. */
 s32 Port_SpectateOf(s32 i) {
     s32 p;

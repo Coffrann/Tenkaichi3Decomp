@@ -1290,7 +1290,11 @@ static void Port_LoadExtras(void) {
     /* (the tests' tool, BT3_DEMO_MODE=<n>: the demo fight is of that battle mode, 0 the versus menu's, so that a
        fight without a pad runs the sequence and the rules of a real one) */
     if (Battle_GetMode() == 7 && Port_TestDemoMode() >= 0) {
+        extern int Port_TestScreen(void);
         setup->rule.mode = Port_TestDemoMode();
+        if (Port_TestScreen() >= 0) { /* (BT3_TEST_SCREEN, which the demo's own mode had put back to one view) */
+            setup->rule.screenMode = Port_TestScreen();
+        }
     }
     /* (the tests' tool, BT3_TEAM_ROSTER: the two teams as the team select would have left them) */
     for (s = 0; s < 2; s++) {

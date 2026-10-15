@@ -17,10 +17,33 @@ extern s32 gDmaBufIdx;
 extern u32 *gDmaCur;
 extern s32 gDmaVif1Started;
 
+#ifdef PORT
+/* PC build: the display lists are 4 MB each, out of the port's region (Port_GameBigAlloc): a fight of four local
+   players draws the field four times (battle.c), and the game's 1 MB, of which a two-view frame of ten fighters
+   already takes three quarters, ran over into the heap after it (objects' memory: a crash in their drawing). The
+   heap's 1 MB if the region has none (the 32-bit program). */
+#define PORT_DMA_BIG 0x400000
+static s32 sPortDmaSize = DMA_BUF_SIZE;
+#undef DMA_BUF_SIZE
+#define DMA_BUF_SIZE sPortDmaSize
+#endif
+
 /* Allocates the two 1 MB display-list buffers and points the write cursor at the first. */
 void Dma_InitBuffers(void) {
+#ifdef PORT
+    extern unsigned Port_GameBigAlloc(int size);
+    gDmaBuf[0] = Port_GameBigAlloc(PORT_DMA_BIG);
+    gDmaBuf[1] = gDmaBuf[0] != 0 ? Port_GameBigAlloc(PORT_DMA_BIG) : 0;
+    if (gDmaBuf[0] != 0 && gDmaBuf[1] != 0) {
+        sPortDmaSize = PORT_DMA_BIG;
+    } else {
+        gDmaBuf[0] = (u32)Heap_Alloc(DMA_BUF_SIZE, 0x20, 0, HEAP_ANY);
+        gDmaBuf[1] = (u32)Heap_Alloc(DMA_BUF_SIZE, 0x20, 0, HEAP_ANY);
+    }
+#else
     gDmaBuf[0] = (u32)Heap_Alloc(DMA_BUF_SIZE, 0x20, 0, HEAP_ANY);
     gDmaBuf[1] = (u32)Heap_Alloc(DMA_BUF_SIZE, 0x20, 0, HEAP_ANY);
+#endif
     gDmaBufEnd[0] = gDmaBuf[0] + DMA_BUF_SIZE;
     gDmaBufEnd[1] = gDmaBuf[1] + DMA_BUF_SIZE;
     gDmaBufSize = DMA_BUF_SIZE;
@@ -78,6 +101,15 @@ void Dma_Flush(void) {
     p[1] = 0;
     p[2] = 0;
     p[3] = 0;
+#ifdef PORT
+    {
+        /* (a list that ran past its buffer has written over whatever follows it: stopped here, said) */
+        extern void Port_DmaOverflow(long used, long size);
+        if ((u32)(p + 4) > gDmaBufEnd[gDmaBufIdx]) {
+            Port_DmaOverflow((long)((u8 *)(p + 4) - (u8 *)gDmaBuf[gDmaBufIdx]), gDmaBufEnd[gDmaBufIdx] - gDmaBuf[gDmaBufIdx]);
+        }
+    }
+#endif
     Dma_SendVif1(gDmaBuf[gDmaBufIdx]);
     gDmaBufIdx ^= 1;
     gDmaCur = (u32 *)gDmaBuf[gDmaBufIdx];
@@ -155,7 +187,11 @@ void Dma_LendBufferTails(u32 *tail0, u32 *tail1, s32 *size) {
     gDmaBufEnd[1] = gDmaBuf[1] + 0x51000;
     *tail0 = gDmaBufEnd[0];
     *tail1 = gDmaBufEnd[1];
+#ifdef PORT
+    *size = 0x100000 - 0x51000; /* (what the console lends: the borrower's own sizes) */
+#else
     *size = DMA_BUF_SIZE - 0x51000;
+#endif
 }
 
 /* Gives the buffers their full 1 MB back. */

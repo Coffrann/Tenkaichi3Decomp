@@ -270,7 +270,7 @@ int Port_ExtraSetup(int mode, int members0, int members1, int split, int replay,
                 last = EXTRA_MODE;
             } else if (script) {
                 last = EXTRA_SCRIPT;
-            } else if (split) {
+            } else if (split && getenv("BT3_HUMAN_PADS") == NULL) { /* (with players 3 and 4: four quarters) */
                 last = EXTRA_SPLIT;
             } else if (replay) {
                 last = EXTRA_REPLAY;

@@ -326,9 +326,92 @@ s32 Battle_Draw(void) {
     return 0;
 }
 
+#ifdef PORT
+/* Four quarters (btl_cam.c, Port_QuadViews / Port_QuadCams): Battle_DrawSplit's passes, each for the four. In the
+   game's order, which matters: the stage of every view comes first (the fighters' textures take the place of the
+   stage's: drawn after a first view's fighters, the bottom quarters' stage had noise for textures), then the
+   fighters, top views and bottom ones (their objects' visibility made again for each pair), then the effects; what
+   is over the whole screen once. The update's top views are put back at the end. */
+static void Port_DrawQuad(void) {
+    extern void Port_QuadViews(s32 pass);
+    extern void Port_QuadCams(s32 pass);
+    s32 pass, i;
+
+    Dbg_ProfMark(gBattleProf);
+    Gfx_MarkPass(1);
+    for (pass = 0; pass < 2; pass++) {
+        Port_QuadCams(pass);
+        for (i = 0; i < 2; i++) {
+            BtlCam_SelectView(i);
+            BtlCam_ApplyView(1);
+            StgModel_Cull(gBtlCamView);
+            StgModel_Draw(gBtlCamView);
+        }
+    }
+    Port_QuadCams(0); /* (the top views' visibility is the update's, still there) */
+    Dbg_ProfColor(gBattleProf, 0x80FF4040);
+    Dbg_ProfMark(gBattleProf);
+    Gfx_MarkPass(3);
+    StgFx_DrawPre();
+    Dbg_ProfColor(gBattleProf, 0x80FFFFFF);
+    Dbg_ProfMark(gBattleProf);
+    Gfx_MarkPass(2);
+    BtlObjDraw_Draw();
+    Port_QuadViews(1);
+    BtlObjDraw_Draw();
+    Dbg_ProfColor(gBattleProf, 0x8040FF40);
+    Dbg_ProfMark(gBattleProf);
+    Gfx_MarkPass(3);
+    StgFx_DrawNop();
+    Dbg_ProfColor(gBattleProf, 0x80FFFFFF);
+    Dbg_ProfMark(gBattleProf);
+    Gfx_MarkPass(4);
+    Gfx_AddDefaultEnv();
+    for (pass = 0; pass < 2; pass++) {
+        Port_QuadCams(pass);
+        for (i = 0; i < 2; i++) {
+            BtlCam_SelectView(i);
+            BtlCam_ApplyView(1);
+            BtlScene_Draw(i == 0 && pass == 0);
+            Ot_Draw();
+        }
+    }
+    Port_QuadViews(0);
+    Dbg_ProfColor(gBattleProf, 0x804040FF);
+    Dbg_ProfMark(gBattleProf);
+    Gfx_MarkPass(3);
+    StgFx_DrawPost();
+    Dbg_ProfColor(gBattleProf, 0x80FFFFFF);
+    Dbg_ProfMark(gBattleProf);
+    Gfx_MarkPass(0);
+    BtlGame_Draw();
+    Dbg_ProfColor(gBattleProf, 0x80FF40FF);
+    Dbg_ProfMark(gBattleProf);
+    Gfx_MarkPass(0);
+    Font_FlushAll();
+    FontIcon_Stub23D1E0();
+    Dbg_ProfColor(gBattleProf, 0x80FF40FF);
+    Dbg_ProfMark(gBattleProf);
+    Gfx_MarkPass(3);
+    StgFx_DrawOverlay();
+    Dbg_ProfColor(gBattleProf, 0x80FFFFFF);
+    Gfx_MarkPass(0);
+}
+#endif
+
 /* Draws the frame with two views: the stage pass and the fighter pass run once per view, the rest once. */
 s32 Battle_DrawSplit(void) {
     s32 i;
+
+#ifdef PORT
+    {
+        extern s32 Port_QuadMode(void);
+        if (Port_QuadMode()) {
+            Port_DrawQuad();
+            return 0;
+        }
+    }
+#endif
 
     Dbg_ProfMark(gBattleProf);
     Gfx_MarkPass(1);
