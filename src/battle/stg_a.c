@@ -385,6 +385,20 @@ void StgFrustum_Build(StgView *view, StgFrustum *fr) {
 #ifdef PORT
     fr->plane[0].z *= Port_WideFactor(); /* the side planes of a 16:9 view: a third more half width */
     fr->plane[1].z *= Port_WideFactor();
+    {
+        /* Four local players (btl_cam.c, Port_QuadLayout): a quarter is the whole view at half size and player 3 of
+           three has a whole-width bottom half, neither of which the two fixed sets of planes here are made for (the
+           full screen, and the middle half of it that a split screen half shows): the stage was cut at the sides
+           (seen by the user: the sky and the ground missing at player 3's sides). The planes are made wide enough
+           for any of them; what more is drawn is off the screen. */
+        extern s32 Port_QuadMode(void);
+        if (Port_QuadMode()) {
+            fr->plane[0].z *= 3.0f;
+            fr->plane[1].z *= 3.0f;
+            fr->plane[2].z *= 2.0f;
+            fr->plane[3].z *= 2.0f;
+        }
+    }
 #endif
     for (i = 0; i < 4; i++) {
         Vec3_Normalize(&fr->plane[i], &fr->plane[i]);
@@ -402,6 +416,15 @@ void StgFrustum_Build(StgView *view, StgFrustum *fr) {
 #ifdef PORT
     right *= Port_WideFactor();
     left *= Port_WideFactor();
+    {
+        extern s32 Port_QuadMode(void);
+        if (Port_QuadMode()) { /* (as the planes above) */
+            right *= 3.0f;
+            left *= 3.0f;
+            top *= 2.0f;
+            bottom *= 2.0f;
+        }
+    }
 #endif
     k = 1.0f / (right - left);
     fr->proj.m[0][0] = (view->nearZ + view->nearZ) * k;

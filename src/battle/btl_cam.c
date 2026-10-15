@@ -380,12 +380,10 @@ static View *Port_QuadLayout(s32 q) {
             View *v = &sPortQuad[n];
             memset(v, 0, sizeof(View));
             v->aspect = 1.1666667f;
-            /* (4, the bottom half: as high as a quarter, as wide as the screen. At the screen's own distance: the one
-               player's picture across, its middle band in height. At a quarter's (half that) it was twice as wide
-               an angle as the game ever shows, past what the sky and the ground are made for: seen by the user,
-               "the sky doesn't go to and the ground is culling" outside the middle) */
+            /* (4, the bottom half: as high as a quarter, as wide as the screen: the same picture, more of it to the
+               sides; the stage's culling is made wide enough for it, stg_a.c) */
             Vec4_Set(&size, n == 4 ? 2047.0f : 1919.0f, 1935.0f, 0.1f, 16777215.0f);
-            View_SetProjection(v, &size, n == 4 ? 433.0f : 433.0f * 0.5f, 1.0f, v->aspect, n == 4 ? 2048.0f : (n & 1) ? 2176.0f : 1920.0f,
+            View_SetProjection(v, &size, 433.0f * 0.5f, 1.0f, v->aspect, n == 4 ? 2048.0f : (n & 1) ? 2176.0f : 1920.0f,
                                n < 2 ? 1936.0f : 2160.0f, 1.0f, 10877000.0f, 0.3f, 65536.0f, 1.0f);
             v->scissorX0 = n != 4 && (n & 1) ? 257 : 0;
             v->scissorX1 = n == 4 || (n & 1) ? 511 : 254;
