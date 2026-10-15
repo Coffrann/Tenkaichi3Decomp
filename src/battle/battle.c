@@ -335,13 +335,14 @@ s32 Battle_Draw(void) {
 static void Port_DrawQuad(void) {
     extern void Port_QuadViews(s32 pass);
     extern void Port_QuadCams(s32 pass);
+    extern s32 Port_QuadPassViews(s32 pass); /* (two views a pass; the bottom one alone with three players) */
     s32 pass, i;
 
     Dbg_ProfMark(gBattleProf);
     Gfx_MarkPass(1);
     for (pass = 0; pass < 2; pass++) {
         Port_QuadCams(pass);
-        for (i = 0; i < 2; i++) {
+        for (i = 0; i < Port_QuadPassViews(pass); i++) {
             BtlCam_SelectView(i);
             BtlCam_ApplyView(1);
             StgModel_Cull(gBtlCamView);
@@ -369,7 +370,7 @@ static void Port_DrawQuad(void) {
     Gfx_AddDefaultEnv();
     for (pass = 0; pass < 2; pass++) {
         Port_QuadCams(pass);
-        for (i = 0; i < 2; i++) {
+        for (i = 0; i < Port_QuadPassViews(pass); i++) {
             BtlCam_SelectView(i);
             BtlCam_ApplyView(1);
             BtlScene_Draw(i == 0 && pass == 0);

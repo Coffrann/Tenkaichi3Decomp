@@ -417,6 +417,21 @@ s32 Port_QuadMode(void) {
     }
     return 0;
 }
+/* Three local players (asked for by the user: "two top, one wide bottom"): the quarters with nobody on controller
+   4; player 3 has the whole bottom half (btl_cam.c, layout 4). */
+s32 Port_QuadThree(void) {
+    s32 k;
+
+    if (!Port_QuadMode()) {
+        return 0;
+    }
+    for (k = 0; k < BtlChar_GetCount(); k++) {
+        if (Port_TargetHuman(k) && BtlChar_Get(k)->pad == 3) {
+            return 0;
+        }
+    }
+    return 1;
+}
 s32 Port_QuarterFighter(s32 q) {
     s32 slot[4] = { -1, -1, -1, -1 }, k, n;
 

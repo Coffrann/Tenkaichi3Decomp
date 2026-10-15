@@ -365,7 +365,7 @@ void BtlCam_Term(void) {
    objects' visibility, draws again, and puts the top ones back. A quarter is the whole screen's view at half its
    size (half the distance to the screen, centred in the quarter): each player sees as much as on a full screen. */
 s32 gPortViewPass; /* 0: views 0 and 1 are the top quarters, 1: the bottom ones */
-static View sPortQuad[4];
+static View sPortQuad[5]; /* the four quarters, and (4) the whole bottom half: three players */
 static s32 sPortQuadAspect = -1;
 
 static View *Port_QuadLayout(s32 q) {
@@ -376,20 +376,36 @@ static View *Port_QuadLayout(s32 q) {
         Vec4 size;
 
         sPortQuadAspect = aspect;
-        for (n = 0; n < 4; n++) {
+        for (n = 0; n < 5; n++) {
             View *v = &sPortQuad[n];
             memset(v, 0, sizeof(View));
             v->aspect = 1.1666667f;
-            Vec4_Set(&size, 1919.0f, 1935.0f, 0.1f, 16777215.0f);
-            View_SetProjection(v, &size, 433.0f * 0.5f, 1.0f, v->aspect, (n & 1) ? 2176.0f : 1920.0f,
+            /* (4, the bottom half: as high as a quarter, as wide as the screen. At the screen's own distance: the one
+               player's picture across, its middle band in height. At a quarter's (half that) it was twice as wide
+               an angle as the game ever shows, past what the sky and the ground are made for: seen by the user,
+               "the sky doesn't go to and the ground is culling" outside the middle) */
+            Vec4_Set(&size, n == 4 ? 2047.0f : 1919.0f, 1935.0f, 0.1f, 16777215.0f);
+            View_SetProjection(v, &size, n == 4 ? 433.0f : 433.0f * 0.5f, 1.0f, v->aspect, n == 4 ? 2048.0f : (n & 1) ? 2176.0f : 1920.0f,
                                n < 2 ? 1936.0f : 2160.0f, 1.0f, 10877000.0f, 0.3f, 65536.0f, 1.0f);
-            v->scissorX0 = (n & 1) ? 257 : 0;
-            v->scissorX1 = (n & 1) ? 511 : 254;
+            v->scissorX0 = n != 4 && (n & 1) ? 257 : 0;
+            v->scissorX1 = n == 4 || (n & 1) ? 511 : 254;
             v->scissorY0 = n < 2 ? 0 : 226;
             v->scissorY1 = n < 2 ? 221 : 447;
         }
     }
     return &sPortQuad[q];
+}
+
+/* The layout of quarter q: its own, or the whole bottom half for player 3 of three. */
+static s32 Port_QuadSlot(s32 q) {
+    extern s32 Port_QuadThree(void);
+    return q == 2 && Port_QuadThree() ? 4 : q;
+}
+
+/* How many views pass `pass` has: two, or one at the bottom with three players. */
+s32 Port_QuadPassViews(s32 pass) {
+    extern s32 Port_QuadThree(void);
+    return pass == 1 && Port_QuadThree() ? 1 : 2;
 }
 
 /* Where a point of the world is in quarter q's picture (Port_ProjectPoint's units), through a view of its own made
@@ -403,7 +419,7 @@ s32 Port_QuarterProject(s32 q, Vec4 *pos, s32 *x, s32 *y) {
     View *was = gBtlCamView;
     s32 r;
 
-    tmp.view = *Port_QuadLayout(q & 3);
+    tmp.view = *Port_QuadLayout(Port_QuadSlot(q & 3));
     BtlCharApi_GetCamPose(Port_FighterObjId(Port_Spectated(Port_QuarterFighter(q & 3))), &tmp.pos, &tmp.rot);
     BtlCam_BuildView(&tmp, 0);
     gBtlCamView = &tmp.view;
@@ -429,16 +445,21 @@ void Port_QuadViews(s32 pass) {
     extern void BtlObj_UpdateVisibility(s32 view);
     extern void BtlObj_FinishVisibility(s32 split);
     u32 paused = Battle_GetWork()->flags & BATTLE_FLAG_PAUSE;
-    s32 i;
+    s32 i, n = Port_QuadPassViews(pass);
 
     Port_QuadCams(pass);
     Battle_GetWork()->flags &= ~BATTLE_FLAG_PAUSE;
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < n; i++) {
         BtlCam_SelectView(i);
         BtlCam_ApplyView(0);
         BtlObj_UpdateVisibility(i);
     }
-    BtlObj_FinishVisibility(1);
+    BtlObj_FinishVisibility(n == 2);
+    if (n == 1) {
+        /* (one view: the objects' pass loads no view of its own then, BtlObjDraw_ApplyView) */
+        BtlCam_SelectView(0);
+        BtlCam_ApplyView(1);
+    }
     Battle_GetWork()->flags |= paused;
 }
 #endif
@@ -467,7 +488,7 @@ void BtlCam_UpdateView(s32 side) {
             s32 f = Port_Spectated(Port_QuarterFighter(q));
 
             view->split = 1;
-            view->view = *Port_QuadLayout(q);
+            view->view = *Port_QuadLayout(Port_QuadSlot(q));
             objId = Port_FighterObjId(f);
             sPortViewObj[side] = objId;
             BtlCharApi_GetCamPose(objId, &view->pos, &view->rot);

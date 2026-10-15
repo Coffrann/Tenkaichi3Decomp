@@ -2058,7 +2058,8 @@ s32 Port_MultiHud(void) {
    watches). */
 s32 Port_HudPartCount(void) {
     extern s32 Port_QuadMode(void);
-    return Port_QuadMode() ? 4 : 2;
+    extern s32 Port_QuadThree(void);
+    return Port_QuadMode() ? (Port_QuadThree() ? 3 : 4) : 2;
 }
 s32 Port_HudPartFighter(s32 r) {
     extern s32 Port_QuadMode(void);
@@ -2073,7 +2074,8 @@ static void HudExtra_DrawParts(void) {
     extern s32 Port_Spectated(s32 p);
     extern s32 Port_CamTarget(s32 i);
     extern s32 gPortTarget[];
-    s32 quad = Port_QuadMode(), n = quad ? 4 : 2, r, role;
+    extern s32 Port_QuadThree(void);
+    s32 quad = Port_QuadMode(), n = Port_HudPartCount(), r, role, three = Port_QuadThree();
 
     for (r = 0; r < n; r++) {
         s32 me = quad ? Port_QuarterFighter(r) : r;
@@ -2081,6 +2083,7 @@ static void HudExtra_DrawParts(void) {
         s32 t = w == me ? Port_CamTarget(me) : gPortTarget[w];
         f32 top = quad && r >= 2 ? 228.0f : 2.0f;
         s32 right = r & 1; /* (a part on the right half of the screen) */
+        s32 wide = three && r == 2; /* (the whole bottom half: its target's gauge at the screen's right edge) */
 
         for (role = 0; role < 2; role++) {
             s32 slot = r * 2 + role, who = role == 0 ? w : t;
@@ -2096,7 +2099,7 @@ static void HudExtra_DrawParts(void) {
                                      right ? 256.0f + HUDP_GAP : 0.0f, right ? PORT_2D_CENTER : PORT_2D_LEFT);
             } else { /* (the target's: right, mirrored) */
                 HudExtra_DrawGaugeIn(&sHudPart[slot], &sHudPartUsed[slot], who, HUD_SCR(1), HUDP_SCALE, top,
-                                     right ? 0.0f : 255.0f + HUDP_GAP, right ? PORT_2D_RIGHT : PORT_2D_CENTER);
+                                     right || wide ? 0.0f : 255.0f + HUDP_GAP, right || wide ? PORT_2D_RIGHT : PORT_2D_CENTER);
             }
         }
     }
@@ -2194,7 +2197,7 @@ static void HudExtra_DrawTargetMark(void) {
     s32 p, locked, ax, ay, fx, fy, h, s, tip;
     s32 quad = Port_QuadMode(); /* (four quarters: each player's marker in its own quarter, through its camera) */
 
-    for (p = 0; p < (quad ? 4 : 2); p++) {
+    for (p = 0; p < (quad ? Port_HudPartCount() : 2); p++) {
         if (quad) {
             if (!Port_TargetMark(Port_QuarterFighter(p), &head, &feet, &locked) || !Port_QuarterProject(p, &head, &ax, &ay) ||
                 !Port_QuarterProject(p, &feet, &fx, &fy)) {

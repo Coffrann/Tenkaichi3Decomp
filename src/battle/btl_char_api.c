@@ -664,7 +664,8 @@ s32 Port_WatchedStopped(void) {
     extern s32 Port_Spectated(s32 p);
     s32 quad = Port_QuadMode(); /* (four quarters: the four players' fighters; their targets are not looked at) */
 
-    for (s = 0; s < (quad ? 4 : 2); s++) {
+    extern s32 Port_QuadThree(void);
+    for (s = 0; s < (quad ? (Port_QuadThree() ? 3 : 4) : 2); s++) {
         s32 i = quad ? Port_Spectated(Port_QuarterFighter(s)) : Port_HudFighter(s);
         if ((u32)i < (u32)BtlChar_GetCount() &&
             (BtlChar_IsFrozen(BtlChar_Get(i)) || BtlCharApi_IsInRushSequence(BtlChar_Get(i)->objId))) {
