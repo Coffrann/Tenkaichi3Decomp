@@ -1820,6 +1820,10 @@ static void controls_tab(void) {
     ImGui::RadioButton("Player 1", &player, 0);
     ImGui::SameLine();
     ImGui::RadioButton("Player 2", &player, 1);
+    ImGui::SameLine();
+    ImGui::RadioButton("Player 3", &player, 2); // (players 3 and 4: four local players, Experiments tab)
+    ImGui::SameLine();
+    ImGui::RadioButton("Player 4", &player, 3);
     int *slot = PortInput_PadSlot(player), *keys = PortInput_Keys(player), *pads = PortInput_PadButtons(player);
     SDL_JoystickID *ids = SDL_GetGamepads(&count);
     if (*slot < 0) {
@@ -2081,13 +2085,21 @@ static void modes_draw(const PortModesView &v) {
     }
     if (!v.set || !v.hint) { // the screen reader: the set when it comes up, then the entry under the cursor when it changes
         said = -1;
-    } else if (v.cursor != said && v.cursor >= 0 && v.cursor < PORT_MODE_COUNT - 1) {
+    } else if (v.players && v.cursor + 10 != said && v.cursor >= 0 && v.cursor < 4) { // (the number of players)
+        char speak[96];
+        snprintf(speak, sizeof(speak), "%s, %d of 4", Port_ModesPlayersName(v.cursor + 1), v.cursor + 1);
+        if (said < 10) {
+            PortA11y_Say(PortA11y_Label("Players"), 1);
+        }
+        PortA11y_Say(speak, said < 10 ? 0 : 1);
+        said = v.cursor + 10;
+    } else if (!v.players && v.cursor != said && v.cursor >= 0 && v.cursor < PORT_MODE_COUNT - 1) {
         char speak[96];
         snprintf(speak, sizeof(speak), "%s, %d of %d", Port_ModesName(v.cursor + 1), v.cursor + 1, PORT_MODE_COUNT - 1);
-        if (said < 0) {
+        if (said < 0 || said >= 10) {
             PortA11y_Say(PortA11y_Label("Extra modes"), 1);
         }
-        PortA11y_Say(speak, said < 0 ? 0 : 1);
+        PortA11y_Say(speak, said < 0 || said >= 10 ? 0 : 1);
         said = v.cursor;
     }
 }
