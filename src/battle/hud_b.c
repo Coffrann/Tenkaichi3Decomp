@@ -2054,6 +2054,19 @@ s32 Port_MultiHud(void) {
     return BtlChar_GetCount() > 2 && Battle_IsSplitScreen();
 }
 
+/* How many parts the screen has (4 quarters, else 2 halves) and part r's fighter (its player's, or the one it
+   watches). */
+s32 Port_HudPartCount(void) {
+    extern s32 Port_QuadMode(void);
+    return Port_QuadMode() ? 4 : 2;
+}
+s32 Port_HudPartFighter(s32 r) {
+    extern s32 Port_QuadMode(void);
+    extern s32 Port_QuarterFighter(s32 q);
+    extern s32 Port_Spectated(s32 p);
+    return Port_Spectated(Port_QuadMode() ? Port_QuarterFighter(r) : r);
+}
+
 static void HudExtra_DrawParts(void) {
     extern s32 Port_QuadMode(void);
     extern s32 Port_QuarterFighter(s32 q);

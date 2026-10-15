@@ -740,6 +740,118 @@ void HudCombo_DrawText(void) {
     }
 }
 
+#ifdef PORT
+/* ---- each part of a split screen its own hit and damage counter (the user: "the hit counter and damage counter
+ * to be per screen"; the easy version: the combo on the part's player's target, as the game's own counter of a
+ * side shows the combo its opponent takes, so a teammate's hits on the same enemy count too) ----
+ * The counter of every part is the game's tree again, at half size under the part's gauges, with a state of its
+ * own (the side's values swapped in while it is fed, updated and drawn, as the parts' gauges, hud_b.c). Its
+ * technique name line too. The game's two counters are not drawn then (hud_a.c). */
+typedef struct HudComboSlot {
+    s32 msgState, dmgState, hitState, textState, msg, damage, damageFrom;
+    u32 hits;
+    s32 hitsRaw, hitsPrev, text;
+    Ramp msgRamp, textRamp, dmgRamp, hitRamp, countRamp;
+    u16 lastDigit;
+    s32 textPos[2];
+    f32 textAlpha;
+    s32 who; /* 1 + the fighter it was last fed for, 0: never */
+} HudComboSlot;
+static HudComboSlot sComboPart[4];
+
+static void HudCombo_SwapBytes(void *a, void *b, u32 size) {
+    u8 t[64];
+    u32 n;
+    for (n = 0; n < size; n += sizeof(t)) {
+        u32 c = size - n < sizeof(t) ? size - n : sizeof(t);
+        memcpy(t, (u8 *)a + n, c);
+        memcpy((u8 *)a + n, (u8 *)b + n, c);
+        memcpy((u8 *)b + n, t, c);
+    }
+}
+static void HudCombo_SlotSwap(HudComboSlot *m, s32 k) {
+    HudCombo *w = gHudCombo;
+#define HCS(f) HudCombo_SwapBytes(&m->f, &w->f[k], sizeof(m->f))
+    HCS(msgState); HCS(dmgState); HCS(hitState); HCS(textState); HCS(msg); HCS(damage); HCS(damageFrom); HCS(hits);
+    HCS(hitsRaw); HCS(hitsPrev); HCS(text); HCS(msgRamp); HCS(textRamp); HCS(dmgRamp); HCS(hitRamp); HCS(countRamp);
+    HCS(lastDigit); HCS(textPos); HCS(textAlpha);
+#undef HCS
+}
+
+/* A part's counter starts off the screen (nothing on show), as at the start of a fight. */
+static void HudCombo_SlotOff(HudComboSlot *m) {
+    memset(m, 0, sizeof(*m));
+    m->msgState = 4;
+    m->textState = 4;
+    m->dmgState = HUD_COMBO_ST_OFF;
+    m->hitState = HUD_COMBO_ST_OFF;
+    m->textPos[0] = m->textPos[1] = -1;
+}
+
+void HudCombo_ResetParts(void) {
+    s32 r;
+    for (r = 0; r < 4; r++) {
+        HudCombo_SlotOff(&sComboPart[r]);
+    }
+}
+
+/* Draws every part's counter (Hud_Draw, in place of the two sides' with Port_MultiHud). */
+void HudCombo_DrawParts(HudCNode *root) {
+    typedef f32 HudCMtx[4][4];
+    extern void Mtx_StoreIdentity(HudCMtx m);
+    extern void Vu0Cur_Push(void);
+    extern void Vu0Cur_Pop(void);
+    extern void Vu0Cur_MulMtx(HudCMtx m);
+    extern void HudNode_Update(HudCNode *node);
+    extern void HudNode_Draw(HudCNode *node, s32 arg);
+    extern void Port_GsMarkerForce(int effect);
+    extern s32 Port_HudPartCount(void);
+    extern s32 Port_HudPartFighter(s32 r);
+    extern s32 Port_QuadMode(void);
+    extern void Port_HudComboFeed(s32 side, s32 who); /* hud_a.c */
+    s32 k = HUD_SCR(0) == 0 ? 0 : 1; /* (the side whose counter stands on the left: not mirrored) */
+    s32 was = gHudCombo->side, n = Port_HudPartCount(), quad = Port_QuadMode(), r;
+    HudCMtx mtx;
+
+    for (r = 0; r < n; r++) {
+        HudComboSlot *m = &sComboPart[r];
+        s32 who = Port_HudPartFighter(r), right = r & 1;
+        s32 *pos;
+
+        if (m->who != who + 1) { /* (a new fighter in the part: its counter starts again) */
+            HudCombo_SlotOff(m);
+            m->who = who + 1;
+        }
+        HudCombo_SlotSwap(m, k);
+        Port_HudComboFeed(k, who);
+        Vu0Cur_Push();
+        Mtx_StoreIdentity(mtx);
+        mtx[0][0] = 0.5f;
+        mtx[1][1] = 0.5f;
+        mtx[3][0] = right ? 256.0f + 8.0f : 0.0f;
+        mtx[3][1] = quad && r >= 2 ? 226.0f + 20.0f : 20.0f; /* (under the part's gauges) */
+        Vu0Cur_MulMtx(mtx);
+        HudCombo_SelectSide(k);
+        if (right) {
+            Port_GsMarker(PORT_2D_CENTER);
+            Port_GsMarkerForce(PORT_2D_CENTER);
+        }
+        HudNode_Update(root);
+        HudNode_Draw(root, 0);
+        Vu0Cur_Pop();
+        pos = gHudCombo->textPos[k];
+        if (pos[0] >= 0 && pos[1] >= 0) {
+            Port_GsMarker(right ? PORT_2D_CENTER : PORT_2D_LEFT);
+            BtlMenu_SetScript2(BtlCtrl_GetObj(who)->skillScript);
+            BtlText_DrawEntryName(pos[0], pos[1], gHudCombo->text[k], 0, gHudCombo->textAlpha[k]);
+        }
+        Port_GsMarkerForce(0);
+        HudCombo_SlotSwap(m, k);
+    }
+    gHudCombo->side = was;
+}
+#endif
+
 /* Battle start: allocates the work, 12 sprites and 6 nodes and builds the tree; returns the root through `out`. */
 void HudCombo_Init(HudCNode **out, HudCRes *res) {
     s32 i;

@@ -133,6 +133,7 @@ extern int Port_ClashSquare(void), Port_NetActive(void), Port_NetMe(void); /* po
 extern int Port_DemoHud(void); /* port/src/plat_stub.c */
 extern void HudGauge_DrawExtras(void), HudGauge_ResetExtras(void); /* hud_b.c */
 extern s32 Port_MultiHud(void); /* hud_b.c: a split screen with more than two fighters (each part its own HUD) */
+extern void HudCombo_DrawParts(HudNode *root), HudCombo_ResetParts(void); /* hud_c_b.c */
 #endif
 extern void HudPrompt_SetCommand(s32 side, s32 count, s32 *buttons, s32 *kinds, s32 idx);
 extern void HudPrompt_ClearCommand(s32 side);
@@ -550,10 +551,56 @@ void Hud_PreUpdate(void) {
 }
 
 /* Round reset: resets the parts and hides them all. */
+#ifdef PORT
+/* A split screen part's counter (hud_c_b.c, HudCombo_DrawParts): side `side` of the combo part is fed fighter
+   `who`'s combo as Hud_PreUpdate feeds a side its own (hits, damage, the technique name, the messages). */
+void Port_HudComboFeed(s32 side, s32 who) {
+    s32 isNew, v;
+
+    if (!(Battle_GetWork()->flags & BATTLE_FLAG_PAUSE)) {
+        isNew = BtlSide_IsComboHitNew(who);
+        if (isNew == 1) {
+            v = BtlCtrl_GetClashCount(who);
+            HudCombo_SetHits(side, v != 0 ? v : BtlSide_GetComboHits(who));
+        }
+        if (BtlCtrl_GetOppUnkD50(who)) {
+            v = BtlSide_GetComboDamage(who);
+            if (v >= 0) {
+                HudCombo_SetDamage(side, v, isNew);
+            }
+        }
+        if (!BtlSide_IsComboShown(who)) {
+            HudCombo_SetHits(side, 0);
+            HudCombo_SetDamage(side, -1, isNew);
+        }
+    }
+    v = BtlCtrl_GetFlagDEtoE2(who);
+    if (v >= 0) {
+        HudCombo_SetText(side, v);
+    }
+    if (BtlCtrl_IsFlag6Raised(who)) {
+        HudCombo_SetMessage(side, 1);
+    }
+    if (BtlCtrl_TestFlag71(who)) {
+        HudCombo_SetMessage(side, 0);
+    }
+    if (BtlCtrl_IsFlag5RaisedInFight(who)) {
+        HudCombo_SetMessage(side, 2);
+    }
+    if (BtlCtrl_TestFlagE3(who)) {
+        HudCombo_SetMessage(side, 3);
+    }
+    if (BtlCtrl_IsFlag9CRaised(who)) {
+        HudCombo_SetMessage(side, 4);
+    }
+}
+#endif
+
 void Hud_Reset(void) {
     HudGauge_Reset();
 #ifdef PORT
     HudGauge_ResetExtras();
+    HudCombo_ResetParts();
 #endif
     HudTeam_Reset();
     HudCombo_Reset();
@@ -686,6 +733,11 @@ void Hud_Draw(void) {
                     HudPrompt_DrawNames();
                 }
                 if (gHud->flags & HUD_SHOW_COMBO) {
+#ifdef PORT
+                    if (Port_MultiHud()) { /* (each part of a split screen its own: hud_c_b.c) */
+                        HudCombo_DrawParts(gHud->combo);
+                    } else {
+#endif
                     HudCombo_SelectSide(0);
                     HudNode_Update(gHud->combo);
                     HudNode_Draw(gHud->combo, 0);
@@ -693,6 +745,9 @@ void Hud_Draw(void) {
                     HudNode_Update(gHud->combo);
                     HudNode_Draw(gHud->combo, 0);
                     HudCombo_DrawText();
+#ifdef PORT
+                    }
+#endif
                 }
                 if (gHud->flags & HUD_SHOW_NOTICE) {
                     HudNode_Update(gHud->notice);
@@ -784,6 +839,11 @@ void Hud_Draw(void) {
             HudPrompt_DrawNames();
         }
         if (gHud->flags & HUD_SHOW_COMBO) {
+#ifdef PORT
+            if (Port_MultiHud()) { /* (each part of a split screen its own: hud_c_b.c) */
+                HudCombo_DrawParts(gHud->combo);
+            } else {
+#endif
             HudCombo_SelectSide(0);
             HudNode_Update(gHud->combo);
             HudNode_Draw(gHud->combo, 0);
@@ -791,6 +851,9 @@ void Hud_Draw(void) {
             HudNode_Update(gHud->combo);
             HudNode_Draw(gHud->combo, 0);
             HudCombo_DrawText();
+#ifdef PORT
+            }
+#endif
         }
         if (gHud->flags & HUD_SHOW_NOTICE) {
             HudNode_Update(gHud->notice);
