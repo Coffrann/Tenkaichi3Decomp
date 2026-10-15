@@ -74,11 +74,27 @@ s32 BtlCharSnd_IsLoopPlaying(s32 player, s32 kind, s32 id) {
     return 0;
 }
 
+#ifdef PORT
+/* More than two fighters: the list holds four requests a frame, and a looping sound (a ki charge) that is not asked
+   for again is stopped, so with ten fighters a charge's loop was cut and started again whenever the list was full.
+   A request that does not fit is still remembered here for that test (it starts nothing). */
+#define PORT_SND_OVER 32
+static struct { s32 owner, kind, id; } sPortSndOver[PORT_SND_OVER];
+static s32 sPortSndOverN;
+#endif
+
 /* 1 when the request list holds this sound for this owner. */
 s32 BtlCharSnd_IsRequested(s32 owner, s32 kind, s32 id) {
     BtlFlagSndReqList *list = &gBtlChars->snd;
     s32 i;
 
+#ifdef PORT
+    for (i = 0; i < sPortSndOverN; i++) {
+        if (sPortSndOver[i].owner == owner && sPortSndOver[i].kind == kind && sPortSndOver[i].id == id) {
+            return 1;
+        }
+    }
+#endif
     for (i = 0; i < list->count; i++) {
         if (owner == list->req[i].p.owner && id == list->req[i].p.id && kind == list->req[i].p.kind) {
             return 1;
@@ -96,6 +112,14 @@ void BtlCharSnd_Request(Vec4 *pos, s32 owner, s32 kind, f32 near, f32 far, s32 i
     if (gBtlChars != NULL) {
         ok = list->count < 4;
         req = &list->req[list->count];
+#ifdef PORT
+        if (!ok && sPortSndOverN < PORT_SND_OVER) {
+            sPortSndOver[sPortSndOverN].owner = owner;
+            sPortSndOver[sPortSndOverN].kind = kind;
+            sPortSndOver[sPortSndOverN].id = (u8)id;
+            sPortSndOverN++;
+        }
+#endif
         if (ok) {
             Vec4_Copy(&req->pos, pos);
             req->p.owner = owner;
@@ -216,6 +240,9 @@ void BtlCharSnd_ClearRequests(void) {
         p->owner = -1;
     }
     list->count = 0;
+#ifdef PORT
+    sPortSndOverN = 0;
+#endif
 }
 
 /* Plays the queued requests, then stops the looping sounds nobody asked for this frame. */
@@ -241,8 +268,10 @@ void BtlCharSnd_PlayRequests(void) {
         if (BtlChar_TestMemberUnk70(chr)) {
             chara = 0x56;
         }
-#ifdef PORT /* (the experiment's third fighter: the streamed voices have a player for each of two fighters) */
-        if (owner >= 2 && req->p.kind >= 4 && req->p.kind <= 7) {
+#ifdef PORT /* (the experiment's third fighter: the streamed voices have a player for each of two fighters, and
+               the fighters' own banks (kind = player + 2) are those of two: fighters 6 to 9 read past the end of
+               gBtlSndBankMask) */
+        if (owner >= 2 && req->p.kind >= 4) {
             continue;
         }
 #endif
@@ -277,6 +306,18 @@ void BtlCharSnd_PlayRequests(void) {
     }
     BtlCharSnd_StopUnrequestedLoops(BtlChar_Get(0));
     BtlCharSnd_StopUnrequestedLoops(BtlChar_Get(1));
+#ifdef PORT
+    {
+        /* More than two fighters: the others' looping sounds too (an extra fighter's ki charge played on forever:
+           the user, "a constant ki charge sound") */
+        extern s32 BtlChar_GetCount(void);
+        for (i = 2; i < BtlChar_GetCount(); i++) {
+            if (BtlChar_Get(i) != NULL) {
+                BtlCharSnd_StopUnrequestedLoops(BtlChar_Get(i));
+            }
+        }
+    }
+#endif
 }
 
 /* Queues a sound that belongs to no fighter. */
