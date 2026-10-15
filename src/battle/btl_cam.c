@@ -383,6 +383,15 @@ void BtlCam_UpdateView(s32 side) {
             }
         }
     }
+    {
+        /* (spectating, btl_char_flag_opp.c: a player whose fighter is down sees the camera of the one it watches) */
+        extern s32 Port_Spectated(s32 p);
+        extern s32 Port_FighterObjId(s32 i); /* (an extra fighter's object; the two sides' are the setup's) */
+        s32 w = Port_Spectated(side);
+        if (w != side) {
+            objId = w >= 2 ? Port_FighterObjId(w) : BattleSide_GetObjId(w);
+        }
+    }
 #endif
     BtlCharApi_GetCamPose(objId, &view->pos, &view->rot);
     view->priority = BtlCharApi_HasCamPriority(objId);

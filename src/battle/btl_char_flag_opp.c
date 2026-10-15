@@ -130,6 +130,8 @@ static s32 sPortLock[PORT_FIGHTERS];  /* 1 + the chosen enemy, or 0 */
 static s32 sPortLockAuto[PORT_FIGHTERS]; /* the choice was the game's (the nearest, at the start or when the one
                                             before went down), not a flick */
 static s32 sPortLockNew[PORT_FIGHTERS]; /* chosen and not the target yet: no hold keeps the old one */
+static s32 sPortWatch[2] = { -1, -1 };  /* spectating (below): the fighter player p watches, or -1 */
+static s32 sPortWatchWait[2];          /* frames since player p's fighter went down */
 extern s32 BattleSide_IsCpu(s32 side);                  /* battle_load.c */
 extern s32 BtlInput_IsPressed(BtlFlagChr *chr, u32 mask); /* btl_input.c */
 extern s32 Port_ProjectPoint(Vec4 *pos, s32 *x, s32 *y); /* btl_cam.c */
@@ -279,6 +281,10 @@ void Port_TargetReset(void) {
 
     for (i = 0; i < PORT_FIGHTERS; i++) {
         gPortTarget[i] = i == 0 ? 1 : 0;
+        if (i < 2) {
+            sPortWatch[i] = -1;
+            sPortWatchWait[i] = 0;
+        }
         sPortTargetHold[i] = 0;
         sPortLock[i] = 0;
         sPortLockNew[i] = 0;
@@ -286,10 +292,89 @@ void Port_TargetReset(void) {
     }
     gPortCamOf = -1;
 }
+/* Spectating (asked for by the user: "when I die I should be able to spectate a character and with the R3 I can
+   swap between them"). With more than two fighters a player whose fighter is down while the fight goes on (its team
+   still has fighters) watches another one: a second after the knock-out, the first of its team that stands; R3
+   moves to the next that stands, the team first and then the enemies, round to the first; when the one watched
+   goes down, the next. The player's view then shows that fighter's own camera (btl_cam.c, BtlCam_UpdateView),
+   which follows it and looks at its target, and what is about that fighter counts as about a player for the
+   cut-ins (btl_char_api.c). Nothing of the fight changes: who is watched only chooses a picture. */
+extern s32 Pad_IsPressed(s32 pad, u32 mask); /* sys/pad.c: the game buttons pressed this frame */
+extern s32 BattleSide_GetPad(s32 side); /* battle_load.c */
+/* Fighter k as a spectator of player p would have it: on p's team before the enemies, standing, not p itself. */
+static s32 Port_WatchOk(s32 p, s32 k) {
+    return k != p && (u32)k < (u32)BtlChar_GetCount() && !BtlChar_IsDead(BtlChar_Get(k));
+}
+/* The next one to watch after `cur` (-1: from the start): p's team in roster order, then everyone else. */
+static s32 Port_WatchNext(s32 p, s32 cur) {
+    s32 count = BtlChar_GetCount(), order[PORT_FIGHTERS], n = 0, k, at = -1;
+
+    for (k = 0; k < count && n < PORT_FIGHTERS; k++) {
+        if (k != p && !Port_IsEnemy(p, k)) {
+            order[n++] = k;
+        }
+    }
+    for (k = 0; k < count && n < PORT_FIGHTERS; k++) {
+        if (k != p && Port_IsEnemy(p, k)) {
+            order[n++] = k;
+        }
+    }
+    for (k = 0; k < n; k++) {
+        if (order[k] == cur) {
+            at = k;
+        }
+    }
+    for (k = 1; k <= n; k++) {
+        s32 c = order[(at + k + n) % n];
+        if (Port_WatchOk(p, c)) {
+            return c;
+        }
+    }
+    return -1;
+}
+extern void Port_SpectateLog(int p, int fighter, int why); /* port/src/plat_stub.c: BT3_SPECTATE_LOG */
+static void Port_UpdateSpectate(void) {
+    s32 p;
+
+    for (p = 0; p < 2; p++) {
+        s32 was = sPortWatch[p];
+        if (BtlChar_GetCount() < 3 || !Port_TargetHuman(p) || !BtlChar_IsDead(BtlChar_Get(p))) {
+            sPortWatch[p] = -1;
+            sPortWatchWait[p] = 0;
+            continue;
+        }
+        if (sPortWatchWait[p] < 60) { /* (a second on the fighter that went down first) */
+            sPortWatchWait[p]++;
+            continue;
+        }
+        if (sPortWatch[p] < 0 || !Port_WatchOk(p, sPortWatch[p])) {
+            sPortWatch[p] = Port_WatchNext(p, sPortWatch[p]);
+            if (sPortWatch[p] != was) {
+                Port_SpectateLog(p, sPortWatch[p], was < 0 ? 0 : 1);
+            }
+        } else {
+            s32 pad = BattleSide_GetPad(p);
+            if ((u32)pad < 2 && Pad_IsPressed(pad, 0x0004)) { /* (R3 in the pad's own button bits: sys/pad.h, gs_input.c B_R3) */
+                sPortWatch[p] = Port_WatchNext(p, sPortWatch[p]);
+                Port_SpectateLog(p, sPortWatch[p], 2);
+            }
+        }
+    }
+}
+/* The fighter whose camera player p's view shows: p, or the one it watches. */
+s32 Port_Spectated(s32 p) {
+    return (p == 0 || p == 1) && sPortWatch[p] >= 0 && sPortWatch[p] < BtlChar_GetCount() ? sPortWatch[p] : p;
+}
+/* 1 when fighter i is watched by a player whose fighter is down. */
+s32 Port_SpectateOf(s32 i) {
+    return i >= 0 && (sPortWatch[0] == i || sPortWatch[1] == i);
+}
+
 void Port_UpdateTarget(void) {
     s32 count = BtlChar_GetCount();
     s32 i, k;
 
+    Port_UpdateSpectate();
     if (count < 3) {
         gPortTarget[0] = 1;
         gPortTarget[1] = 0;

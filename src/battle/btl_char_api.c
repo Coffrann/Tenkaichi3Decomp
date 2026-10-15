@@ -616,6 +616,10 @@ f32 BtlCharApi_GetCamUnk4A0(s32 objId) {
 extern s32 gPortTarget[];             /* btl_char_flag_opp.c */
 extern s32 BattleSide_IsCpu(s32 side); /* battle_load.c */
 static s32 Port_IsWatched(s32 i) {
+    extern s32 Port_SpectateOf(s32 i); /* btl_char_flag_opp.c: watched by a player whose fighter is down */
+    if (Port_SpectateOf(i)) {
+        return 1;
+    }
     if (i == 0 || i == 1) {
         return !BattleSide_IsCpu(i) || (i == 0 && BattleSide_IsCpu(1));
     }

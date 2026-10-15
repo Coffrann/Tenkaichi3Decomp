@@ -838,6 +838,17 @@ void Port_TargetLog(int i, int target, int x, int locked) {
     }
 }
 
+/* (the experiment's tool) BT3_SPECTATE_LOG=1: player p's fighter is down and p watches another (why: 0 the first,
+   1 the one watched went down, 2 R3) */
+void Port_SpectateLog(int p, int fighter, int why) {
+    static int on = -1;
+    if (on < 0) { on = getenv("BT3_SPECTATE_LOG") != NULL; }
+    if (on) {
+        fprintf(stderr, "bt3: player %d watches fighter %d (%s)\n", p + 1, fighter,
+                why == 0 ? "its fighter is down" : why == 1 ? "the one watched went down" : "R3");
+    }
+}
+
 void Port_FreezeCount(int held, int count) {
     static int on = -1, frame;
     if (on < 0) { on = getenv("BT3_FREEZE_COUNT") != NULL; }
