@@ -961,7 +961,15 @@ void BtlObj_BuildDrawList(BtlObjDrawList *list, s32 view) {
                             list->objs[list->count++] = obj;
                         }
                     } else if (rec->flags & BTL_OBJ_FLAG_PASS2) {
+#ifdef PORT
+                        /* (the view's own fighter: in split screen the one its camera shows, which with more than
+                           two fighters need not be object 0 / 1: an extra fighter seen through its own camera was
+                           not drawn last, and lost its head, four local players) */
+                        extern s32 Port_ViewOwnObj(s32 view);
+                        if ((Battle_IsSplitScreen() ? Port_ViewOwnObj(view) : view) == obj->id && obj->type == BTL_OBJ_TYPE_CHARA) {
+#else
                         if (view == obj->id && obj->type == BTL_OBJ_TYPE_CHARA) {
+#endif
                             own = obj;
                         } else {
                             list->objs[list->count++] = obj;

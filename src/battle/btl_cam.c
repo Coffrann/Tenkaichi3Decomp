@@ -443,6 +443,15 @@ void Port_QuadViews(s32 pass) {
 }
 #endif
 
+#ifdef PORT
+/* The object of the fighter whose camera each of the two views shows now (the views' own fighters, drawn last
+   by btl_obj.c, BtlObj_BuildDrawList); -1: not set yet. */
+static s32 sPortViewObj[2] = { -1, -1 };
+s32 Port_ViewOwnObj(s32 view) {
+    return (u32)view < 2 && sPortViewObj[view] >= 0 ? sPortViewObj[view] : view;
+}
+#endif
+
 /* Per frame: copies one side's fighter camera pose and priority into the selected view and builds it. */
 void BtlCam_UpdateView(s32 side) {
     BtlCamView *view = gBtlCam->cur;
@@ -460,6 +469,7 @@ void BtlCam_UpdateView(s32 side) {
             view->split = 1;
             view->view = *Port_QuadLayout(q);
             objId = Port_FighterObjId(f);
+            sPortViewObj[side] = objId;
             BtlCharApi_GetCamPose(objId, &view->pos, &view->rot);
             view->priority = BtlCharApi_HasCamPriority(objId);
             BtlCam_BuildView(view, 1);
@@ -496,6 +506,11 @@ void BtlCam_UpdateView(s32 side) {
         if (w != side) {
             objId = w >= 2 ? Port_FighterObjId(w) : BattleSide_GetObjId(w);
         }
+    }
+#endif
+#ifdef PORT
+    if (side == 0 || side == 1) {
+        sPortViewObj[side] = objId;
     }
 #endif
     BtlCharApi_GetCamPose(objId, &view->pos, &view->rot);
