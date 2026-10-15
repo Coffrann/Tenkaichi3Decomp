@@ -1982,16 +1982,16 @@ static void HudMini_Each(HudMiniSlot *m, s32 k, void (*op)(void *, void *, u32))
 
 /* Fighter i's gauge on screen side `place` (0 left, 1 right), at `scale` of its size, its top `top` lines down
    (with `dx` to the side): a small one of a row, or a bottom quarter's (four local players). */
-static void HudExtra_DrawGauge(s32 i, s32 place, f32 scale, f32 top, f32 dx) {
+/* (m: the gauge's own state, *used 0 until it has been drawn once; anchor: PORT_2D_ placement in a wide picture) */
+static void HudExtra_DrawGaugeIn(HudMiniSlot *m, s32 *used, s32 i, s32 place, f32 scale, f32 top, f32 dx, s32 anchor) {
     s32 k = HUD_SCR(0) == place ? 0 : 1; /* (the side whose gauge stands on that side of the screen: its mirroring) */
     s32 was = gHudGauge->side;
     Ramp slideAll = gHudGauge->slideAll;
-    HudMiniSlot *m = &sHudMini[i];
     HudXMtx mtx;
     s32 hp = BtlSide_GetHp(i);
 
-    if (!sHudMiniUsed[i]) {
-        sHudMiniUsed[i] = 1;
+    if (!*used) {
+        *used = 1;
         HudMini_Each(m, k, HudMini_Copy); /* (a copy of the side's own to start from) */
         m->hpShown = hp > 0 ? hp : 0;
         m->hp = m->hpShown;
@@ -2016,7 +2016,7 @@ static void HudExtra_DrawGauge(s32 i, s32 place, f32 scale, f32 top, f32 dx) {
     mtx[3][0] = dx; /* (the right side's mirroring is applied after this: the same corner on both) */
     mtx[3][1] = top;
     Vu0Cur_MulMtx(mtx);
-    Port_GsMarker(place ? PORT_2D_RIGHT : PORT_2D_LEFT);
+    Port_GsMarker(anchor);
     HudGfx_ClearAlpha();
     HudGauge_SelectSide(k);
     HudNode_Update(gHudGauge->grp);
@@ -2027,6 +2027,62 @@ static void HudExtra_DrawGauge(s32 i, s32 place, f32 scale, f32 top, f32 dx) {
     gHudGauge->slideAll = slideAll;
     HudGauge_SelectSide(was);
 }
+static void HudExtra_DrawGauge(s32 i, s32 place, f32 scale, f32 top, f32 dx) {
+    HudExtra_DrawGaugeIn(&sHudMini[i], &sHudMiniUsed[i], i, place, scale, top, dx, place ? PORT_2D_RIGHT : PORT_2D_LEFT);
+}
+
+/* ---- each player's own HUD (asked for by the user: "for each screen when not in 1p mode ... the player and the
+ * target", "the target on the right ... like the actual game") ----
+ * A split screen with more than two fighters (two halves, or the four quarters of four local players): every part
+ * of the screen has its player's gauge in its top left corner and its target's in its top right one, mirrored, as
+ * the game's own fight of one player has them, at half size; the game's two big gauges are not drawn
+ * (Port_MultiHud, hud_a.c). The ones next to the middle of the screen keep a gap for the timer and are placed from
+ * the middle in a wide picture. Each place has its own gauge state, started again when its fighter changes. */
+#define HUDP_SCALE 0.5f
+#define HUDP_GAP 24.0f
+static HudMiniSlot sHudPart[8];
+static s32 sHudPartUsed[8], sHudPartWho[8];
+
+s32 Port_MultiHud(void) {
+    extern s32 Battle_IsSplitScreen(void);
+    return BtlChar_GetCount() > 2 && Battle_IsSplitScreen();
+}
+
+static void HudExtra_DrawParts(void) {
+    extern s32 Port_QuadMode(void);
+    extern s32 Port_QuarterFighter(s32 q);
+    extern s32 Port_Spectated(s32 p);
+    extern s32 Port_CamTarget(s32 i);
+    extern s32 gPortTarget[];
+    s32 quad = Port_QuadMode(), n = quad ? 4 : 2, r, role;
+
+    for (r = 0; r < n; r++) {
+        s32 me = quad ? Port_QuarterFighter(r) : r;
+        s32 w = Port_Spectated(me);
+        s32 t = w == me ? Port_CamTarget(me) : gPortTarget[w];
+        f32 top = quad && r >= 2 ? 228.0f : 2.0f;
+        s32 right = r & 1; /* (a part on the right half of the screen) */
+
+        for (role = 0; role < 2; role++) {
+            s32 slot = r * 2 + role, who = role == 0 ? w : t;
+            if ((u32)who >= (u32)BtlChar_GetCount() || (role == 1 && who == w)) {
+                continue;
+            }
+            if (sHudPartWho[slot] != who + 1) {
+                sHudPartWho[slot] = who + 1;
+                sHudPartUsed[slot] = 0;
+            }
+            if (role == 0) { /* (the player's: left, at the screen's edge or from the middle) */
+                HudExtra_DrawGaugeIn(&sHudPart[slot], &sHudPartUsed[slot], who, HUD_SCR(0), HUDP_SCALE, top,
+                                     right ? 256.0f + HUDP_GAP : 0.0f, right ? PORT_2D_CENTER : PORT_2D_LEFT);
+            } else { /* (the target's: right, mirrored) */
+                HudExtra_DrawGaugeIn(&sHudPart[slot], &sHudPartUsed[slot], who, HUD_SCR(1), HUDP_SCALE, top,
+                                     right ? 0.0f : 255.0f + HUDP_GAP, right ? PORT_2D_RIGHT : PORT_2D_CENTER);
+            }
+        }
+    }
+}
+
 static void HudExtra_DrawMini(s32 i, s32 place, s32 slot) {
     HudExtra_DrawGauge(i, place, HUDM_SCALE, (f32)(HUDM_TOP + slot * HUDM_STEP), 2.0f);
 }
@@ -2048,11 +2104,8 @@ void HudGauge_DrawExtras(void) {
         extern s32 Port_QuadMode(void);
         extern s32 Port_QuarterFighter(s32 q);
         extern s32 Port_Spectated(s32 p);
-        if (Port_QuadMode()) {
-            s32 q;
-            for (q = 2; q < 4; q++) {
-                HudExtra_DrawGauge(Port_Spectated(Port_QuarterFighter(q)), q == 2 ? HUD_SCR(0) : HUD_SCR(1), 1.0f, 226.0f, 0.0f);
-            }
+        if (Port_MultiHud()) {
+            HudExtra_DrawParts();
             HudExtra_DrawTargetMark();
             Port_GsMarker(HUD_SCR(1) ? PORT_2D_RIGHT : PORT_2D_LEFT);
             return;
@@ -2148,5 +2201,7 @@ void HudGauge_ResetExtras(void) {
     memset(sHudExtraShown, 0, sizeof(sHudExtraShown));
     memset(sHudExtraDrain, 0, sizeof(sHudExtraDrain));
     memset(sHudMiniUsed, 0, sizeof(sHudMiniUsed)); /* (each small gauge starts again from its side's) */
+    memset(sHudPartUsed, 0, sizeof(sHudPartUsed));
+    memset(sHudPartWho, 0, sizeof(sHudPartWho));
 }
 #endif

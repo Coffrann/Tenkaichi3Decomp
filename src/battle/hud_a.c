@@ -132,6 +132,7 @@ extern void HudPrompt_SetButton(s32 side, s32 button, s32 arg);
 extern int Port_ClashSquare(void), Port_NetActive(void), Port_NetMe(void); /* port/src/gs */
 extern int Port_DemoHud(void); /* port/src/plat_stub.c */
 extern void HudGauge_DrawExtras(void), HudGauge_ResetExtras(void); /* hud_b.c */
+extern s32 Port_MultiHud(void); /* hud_b.c: a split screen with more than two fighters (each part its own HUD) */
 #endif
 extern void HudPrompt_SetCommand(s32 side, s32 count, s32 *buttons, s32 *kinds, s32 idx);
 extern void HudPrompt_ClearCommand(s32 side);
@@ -651,6 +652,9 @@ void Hud_Draw(void) {
                     HudNode_Draw(gHud->team, 0);
                 }
                 if (gHud->flags & HUD_SHOW_GAUGES) {
+#ifdef PORT
+                  if (!Port_MultiHud()) { /* (each part of a split screen has its own: hud_b.c) */
+#endif
                     HudGfx_ClearAlpha();
                     HudGauge_SelectSide(0);
                     HudNode_Update(gHud->gauge);
@@ -660,6 +664,7 @@ void Hud_Draw(void) {
                     HudNode_Update(gHud->gauge);
                     HudNode_Draw(gHud->gauge, 0);
 #ifdef PORT
+                  }
                     HudGauge_DrawExtras(); /* (the fighters past the two sides: hud_b.c) */
 #endif
                 } else {
@@ -747,6 +752,9 @@ void Hud_Draw(void) {
             }
         }
         if (gHud->flags & HUD_SHOW_GAUGES) {
+#ifdef PORT
+          if (!Port_MultiHud()) { /* (each part of a split screen has its own: hud_b.c) */
+#endif
             HudGfx_ClearAlpha();
             HudGauge_SelectSide(0);
             HudNode_Update(gHud->gauge);
@@ -756,6 +764,7 @@ void Hud_Draw(void) {
             HudNode_Update(gHud->gauge);
             HudNode_Draw(gHud->gauge, 0);
 #ifdef PORT
+          }
             HudGauge_DrawExtras(); /* (the fighters past the two sides: hud_b.c) */
 #endif
         }
