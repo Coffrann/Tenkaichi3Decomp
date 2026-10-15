@@ -4,9 +4,11 @@
 #include "sys/randf.h"
 #include "sys/heap.h"
 #ifdef PORT
-/* More than two fighters: the fighter a side's gauge shows (btl_char_flag_opp.c, Port_HudFighter). */
+/* More than two fighters: the fighter a side's gauge shows (btl_char_flag_opp.c, Port_HudFighter), or, while the
+   small copy of the gauge of another fighter is drawn (HudExtra_DrawMini), that fighter. */
 extern s32 Port_HudFighter(s32 side);
-#define HUD_WHO(side) Port_HudFighter(side)
+static s32 sHudMiniWho = -1;
+#define HUD_WHO(side) (sHudMiniWho >= 0 ? sHudMiniWho : Port_HudFighter(side))
 #else
 #define HUD_WHO(side) (side)
 #endif
@@ -1903,6 +1905,128 @@ static void HudExtra_DrawRow(void) {
 
 static void HudExtra_DrawTargetMark(void); /* (below) */
 
+/* ---- the small gauges (asked for by the user: "a miniaturized version of the player HUD") ----
+ * Every fighter the two gauges do not show gets the game's own gauge again, at half its size, under the gauge of
+ * its team's side: the same tree of nodes and sprites (frame, face, health, ki, blast stock, the powered-up timer,
+ * status icons), drawn by the same code. The tree keeps its state per side (the arrays of two in HudBWork:
+ * trailing health and ki, flashes, the face, ...): each small gauge has a copy of one side's of its own
+ * (sHudMini), swapped into that side while it is updated and drawn and swapped out again, so that its animations
+ * go on from frame to frame and the side's own gauge is left as it was. The half size is a matrix around the
+ * corner of the screen the side's gauge stands in, under which the tree is drawn as always. */
+typedef f32 HudXMtx[4][4];
+extern void Mtx_StoreIdentity(HudXMtx m);
+extern void Vu0Cur_Push(void);
+extern void Vu0Cur_Pop(void);
+extern void Vu0Cur_MulMtx(HudXMtx m);
+extern void HudGfx_ClearAlpha(void);
+extern void HudNode_Update(HudBGroup *node);
+extern s32 BtlSide_GetBlast(s32 side);
+extern s32 BtlSide_GetMaxPower(s32 side);
+extern s32 BtlSide_GetParamUnk2C(s32 side);
+extern s32 BtlSide_TestFlagBE(s32 side);
+#define HUDM_SCALE 0.5f
+#define HUDM_TOP 62  /* the first small gauge's top, in the screen's 448 lines (under the side's own) */
+#define HUDM_STEP 30 /* from one to the next */
+typedef struct HudMiniSlot {
+    HudBShake shake[3];
+    s32 hpShown, hp, auraAlpha;
+    Ramp lowHpPulse;
+    s32 blast, ki, kiShown;
+    Ramp kiBarFlash, kiFullPulse;
+    s32 maxPower;
+    Ramp blastFlash;
+    u32 statMask, statPos;
+    s32 kiReserve;
+    u32 statPrev;
+    s32 statTo[4], statFrom[4];
+    Ramp statRamp;
+    s32 statState;
+    Ramp hpBarFade;
+    HudBRes *faceRes;
+    HudBObj *obj;
+    s32 switching;
+    Ramp slide;
+    s32 hpDrain, kiDrain;
+    Ramp kiReservePulse;
+} HudMiniSlot;
+static HudMiniSlot sHudMini[PORT_FIGHTER_MAX];
+static s32 sHudMiniUsed[PORT_FIGHTER_MAX]; /* (0: not drawn yet this fight: started from the side's own) */
+
+static void HudMini_Swap(void *a, void *b, u32 size) {
+    u8 t[64];
+    u32 n;
+    for (n = 0; n < size; n += sizeof(t)) {
+        u32 c = size - n < sizeof(t) ? size - n : sizeof(t);
+        memcpy(t, (u8 *)a + n, c);
+        memcpy((u8 *)a + n, (u8 *)b + n, c);
+        memcpy((u8 *)b + n, t, c);
+    }
+}
+
+/* Does op (swap, or copy into m) on every value small gauge m keeps, with side k's. */
+static void HudMini_Copy(void *a, void *b, u32 size) {
+    memcpy(a, b, size);
+}
+static void HudMini_Each(HudMiniSlot *m, s32 k, void (*op)(void *, void *, u32)) {
+    HudBWork *w = gHudGauge;
+#define HUDM_X(f) op(&m->f, &w->f[k], sizeof(m->f))
+    op(m->shake, w->shake[k], sizeof(m->shake));
+    HUDM_X(hpShown); HUDM_X(hp); HUDM_X(auraAlpha); HUDM_X(lowHpPulse); HUDM_X(blast); HUDM_X(ki); HUDM_X(kiShown);
+    HUDM_X(kiBarFlash); HUDM_X(kiFullPulse); HUDM_X(maxPower); HUDM_X(blastFlash); HUDM_X(statMask); HUDM_X(statPos);
+    HUDM_X(kiReserve); HUDM_X(statPrev); op(m->statTo, w->statTo[k], sizeof(m->statTo));
+    op(m->statFrom, w->statFrom[k], sizeof(m->statFrom)); HUDM_X(statRamp); HUDM_X(statState);
+    HUDM_X(hpBarFade); HUDM_X(faceRes); HUDM_X(obj); HUDM_X(switching); HUDM_X(slide); HUDM_X(hpDrain);
+    HUDM_X(kiDrain); HUDM_X(kiReservePulse);
+#undef HUDM_X
+}
+
+/* Fighter i's small gauge in row `slot` of screen side `place` (0 left, 1 right). */
+static void HudExtra_DrawMini(s32 i, s32 place, s32 slot) {
+    s32 k = HUD_SCR(0) == place ? 0 : 1; /* (the side whose gauge stands on that side of the screen: its mirroring) */
+    s32 was = gHudGauge->side;
+    Ramp slideAll = gHudGauge->slideAll;
+    HudMiniSlot *m = &sHudMini[i];
+    HudXMtx mtx;
+    s32 hp = BtlSide_GetHp(i);
+
+    if (!sHudMiniUsed[i]) {
+        sHudMiniUsed[i] = 1;
+        HudMini_Each(m, k, HudMini_Copy); /* (a copy of the side's own to start from) */
+        m->hpShown = hp > 0 ? hp : 0;
+        m->hp = m->hpShown;
+        m->kiShown = BtlSide_GetKi(i);
+        m->switching = 0;
+        m->slide.value = 0.0f;
+    }
+    HudMini_Each(m, k, HudMini_Swap);
+    sHudMiniWho = i;
+    HudGauge_SetHp(k, hp);
+    HudGauge_SetKi(k, BtlSide_GetKi(i));
+    HudGauge_SetKiReserve(k, BtlSide_TestFlagBE(i) ? BtlSide_GetParamUnk2C(i) : 0);
+    HudGauge_SetBlast(k, BtlSide_GetBlast(i));
+    HudGauge_SetMaxPower(k, BtlSide_GetMaxPower(i));
+    HudGauge_SetFighter(k, BtlCtrl_GetObj(i));
+    gHudGauge->switching[k] = 0;
+    Vu0Cur_Push();
+    Mtx_StoreIdentity(mtx);
+    mtx[0][0] = HUDM_SCALE;
+    mtx[1][1] = HUDM_SCALE;
+    /* (about the screen's top left corner; a right side's gauge is mirrored about the screen after it) */
+    mtx[3][0] = 2.0f; /* (the right side's mirroring is applied after this: the same corner on both) */
+    mtx[3][1] = (f32)(HUDM_TOP + slot * HUDM_STEP);
+    Vu0Cur_MulMtx(mtx);
+    Port_GsMarker(place ? PORT_2D_RIGHT : PORT_2D_LEFT);
+    HudGfx_ClearAlpha();
+    HudGauge_SelectSide(k);
+    HudNode_Update(gHudGauge->grp);
+    HudNode_Draw(gHudGauge->grp, 0);
+    Vu0Cur_Pop();
+    sHudMiniWho = -1;
+    HudMini_Each(m, k, HudMini_Swap);
+    gHudGauge->slideAll = slideAll;
+    HudGauge_SelectSide(was);
+}
+
 /* Draws the rows; called by Hud_Draw behind the two passes of the gauge tree. */
 void HudGauge_DrawExtras(void) {
     s32 used[2] = { 0, 0 }; /* rows taken, by side of the screen */
@@ -1928,15 +2052,7 @@ void HudGauge_DrawExtras(void) {
         for (n = Port_HudTestRows(); n > 0 && used[place] < HUDX_SLOTS; n--) {
             s32 slot = used[place]++;
 
-            sHudExtraFighter = i;
-            sHudExtraPlace = place;
-            sHudExtraNode.draw = HudExtra_DrawRow;
-            /* (left-hand coordinates: the right-hand rows are mirrored like the side's gauge; the rows leave the
-               screen with the whole part) */
-            HudNode_SetPos(&sHudExtraNode, 8 + slot / HUDX_ROWS * 106 + (s32)(gHudGauge->slideAll.value * -256.0f),
-                           68 + slot % HUDX_ROWS * 17 + (s32)(gHudGauge->slideAll.value * -224.0f));
-            Port_GsMarker(place ? PORT_2D_RIGHT : PORT_2D_LEFT);
-            HudNode_Draw(&sHudExtraNode, place);
+            HudExtra_DrawMini(i, place, slot);
         }
     }
     if (count > 2) {
@@ -2001,5 +2117,6 @@ static void HudExtra_DrawTargetMark(void) {
 void HudGauge_ResetExtras(void) {
     memset(sHudExtraShown, 0, sizeof(sHudExtraShown));
     memset(sHudExtraDrain, 0, sizeof(sHudExtraDrain));
+    memset(sHudMiniUsed, 0, sizeof(sHudMiniUsed)); /* (each small gauge starts again from its side's) */
 }
 #endif
