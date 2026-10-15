@@ -3,6 +3,13 @@
 #include "battle/battle.h"
 #include "sys/randf.h"
 #include "sys/heap.h"
+#ifdef PORT
+/* More than two fighters: the fighter a side's gauge shows (btl_char_flag_opp.c, Port_HudFighter). */
+extern s32 Port_HudFighter(s32 side);
+#define HUD_WHO(side) Port_HudFighter(side)
+#else
+#define HUD_WHO(side) (side)
+#endif
 
 /*
  * Battle HUD: the gauge part (health, ki, blast stock, powered-up timer, status icons, face), 0x21CA60-0x222400.
@@ -277,7 +284,7 @@ void HudGauge_UpdateAura(void) {
     HudBSprite *spr;
     Ramp *ramp;
 
-    if (BtlSide_IsPoweredUp(gHudGauge->side) && !BtlCtrl_IsActiveDead(gHudGauge->side)) {
+    if (BtlSide_IsPoweredUp(HUD_WHO(gHudGauge->side)) && !BtlCtrl_IsActiveDead(HUD_WHO(gHudGauge->side))) {
         gHudGauge->auraAlpha[gHudGauge->side] += 0x10;
         if (gHudGauge->auraAlpha[gHudGauge->side] > 0x80) {
             gHudGauge->auraAlpha[gHudGauge->side] = 0x80;
@@ -538,7 +545,7 @@ void HudGauge_UpdateBlast(void) {
         { 0x00, 0x20, 0x00, 0x20 }, { 0x20, 0x40, 0x00, 0x20 }, { 0x40, 0x60, 0x00, 0x20 }, { 0x60, 0x80, 0x00, 0x20 },
         { 0x00, 0x20, 0x20, 0x40 }, { 0x20, 0x40, 0x20, 0x40 }, { 0x40, 0x60, 0x20, 0x40 }, { 0x60, 0x80, 0x20, 0x40 },
     };
-    s32 max = BtlSide_GetBlastMax(gHudGauge->side);
+    s32 max = BtlSide_GetBlastMax(HUD_WHO(gHudGauge->side));
     HudBSprite *spr;
     u32 n;
     s32 r;
@@ -998,7 +1005,7 @@ void HudGauge_DrawFace(HudBGroup *node) {
             /* (PC build: a fighter's face sheet has two pictures, one drawn for the left place and one for the right;
                with the sides swapped the picture is the one of the place, not of the side) */
             HudSprite_InitTex(spr, gHudGauge->faceRes[gHudGauge->side], HUD_SCR(gHudGauge->side), 0);
-            if (BtlCtrl_GetObj(gHudGauge->side)->unkA40 & 0x40000) {
+            if (BtlCtrl_GetObj(HUD_WHO(gHudGauge->side))->unkA40 & 0x40000) {
                 HudSprite_SetColor(spr, 0x80, 0x50, 0x70, 0x80);
             } else {
                 HudSprite_SetColor(spr, 0x80, 0x80, 0x80, 0x80);
@@ -1906,10 +1913,14 @@ void HudGauge_DrawExtras(void) {
         return; /* (no roster yet) */
     }
     count = BtlChar_GetCount();
-    for (i = 2; i < count && i < PORT_FIGHTER_MAX; i++) {
-        /* (player 1's team under player 1's gauge, player 2's under player 2's; a fighter of another team, which
-           is everybody in a free-for-all, goes to the side that has fewer rows, the right one first) */
+    for (i = 0; i < count && i < PORT_FIGHTER_MAX; i++) {
+        /* (everybody but the two the gauges show: the player's and its target, Port_HudFighter; player 1's team
+           under player 1's gauge, player 2's under player 2's; a fighter of another team, which is everybody in a
+           free-for-all, goes to the side that has fewer rows, the right one first) */
         s32 team = Port_Team(i);
+        if (count < 3 || i == HUD_WHO(0) || i == HUD_WHO(1)) {
+            continue;
+        }
         s32 place = team == 0 ? HUD_SCR(0) : team == 1 ? HUD_SCR(1) : used[HUD_SCR(1)] <= used[HUD_SCR(0)] ? HUD_SCR(1) : HUD_SCR(0);
         s32 n;
 

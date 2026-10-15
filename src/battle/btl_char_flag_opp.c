@@ -365,6 +365,30 @@ static void Port_UpdateSpectate(void) {
 s32 Port_Spectated(s32 p) {
     return (p == 0 || p == 1) && sPortWatch[p] >= 0 && sPortWatch[p] < BtlChar_GetCount() ? sPortWatch[p] : p;
 }
+/* The fighter the gauge of HUD side `side` (0 left, 1 right) shows (hud_a.c, hud_b.c; asked for by the user: "the
+   person I'm focusing on has the main opponent HUD, and the old main swaps to one of their teammates'"). With
+   more than two fighters the player's side shows the player's fighter, or the one it watches once it is down,
+   and the other side that fighter's target: the enemy the player chose (Port_CamTarget), or the watched
+   fighter's own. Everybody else is in the small rows (hud_b.c, HudGauge_DrawExtras). Two players: each side its
+   own player (or the one it watches). With two fighters: the side. Only the HUD asks: the values the computer
+   reads through the same functions are asked for by side, as always. */
+s32 Port_HudFighter(s32 side) {
+    s32 me, w, t;
+
+    if (BtlChar_GetCount() < 3 || (side != 0 && side != 1)) {
+        return side;
+    }
+    if (Port_TargetHuman(0) && Port_TargetHuman(1)) {
+        return Port_Spectated(side);
+    }
+    me = !Port_TargetHuman(0) && Port_TargetHuman(1) ? 1 : 0; /* (a demo: fighter 0, as the camera) */
+    w = Port_Spectated(me);
+    if (side == me) {
+        return w;
+    }
+    t = w == me ? Port_CamTarget(me) : gPortTarget[w];
+    return (u32)t < (u32)BtlChar_GetCount() && t != w ? t : side;
+}
 /* 1 when fighter i is watched by a player whose fighter is down. */
 s32 Port_SpectateOf(s32 i) {
     return i >= 0 && (sPortWatch[0] == i || sPortWatch[1] == i);

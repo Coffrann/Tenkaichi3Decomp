@@ -321,6 +321,15 @@ void Hud_Term(void) {
    also shakes the OTHER side's gauge (0x21FA38: 15 / 3 from 9999 damage, 10 / 2 from 1000, else 5 / 2);
    five event messages for the combo part; the button prompt; and the team panel's values.
    Everything that starts an animation is skipped while BATTLE_FLAG_PAUSE is set. */
+#ifdef PORT
+/* More than two fighters: the fighter a side's gauge shows (btl_char_flag_opp.c, Port_HudFighter): the player's (or
+   the one it watches) and the player's target. The side otherwise. */
+extern s32 Port_HudFighter(s32 side);
+#define HUD_WHO(side) Port_HudFighter(side)
+#else
+#define HUD_WHO(side) (side)
+#endif
+
 void Hud_PreUpdate(void) {
     s32 side;
 
@@ -345,10 +354,10 @@ void Hud_PreUpdate(void) {
         s32 up;
         s32 isNew;
 
-        HudGauge_SetHp(side, BtlSide_GetHp(side));
-        HudGauge_SetKi(side, BtlSide_GetKi(side));
-        v = BtlSide_GetParamUnk2C(side);
-        if (BtlSide_TestFlagBE(side)) {
+        HudGauge_SetHp(side, BtlSide_GetHp(HUD_WHO(side)));
+        HudGauge_SetKi(side, BtlSide_GetKi(HUD_WHO(side)));
+        v = BtlSide_GetParamUnk2C(HUD_WHO(side));
+        if (BtlSide_TestFlagBE(HUD_WHO(side))) {
             HudGauge_SetKiReserve(side, v);
         } else {
             HudGauge_SetKiReserve(side, 0);
@@ -358,16 +367,16 @@ void Hud_PreUpdate(void) {
         for (i = 0; i < 4; i++) {
             switch (i) {
                 case 0:
-                    v = BtlCtrl_GetStatMod0(side);
+                    v = BtlCtrl_GetStatMod0(HUD_WHO(side));
                     break;
                 case 1:
-                    v = BtlCtrl_GetStatMod3(side);
+                    v = BtlCtrl_GetStatMod3(HUD_WHO(side));
                     break;
                 case 2:
-                    v = BtlCtrl_GetStatMod1(side);
+                    v = BtlCtrl_GetStatMod1(HUD_WHO(side));
                     break;
                 case 3:
-                    v = BtlCtrl_GetStatMod2(side);
+                    v = BtlCtrl_GetStatMod2(HUD_WHO(side));
                     break;
                 default:
                     continue;
@@ -380,21 +389,21 @@ void Hud_PreUpdate(void) {
             }
         }
         HudGauge_SetStatIcons(side, mask, up);
-        HudGauge_SetBlast(side, BtlSide_GetBlast(side));
-        HudGauge_SetMaxPower(side, BtlSide_GetMaxPower(side));
-        HudGauge_SetFighter(side, BtlCtrl_GetObj(side));
+        HudGauge_SetBlast(side, BtlSide_GetBlast(HUD_WHO(side)));
+        HudGauge_SetMaxPower(side, BtlSide_GetMaxPower(HUD_WHO(side)));
+        HudGauge_SetFighter(side, BtlCtrl_GetObj(HUD_WHO(side)));
         if (!(Battle_GetWork()->flags & BATTLE_FLAG_PAUSE)) {
-            isNew = BtlSide_IsComboHitNew(side);
+            isNew = BtlSide_IsComboHitNew(HUD_WHO(side));
             if (isNew == 1) {
-                v = BtlCtrl_GetClashCount(side);
+                v = BtlCtrl_GetClashCount(HUD_WHO(side));
                 if (v != 0) {
                     HudCombo_SetHits(side, v);
                 } else {
-                    HudCombo_SetHits(side, BtlSide_GetComboHits(side));
+                    HudCombo_SetHits(side, BtlSide_GetComboHits(HUD_WHO(side)));
                 }
             }
-            if (BtlCtrl_GetOppUnkD50(side)) {
-                v = BtlSide_GetComboDamage(side);
+            if (BtlCtrl_GetOppUnkD50(HUD_WHO(side))) {
+                v = BtlSide_GetComboDamage(HUD_WHO(side));
                 if (v >= 0) {
                     HudCombo_SetDamage(side, v, isNew);
                 }
@@ -406,29 +415,29 @@ void Hud_PreUpdate(void) {
                     HudGauge_ShakeHp(side == 0, 5, 2);
                 }
             }
-            if (!BtlSide_IsComboShown(side)) {
+            if (!BtlSide_IsComboShown(HUD_WHO(side))) {
                 HudCombo_SetHits(side, 0);
                 HudCombo_SetDamage(side, -1, isNew);
             }
         }
-        v = BtlCtrl_GetFlagDEtoE2(side);
+        v = BtlCtrl_GetFlagDEtoE2(HUD_WHO(side));
         if (v >= 0) {
             HudCombo_SetText(side, v);
         }
-        if (BtlCtrl_IsFlag6Raised(side)) {
+        if (BtlCtrl_IsFlag6Raised(HUD_WHO(side))) {
             HudCombo_SetMessage(side, 1);
             HudGauge_ShakeKi(side, 8, 2);
         }
-        if (BtlCtrl_TestFlag71(side)) {
+        if (BtlCtrl_TestFlag71(HUD_WHO(side))) {
             HudCombo_SetMessage(side, 0);
         }
-        if (BtlCtrl_IsFlag5RaisedInFight(side)) {
+        if (BtlCtrl_IsFlag5RaisedInFight(HUD_WHO(side))) {
             HudCombo_SetMessage(side, 2);
         }
-        if (BtlCtrl_TestFlagE3(side)) {
+        if (BtlCtrl_TestFlagE3(HUD_WHO(side))) {
             HudCombo_SetMessage(side, 3);
         }
-        if (BtlCtrl_IsFlag9CRaised(side)) {
+        if (BtlCtrl_IsFlag9CRaised(HUD_WHO(side))) {
             HudCombo_SetMessage(side, 4);
         }
         /* Single button prompt (flags 0xE7..0xEC through BtlCtrl_GetChangePrompt, else flag 0xE6). The icon
