@@ -873,8 +873,86 @@ s32 BtlSeqIntroTalk_Enter(BtlSeqTalkCtx *ctx) {
     return 1;
 }
 
+#ifdef PORT
+/* More than two fighters: an intro for every member (the user). The two leads' turns are the game's (their pair
+   lines, voices and camera cuts); each other fighter gets a turn of its own the same way, with a generic line
+   (0 or 1, as the game picks when the pair has no special dialogue): the first lead, its teammates, the second
+   lead, then everybody else. A member's turn is taken between the game's steps (step 2: before the second lead;
+   step 4: before the end) as steps 20 / 21, and goes back to the step it was taken from. There are two voice
+   players: a member speaks on its lead's, whose line has ended by then. Start skips the whole intro as before. */
+#define PORT_INTRO_TURN 20
+static s32 sPortIntroQ[16], sPortIntroN, sPortIntroSplit, sPortIntroAt, sPortIntroCur, sPortIntroBack, sPortIntroLine,
+    sPortIntroVoice;
+
+static s32 Port_IntroOn(void) {
+    extern s32 BtlChar_GetCount(void);
+    return BtlChar_GetCount() > 2 && Battle_GetMode() != 1;
+}
+
+/* At step 0: the order of the members' turns. */
+static void Port_IntroQueue(BtlSeqTalkCtx *ctx) {
+    extern s32 BtlChar_GetCount(void);
+    extern s32 Port_Team(s32 i);
+    s32 k, pass;
+
+    sPortIntroN = sPortIntroAt = 0;
+    for (pass = 0; pass < 2; pass++) {
+        for (k = 2; k < BtlChar_GetCount() && sPortIntroN < 16; k++) {
+            if ((Port_Team(k) == Port_Team(ctx->side[0])) == (pass == 0)) {
+                sPortIntroQ[sPortIntroN++] = k;
+            }
+        }
+        if (pass == 0) {
+            sPortIntroSplit = sPortIntroN;
+        }
+    }
+}
+
+/* At step 2 or 4: takes the next member's turn when one is due before that step. */
+static void Port_IntroDivert(BtlSeqTalkCtx *ctx) {
+    if (!Port_IntroOn() || (ctx->step != 2 && ctx->step != 4)) {
+        return;
+    }
+    if (sPortIntroAt < (ctx->step == 2 ? sPortIntroSplit : sPortIntroN)) {
+        sPortIntroBack = ctx->step;
+        sPortIntroCur = sPortIntroQ[sPortIntroAt++];
+        sPortIntroVoice = ctx->step == 2 ? ctx->side[0] : ctx->side[1];
+        ctx->step = PORT_INTRO_TURN;
+    }
+}
+
+/* The ends of all the members' poses (state exit). */
+static void Port_IntroEnd(void) {
+    extern s32 BtlChar_GetCount(void);
+    s32 k;
+
+    for (k = 2; k < BtlChar_GetCount(); k++) {
+        BtlCtrl_EndEntrance(k);
+        BtlObj_SetSubState(BtlObj_Get(k), 0, -1);
+    }
+}
+#endif
+
 /* State 1 preUpdate: at steps 0 and 2 starts a speaker's pose, camera cut, voice line and talk animation. */
 s32 BtlSeqIntroTalk_PreUpdate(BtlSeqTalkCtx *ctx) {
+#ifdef PORT
+    if (ctx->step == 0 && Port_IntroOn()) {
+        Port_IntroQueue(ctx);
+    }
+    Port_IntroDivert(ctx);
+    if (ctx->step == PORT_INTRO_TURN) {
+        BtlSeqObj *obj = BtlObj_Get(sPortIntroCur);
+
+        sPortIntroLine = rand() % 2;
+        BtlCtrl_StartEntrance(sPortIntroCur);
+        Ramp_Start(&ctx->timer, 10.0f, 0.0f, 1.0f);
+        DemoCam_PlayObjAnim(sPortIntroCur, 0);
+        Voice_PlayChara(sPortIntroVoice, obj->chara, sPortIntroLine);
+        BtlObj_SetSubState(obj, 2, sPortIntroLine);
+        ctx->step = PORT_INTRO_TURN + 1;
+        return 1;
+    }
+#endif
     switch (ctx->step) {
     case 0:
         BtlCtrl_StartEntrance(ctx->side[0]);
@@ -900,6 +978,18 @@ s32 BtlSeqIntroTalk_PreUpdate(BtlSeqTalkCtx *ctx) {
 
 /* State 1 update: waits for each line to end (voice stopped or 10 s), or for the skip; then goes to state 2. */
 s32 BtlSeqIntroTalk_Update(BtlSeqTalkCtx *ctx) {
+#ifdef PORT
+    Port_IntroDivert(ctx);
+    if (ctx->step == PORT_INTRO_TURN + 1 && BtlCtrl_IsPoseReached(sPortIntroCur)) {
+        if (Voice_IsStopped(sPortIntroVoice) || Ramp_Step(&ctx->timer)) {
+            ScrXfade_RequestCapture();
+            ScrXfade_Start(1, 1.0f);
+            BtlObj_SetSubState(BtlObj_Get(sPortIntroCur), 0, -1);
+            ctx->step = sPortIntroBack;
+            Port_IntroDivert(ctx); /* (the next member's turn, if one is due) */
+        }
+    }
+#endif
     switch (ctx->step) {
     case 0:
     case 1:
@@ -958,6 +1048,11 @@ s32 BtlSeqIntroTalk_Exit(BtlSeqTalkCtx *ctx) {
         DemoCam_Stop();
         BtlCtrl_EndEntrance(ctx->side[0]);
         BtlCtrl_EndEntrance(ctx->side[1]);
+#ifdef PORT
+        if (Port_IntroOn()) {
+            Port_IntroEnd();
+        }
+#endif
     }
     return 1;
 }
