@@ -652,12 +652,13 @@ void BtlChars_UpdateFreeze(void) {
                 level[i] = 0;
             }
             /* The start of a super holds every other fighter still (and BtlChars_UpdateObjFlag2 hides them): in
-               the game that is its opponent, while its camera has the screen. With more than two fighters and a
-               technique that is not about a player its camera stays off the screen (btl_char_api.c), and the
-               player stood still and vanished for a second for a fight elsewhere (seen by the user). There it
-               holds only its target, below; the hold of everyone is kept for what is about a player. */
+               the game that is its opponent, while its camera has the screen. With more than two fighters it
+               holds only its target, below, whoever it is about: holding everyone stood the whole field still
+               for every super of a player's or aimed at one, eight fighters with ten (the user: "only the
+               attacker and the target are frozen"). Its camera still has the screen only when it is about a
+               player (btl_char_api.c). */
             local[i] = 0;
-            if (level[i] != 0 && BtlChar_GetCount() > 2 && !Port_AboutPlayer(i)) {
+            if (level[i] != 0 && BtlChar_GetCount() > 2) {
                 local[i] = level[i];
                 level[i] = 0;
             }
@@ -712,6 +713,16 @@ void BtlChars_UpdateFreeze(void) {
                 Port_HoldLog(i, t, local[i]);
             }
         }
+    }
+#endif
+#ifdef PORT
+    {   /* (the experiment's tool) BT3_FREEZE_COUNT=1: every frame in which three or more fighters are held at once */
+        extern void Port_FreezeCount(int held, int count);
+        s32 held = 0;
+        for (i = 0; i < BtlChar_GetCount(); i++) {
+            held += BtlChar_Get(i)->freezeNext != 0;
+        }
+        Port_FreezeCount(held, BtlChar_GetCount());
     }
 #endif
     for (i = 0; i < BtlChar_GetCount(); i++) {

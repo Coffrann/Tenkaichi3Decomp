@@ -838,6 +838,16 @@ void Port_TargetLog(int i, int target, int x, int locked) {
     }
 }
 
+void Port_FreezeCount(int held, int count) {
+    static int on = -1, frame;
+    if (on < 0) { on = getenv("BT3_FREEZE_COUNT") != NULL; }
+    if (!on) { return; }
+    frame++;
+    if (held >= 3) {
+        fprintf(stderr, "bt3: held %d of %d fighters (frame %d)\n", held, count, frame);
+    }
+}
+
 void Port_FreezeLog(int i, int level, int action, int frozen, int count) {
     static int on = -1, calls;
     if (on < 0) { on = getenv("BT3_FREEZE_LOG") != NULL; }
