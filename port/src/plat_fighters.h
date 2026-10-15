@@ -33,13 +33,15 @@ enum { PORT_MODE_NONE, PORT_MODE_TEAM, PORT_MODE_FFA, PORT_MODE_TRAINING, PORT_M
 typedef struct PortModesView { /* what the main menu shows now, for the code that draws the hint (gs/ui.cpp) */
     int hint;   /* the game's main menu is up and takes input: the hint is shown */
     int set;    /* 1: the menu shows the extra modes' entries, 0: its own */
-    int cursor; /* the extra mode the cursor is on, 0..2 */
+    int cursor; /* the extra mode the cursor is on, 0..2 (or the number of players less one, 0..3) */
+    int players; /* 1: the list is the number of players of the mode chosen (Team Battle, Free-for-All) */
 } PortModesView;
 
 void Port_ModesView(PortModesView *out);
 int Port_ModesFight(void);     /* PORT_MODE_ the fights of now were chosen with on the main menu, 0: none (and none online) */
 int Port_ModesCount(void);     /* ... and how many of the Experiments tab's extra fighters such a fight gets besides */
 const char *Port_ModesName(int mode);
+const char *Port_ModesPlayersName(int n); /* "1 Player" .. "4 Players" */
 
 #ifdef __cplusplus
 }

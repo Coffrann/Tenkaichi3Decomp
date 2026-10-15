@@ -297,9 +297,7 @@ int Port_ExtraSetup(int mode, int members0, int members1, int split, int replay,
                 last = EXTRA_MODE;
             } else if (script) {
                 last = EXTRA_SCRIPT;
-            } else if (split && getenv("BT3_HUMAN_PADS") == NULL && Port_LocalPlayers() < 3) { /* (with players 3 and 4: four quarters) */
-                last = EXTRA_SPLIT;
-            } else if (replay) {
+            } else if (replay) { /* (split screen: two players, or four in quarters; each part its own HUD) */
                 last = EXTRA_REPLAY;
             } else {
                 sFightRoster = page;

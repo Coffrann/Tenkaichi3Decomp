@@ -11,6 +11,8 @@ extern void Port_ModesShow(const int *rows);
 extern void Port_ModesCursor(int entry);
 extern int Port_ModesChoose(int entry);
 extern int Port_ModesLeave(void);
+extern void Port_ModesShowPlayers(const int *rows);
+extern int Port_ModesChoosePlayers(int entry, int n);
 #include "battle/col_c.h" /* FontStyle / FONT_ALIGN_* / FONT_SHADOW_*, for the extra modes line in the message window */
 #endif
 #include "sys/pad.h"
@@ -43,7 +45,21 @@ static char *const sPortModesHelp[PORTMODES_NUM] = {
     "Fill both lists with fighters.\nEvery one fights for itself.",
     "Training, with the extra fighter\nset up in the settings (F1).",
 };
-static s32 sPortModes; /* 0 the menu's own entries, 1 the extra modes, 2 its own again from this frame on */
+/* After Team Battle or Free-for-All, the same menu lists the number of players (asked for by the user: "1 Player,
+   2 Players and so on"): 1 against the computer, 2 the game's two-player split screen, 3 and 4 that with players
+   3 and 4 on the teams' second members in quarters (port/src/plat_fighters.c, Local players). Four rows: the
+   fourth row's plate is shown for it. */
+#define PORTPLAYERS_NUM 4
+static const s32 sPortPlayersItem[PORTPLAYERS_NUM] = { 3, 2, 6, 1 };
+static char *const sPortPlayersHelp[PORTPLAYERS_NUM] = {
+    "One player against the computer.",
+    "Two players, the screen split in two.",
+    "Three players, the screen in quarters:\ncontroller 3 plays team 1's second fighter.",
+    "Four players, the screen in quarters:\ncontrollers 3 and 4 play the second fighters.",
+};
+static s32 sPortModesPick; /* the mode the number of players is asked for (0 Team Battle, 1 Free-for-All) */
+static s32 sPortModes; /* 0 the menu's own entries, 1 the extra modes, 2 its own again from this frame on, 3 the
+                          number of players */
 /* the menu's own list while the extra modes are showing */
 static struct {
     s32 items[MAINMENU_ITEM_MAX];
@@ -326,7 +342,7 @@ static void MainMenu_PortModesPlates(s32 show) {
     for (i = 0; i < 4; i++) {
         sprintf(name, "mc_menu_plate_%d", plates[i]);
         Flash_FindLabel(flash, NULL, name, &ref);
-        Flash_ClipSetFlags(flash, &ref, 2, show);
+        Flash_ClipSetFlags(flash, &ref, 2, show || (sPortModes == 3 && plates[i] == 5)); /* (the fourth row: 4 Players) */
     }
     for (i = 0; i < 2; i++) {
         Flash_FindLabel(flash, NULL, i ? "mc_menu_yajirusi_down" : "mc_menu_yajirusi_up", &ref);
@@ -347,7 +363,7 @@ static void MainMenu_PortModesHelp(void) {
     gFontStyle.shadowColor = 0x80000000;
     gFontStyle.shadowDx = 1;
     gFontStyle.shadowDy = 1;
-    Font_PrintAsciiAt(25, 369, sPortModesHelp[gMainMenu->cursor]);
+    Font_PrintAsciiAt(25, 369, sPortModes == 3 ? sPortPlayersHelp[gMainMenu->cursor] : sPortModesHelp[gMainMenu->cursor]);
     gFontStyle = saved;
 }
 
@@ -504,7 +520,7 @@ void MainMenu_Draw(void) {
     }
     IconWin_Draw();
 #ifdef PORT
-    if (sPortModes == 1 && (gMainMenu->flash[0].flags & MFLASH_PAD)) {
+    if ((sPortModes == 1 || sPortModes == 3) && (gMainMenu->flash[0].flags & MFLASH_PAD)) {
         MainMenu_PortModesHelp(); /* (drawn with the window's own text: MsgWin_Draw ends with the font's queue) */
     }
 #endif
@@ -727,6 +743,40 @@ static void MainMenu_PortModesSwitch(s32 on) {
     MainMenu_PlateGoto(0, "fl_on_start");
 }
 
+/* Between the extra modes (players 0) and the number of players for mode entry `pick` (players 1). */
+static void MainMenu_PortPlayersSwitch(s32 players, s32 pick) {
+    s32 i;
+
+    MainMenu_PlateGoto(0, "fl_off_start");
+    gMainMenu->iconTimer = 0;
+    gMainMenu->iconFrame = 0;
+    if (players) {
+        sPortModesPick = pick;
+        for (i = 0; i < PORTPLAYERS_NUM; i++) {
+            gMainMenu->items[i] = sPortPlayersItem[i];
+        }
+        gMainMenu->itemCount = PORTPLAYERS_NUM;
+        gMainMenu->top = PORTPLAYERS_NUM - 1;
+        gMainMenu->cursor = 0;
+        sPortModes = 3;
+        Port_ModesShowPlayers(sPortPlayersItem);
+        Snd_PlaySe(1, 1);
+    } else {
+        for (i = 0; i < PORTMODES_NUM; i++) {
+            gMainMenu->items[i] = sPortModesItem[i];
+        }
+        gMainMenu->itemCount = PORTMODES_NUM;
+        gMainMenu->top = PORTMODES_NUM - 1;
+        gMainMenu->cursor = sPortModesPick;
+        sPortModes = 1;
+        Port_ModesShow(sPortModesItem);
+        Port_ModesCursor(sPortModesPick);
+        Snd_PlaySe(1, 2);
+    }
+
+    MainMenu_PlateGoto(0, "fl_on_start");
+}
+
 /* The pad on the frames the menu takes input, before MainMenu_Input. SELECT switches to the extra modes; while
    they are up the pad is theirs: up / down move the cursor over the three (no scrolling), confirm chooses, cancel,
    Circle or SELECT goes back to the menu's own entries. A choice is made the way an entry's is (MAINMENU_CHOOSE), but for
@@ -742,7 +792,7 @@ static s32 MainMenu_PortModes(void) {
     if (!Port_ModesMenu()) {
         return 0; /* (not offered: an online session) */
     }
-    if (sPortModes != 1) {
+    if (sPortModes != 1 && sPortModes != 3) {
         if (gPad[0].gamePressed & 0x2000) {
             MainMenu_PortModesSwitch(1);
             return 1;
@@ -751,20 +801,27 @@ static s32 MainMenu_PortModes(void) {
     }
     move = (gPad[0].gameRepeat & 8) ? -1 : (gPad[0].gameRepeat & 4) ? 1 : 0;
     if (move != 0) {
+        s32 num = sPortModes == 3 ? PORTPLAYERS_NUM : PORTMODES_NUM;
         MainMenu_PlateGoto(0, "fl_off_start");
         gMainMenu->iconTimer = 0;
         gMainMenu->iconFrame = 0;
-        gMainMenu->cursor = (gMainMenu->cursor + move + PORTMODES_NUM) % PORTMODES_NUM;
+        gMainMenu->cursor = (gMainMenu->cursor + move + num) % num;
         MainMenu_PlateGoto(0, "fl_on_start");
         Port_ModesCursor(gMainMenu->cursor);
         Snd_PlaySe(1, 0);
+    } else if (sPortModes == 1 && (gPad[0].gamePressed & 0x200) && gMainMenu->cursor < 2) {
+        MainMenu_PortPlayersSwitch(1, gMainMenu->cursor); /* (Team Battle, Free-for-All: how many players) */
+    } else if (sPortModes == 3 && (gPad[0].gamePressed & (0x400 | 0x100 | 0x2000))) {
+        MainMenu_PortPlayersSwitch(0, 0); /* (back to the extra modes) */
     } else if (gPad[0].gamePressed & 0x200) {
-        next = Port_ModesChoose(gMainMenu->cursor);
+        s32 players = sPortModes == 3 ? gMainMenu->cursor + 1 : 1;
+        next = sPortModes == 3 ? Port_ModesChoosePlayers(sPortModesPick, players) : Port_ModesChoose(gMainMenu->cursor);
         if (next == 40) {
-            /* the versus menu's two answers (DuelProgress, include/menu/menu_g.h): 1P vs COM, a team battle */
+            /* the versus menu's two answers (DuelProgress, include/menu/menu_g.h): 1P vs COM (1P vs 2P for two
+               players or more: the team select's two players, split screen), a team battle */
             sPortModesDuel[0] = *(s32 *)((u8 *)gProgress + 0x620);
             sPortModesDuel[1] = *(s32 *)((u8 *)gProgress + 0x624);
-            *(s32 *)((u8 *)gProgress + 0x620) = 0;
+            *(s32 *)((u8 *)gProgress + 0x620) = players >= 2 ? 1 : 0;
             *(s32 *)((u8 *)gProgress + 0x624) = 1;
         } else if (next == 45) {
             /* the training menu's note that it was left for the character select (MPTRAIN_SELECT,

@@ -47,7 +47,9 @@ static volatile int sHint;   /* pad reads the hint still has: the main menu rene
 static volatile int sSet;    /* the main menu shows the extra modes' entries */
 static volatile int sCursor; /* ... and its cursor is on this one (0..2) */
 static int sReady;           /* the menu's label sheets can be given the modes' names */
-static int sRows[PORT_MODE_COUNT - 1]; /* the label rows that have them now */
+static int sRows[4];         /* the label rows that have them now */
+static int sRowCount;
+static volatile int sPlayers; /* the list is the number of players */
 static int sEntered;         /* the progress mode the main menu left for with the mode that is on, 0: none */
 static unsigned sReads;      /* pad 1 reads so far (BT3_MODES_LOG) */
 
@@ -84,6 +86,12 @@ void Port_ModesView(PortModesView *out) {
     out->hint = sHint > 0;
     out->set = sSet;
     out->cursor = sCursor;
+    out->players = sPlayers;
+}
+
+const char *Port_ModesPlayersName(int n) {
+    static const char *const kNames[4] = {"1 Player", "2 Players", "3 Players", "4 Players"};
+    return n >= 1 && n <= 4 ? kNames[n - 1] : "";
 }
 
 /* Pad 1 was read (scePad2Read, plat_stub.c): the hint lives a few reads past the main menu's last frame of input. */
@@ -125,20 +133,41 @@ int Port_ModesMenu(void) {
 
 /* The main menu shows the extra modes' entries on the plates of its own entries rows[0..2] (their label rows get
    the modes' names), or with NULL its own entries again. */
-void Port_ModesShow(const int *rows) {
+int Port_ModesChoose(int entry); /* (below) */
+
+static void show_names(const int *rows, int n, int players) {
     int i;
 
-    for (i = 0; i < PORT_MODE_COUNT - 1; i++) {
-        if (sSet) {
-            MenuText_Relabel(sRows[i], NULL);
-        }
+    for (i = 0; i < sRowCount; i++) {
+        MenuText_Relabel(sRows[i], NULL);
     }
+    sRowCount = 0;
     sSet = rows != NULL;
+    sPlayers = rows != NULL && players;
     sCursor = 0;
-    for (i = 0; i < PORT_MODE_COUNT - 1 && rows != NULL; i++) {
-        sRows[i] = rows[i];
-        MenuText_Relabel(rows[i], Port_ModesName(i + 1));
+    for (i = 0; i < n && i < 4 && rows != NULL; i++) {
+        sRows[sRowCount++] = rows[i];
+        MenuText_Relabel(rows[i], players ? Port_ModesPlayersName(i + 1) : Port_ModesName(i + 1));
     }
+}
+
+/* The list of the number of players (the main menu, after Team Battle or Free-for-All): rows[0..3] are given
+   "1 Player" .. "4 Players". */
+void Port_ModesShowPlayers(const int *rows) {
+    show_names(rows, 4, 1);
+}
+
+/* The number of players `n` (1..4) was chosen for mode entry `entry`: the Experiments tab's Local players is set
+   from it (3 or 4: players 3 and 4 play the teams' second members; 1 or 2: the game's own), and the mode is chosen
+   as Port_ModesChoose does. */
+int Port_ModesChoosePlayers(int entry, int n) {
+    Port_LocalPlayersSet(n >= 3 ? n : 2);
+    fprintf(stderr, "bt3: modes: %s for %s\n", Port_ModesName(entry + 1), Port_ModesPlayersName(n));
+    return Port_ModesChoose(entry);
+}
+
+void Port_ModesShow(const int *rows) {
+    show_names(rows, PORT_MODE_COUNT - 1, 0);
     if (logging()) {
         fprintf(stderr, "bt3: modes: the main menu shows %s (pad read %u, frame %u)\n", sSet ? "the extra modes" : "its own entries",
                 sReads, gGsFrame);
