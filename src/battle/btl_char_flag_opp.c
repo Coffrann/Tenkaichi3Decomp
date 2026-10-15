@@ -379,6 +379,13 @@ s32 Port_HudFighter(s32 side) {
     if (BtlChar_GetCount() < 3 || (side != 0 && side != 1)) {
         return side;
     }
+    {
+        /* (four quarters: the two gauges are the top quarters' fighters; the bottom ones', hud_b.c) */
+        extern s32 Port_QuadMode(void);
+        if (Port_QuadMode()) {
+            return Port_Spectated(Port_QuarterFighter(side));
+        }
+    }
     if (Port_TargetHuman(0) && Port_TargetHuman(1)) {
         return Port_Spectated(side);
     }

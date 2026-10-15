@@ -392,6 +392,26 @@ static View *Port_QuadLayout(s32 q) {
     return &sPortQuad[q];
 }
 
+/* Where a point of the world is in quarter q's picture (Port_ProjectPoint's units), through a view of its own made
+   for the question (nothing is loaded for drawing: the HUD asks, between its own drawing). */
+s32 Port_QuarterProject(s32 q, Vec4 *pos, s32 *x, s32 *y) {
+    extern s32 Port_QuarterFighter(s32 q);
+    extern s32 Port_Spectated(s32 p);
+    extern s32 Port_FighterObjId(s32 i);
+    extern s32 Port_ProjectPoint(Vec4 *pos, s32 *x, s32 *y); /* (below) */
+    static BtlCamView tmp;
+    View *was = gBtlCamView;
+    s32 r;
+
+    tmp.view = *Port_QuadLayout(q & 3);
+    BtlCharApi_GetCamPose(Port_FighterObjId(Port_Spectated(Port_QuarterFighter(q & 3))), &tmp.pos, &tmp.rot);
+    BtlCam_BuildView(&tmp, 0);
+    gBtlCamView = &tmp.view;
+    r = Port_ProjectPoint(pos, x, y);
+    gBtlCamView = was;
+    return r;
+}
+
 /* Views 0 and 1 for pass `pass` (0 top, 1 bottom): their cameras. */
 void Port_QuadCams(s32 pass) {
     s32 i;

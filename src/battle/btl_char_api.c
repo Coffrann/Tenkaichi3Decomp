@@ -659,8 +659,13 @@ s32 Port_WatchedStopped(void) {
     extern s32 BtlChar_IsFrozen(BtlCharApiChr *chr);
     s32 s;
 
-    for (s = 0; s < 2; s++) {
-        s32 i = Port_HudFighter(s);
+    extern s32 Port_QuadMode(void);
+    extern s32 Port_QuarterFighter(s32 q);
+    extern s32 Port_Spectated(s32 p);
+    s32 quad = Port_QuadMode(); /* (four quarters: the four players' fighters; their targets are not looked at) */
+
+    for (s = 0; s < (quad ? 4 : 2); s++) {
+        s32 i = quad ? Port_Spectated(Port_QuarterFighter(s)) : Port_HudFighter(s);
         if ((u32)i < (u32)BtlChar_GetCount() &&
             (BtlChar_IsFrozen(BtlChar_Get(i)) || BtlCharApi_IsInRushSequence(BtlChar_Get(i)->objId))) {
             return 1;
@@ -676,6 +681,14 @@ s32 Port_CutShownObj(s32 objId) {
 
     if (BtlChar_GetCount() < 3 || objId < 0) {
         return 1;
+    }
+    {
+        /* (four quarters: the demo camera would take the whole screen from three players; the technique plays on
+           in its fighter's own quarter) */
+        extern s32 Port_QuadMode(void);
+        if (Port_QuadMode()) {
+            return 0;
+        }
     }
     chr = BtlChar_FindByObjId(objId);
     return chr == NULL || Port_CutShown(chr->side);

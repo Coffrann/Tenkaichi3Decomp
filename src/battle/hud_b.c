@@ -1980,8 +1980,9 @@ static void HudMini_Each(HudMiniSlot *m, s32 k, void (*op)(void *, void *, u32))
 #undef HUDM_X
 }
 
-/* Fighter i's small gauge in row `slot` of screen side `place` (0 left, 1 right). */
-static void HudExtra_DrawMini(s32 i, s32 place, s32 slot) {
+/* Fighter i's gauge on screen side `place` (0 left, 1 right), at `scale` of its size, its top `top` lines down
+   (with `dx` to the side): a small one of a row, or a bottom quarter's (four local players). */
+static void HudExtra_DrawGauge(s32 i, s32 place, f32 scale, f32 top, f32 dx) {
     s32 k = HUD_SCR(0) == place ? 0 : 1; /* (the side whose gauge stands on that side of the screen: its mirroring) */
     s32 was = gHudGauge->side;
     Ramp slideAll = gHudGauge->slideAll;
@@ -2009,11 +2010,11 @@ static void HudExtra_DrawMini(s32 i, s32 place, s32 slot) {
     gHudGauge->switching[k] = 0;
     Vu0Cur_Push();
     Mtx_StoreIdentity(mtx);
-    mtx[0][0] = HUDM_SCALE;
-    mtx[1][1] = HUDM_SCALE;
+    mtx[0][0] = scale;
+    mtx[1][1] = scale;
     /* (about the screen's top left corner; a right side's gauge is mirrored about the screen after it) */
-    mtx[3][0] = 2.0f; /* (the right side's mirroring is applied after this: the same corner on both) */
-    mtx[3][1] = (f32)(HUDM_TOP + slot * HUDM_STEP);
+    mtx[3][0] = dx; /* (the right side's mirroring is applied after this: the same corner on both) */
+    mtx[3][1] = top;
     Vu0Cur_MulMtx(mtx);
     Port_GsMarker(place ? PORT_2D_RIGHT : PORT_2D_LEFT);
     HudGfx_ClearAlpha();
@@ -2026,6 +2027,9 @@ static void HudExtra_DrawMini(s32 i, s32 place, s32 slot) {
     gHudGauge->slideAll = slideAll;
     HudGauge_SelectSide(was);
 }
+static void HudExtra_DrawMini(s32 i, s32 place, s32 slot) {
+    HudExtra_DrawGauge(i, place, HUDM_SCALE, (f32)(HUDM_TOP + slot * HUDM_STEP), 2.0f);
+}
 
 /* Draws the rows; called by Hud_Draw behind the two passes of the gauge tree. */
 void HudGauge_DrawExtras(void) {
@@ -2037,6 +2041,23 @@ void HudGauge_DrawExtras(void) {
         return; /* (no roster yet) */
     }
     count = BtlChar_GetCount();
+    {
+        /* Four quarters (four local players): every quarter has its fighter's gauge in its own top corner, as the
+           game's two have theirs: the top quarters' are those two (Port_HudFighter), the bottom ones' the same gauge
+           half the screen lower. No rows of small gauges: a quarter has no room for them. */
+        extern s32 Port_QuadMode(void);
+        extern s32 Port_QuarterFighter(s32 q);
+        extern s32 Port_Spectated(s32 p);
+        if (Port_QuadMode()) {
+            s32 q;
+            for (q = 2; q < 4; q++) {
+                HudExtra_DrawGauge(Port_Spectated(Port_QuarterFighter(q)), q == 2 ? HUD_SCR(0) : HUD_SCR(1), 1.0f, 226.0f, 0.0f);
+            }
+            HudExtra_DrawTargetMark();
+            Port_GsMarker(HUD_SCR(1) ? PORT_2D_RIGHT : PORT_2D_LEFT);
+            return;
+        }
+    }
     for (i = 0; i < count && i < PORT_FIGHTER_MAX; i++) {
         /* (everybody but the two the gauges show: the player's and its target, Port_HudFighter; player 1's team
            under player 1's gauge, player 2's under player 2's; a fighter of another team, which is everybody in a
@@ -2094,12 +2115,21 @@ static void HudExtra_Triangle(s32 x0, s32 y0, s32 x1, s32 y1, s32 x2, s32 y2, u3
 }
 
 static void HudExtra_DrawTargetMark(void) {
+    extern s32 Port_QuadMode(void);
+    extern s32 Port_QuarterFighter(s32 q);
+    extern s32 Port_QuarterProject(s32 q, HudXPoint *pos, s32 *x, s32 *y); /* btl_cam.c */
     HudXPoint head, feet;
     s32 p, locked, ax, ay, fx, fy, h, s, tip;
+    s32 quad = Port_QuadMode(); /* (four quarters: each player's marker in its own quarter, through its camera) */
 
-    for (p = 0; p < 2; p++) {
-        if (!Port_TargetMark(p, &head, &feet, &locked) || !Port_ProjectPoint(&head, &ax, &ay) ||
-            !Port_ProjectPoint(&feet, &fx, &fy)) {
+    for (p = 0; p < (quad ? 4 : 2); p++) {
+        if (quad) {
+            if (!Port_TargetMark(Port_QuarterFighter(p), &head, &feet, &locked) || !Port_QuarterProject(p, &head, &ax, &ay) ||
+                !Port_QuarterProject(p, &feet, &fx, &fy)) {
+                continue;
+            }
+        } else if (!Port_TargetMark(p, &head, &feet, &locked) || !Port_ProjectPoint(&head, &ax, &ay) ||
+                   !Port_ProjectPoint(&feet, &fx, &fy)) {
             continue;
         }
         h = fy > ay ? fy - ay : ay - fy;     /* the fighter's height on the screen (head to feet) */
