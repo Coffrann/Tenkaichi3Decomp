@@ -637,6 +637,47 @@ static void order(const char *root) {
             sFail++;
         }
     }
+    {   /* describe (a switched-off folder too) and preview (answers for one disc character, then not) */
+        PortCharaDesc desc;
+        char out[600], want[1200];
+        if (!PortCharas_Describe("B second", &desc) || desc.replaces != -1 || desc.costumes != 1 || (desc.files & 1) == 0) {
+            printf("FAIL: describe B second: replaces %d costumes %d files %x\n", desc.replaces, desc.costumes, desc.files);
+            sFail++;
+        }
+        if (!PortCharas_Describe("R1 replaces 0", &desc) || desc.replaces != 0) {
+            printf("FAIL: describe R1\n");
+            sFail++;
+        }
+        if (PortCharas_Describe("../x", &desc) || PortCharas_Describe("A first/x", &desc) || PortCharas_Describe("nothing here", &desc)) {
+            printf("FAIL: described what is no package\n");
+            sFail++;
+        }
+        epoch = PortCharas_Epoch();
+        snprintf(path, sizeof(path), "%s/A first", root);
+        if (!PortCharas_Preview(path, 37) || PortCharas_Epoch() == epoch || !PortCharas_Alias("pzs3us1/01793.bin", out, sizeof(out))) {
+            printf("FAIL: preview of A first as 37\n");
+            sFail++;
+        } else {
+            snprintf(want, sizeof(want), "%s/A first/a_1p.pak", root);
+            printf("preview: 0x590 + 37 * 10 -> %s%s\n", out, strcmp(out, want) == 0 ? "" : "   FAIL");
+            sFail += strcmp(out, want) != 0;
+        }
+        sSession = 1;
+        if (PortCharas_Alias("pzs3us1/01793.bin", out, sizeof(out)) && strncmp(out, "pzs3us", 6) != 0) {
+            printf("FAIL: the preview answered in a session\n");
+            sFail++;
+        }
+        sSession = 0;
+        PortCharas_Preview(NULL, -1);
+        if (PortCharas_Alias("pzs3us1/01793.bin", out, sizeof(out)) && strncmp(out, "pzs3us", 6) != 0) {
+            printf("FAIL: the preview still answers: %s\n", out);
+            sFail++;
+        }
+        if (PortCharas_Preview("/no/such/folder", 3) || PortCharas_Preview("relative", 3) || PortCharas_Preview(path, 999)) {
+            printf("FAIL: a preview of nothing\n");
+            sFail++;
+        }
+    }
     printf(sFail == 0 ? "order OK\n" : "order FAILED\n");
 }
 

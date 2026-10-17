@@ -83,4 +83,25 @@ int Port_CharaForms(int chara, int *out, int max);
 void *Port_CharaNamePack(void *pack);
 int Port_CharaNameLine(int chara);
 
+/* What a folder of `characters` holds (PortCharas_Describe): for the Mod Manager. */
+enum { PORT_DESC_PORTRAIT = 12, PORT_DESC_CHIP, PORT_DESC_MEMBER, PORT_DESC_LINES, PORT_DESC_LINKS = 19 };
+typedef struct PortCharaDesc {
+    char name[64];     /* the name for the menus: the manifest's, else the folder's */
+    int nameSet;
+    char label[96];    /* the form's label */
+    int labelSet;
+    int replaces;      /* the disc character it replaces; -1 it adds one */
+    int base;          /* the disc character it stands on (a replacement: the one it replaces) */
+    int costumes;      /* model files in a row from the first */
+    int files;         /* bit k: file k of the twelve (0..3 costumes, 4..7 damaged, 8 animations, 9 effects, 10 / 11 the
+                          voice banks), and PORT_DESC_PORTRAIT, _CHIP, _MEMBER, _LINES */
+    int large;         /* a model larger than the original's buffer */
+    char link[PORT_DESC_LINKS][64]; /* the links as written: left, up, right, down, fusion1..3, partners */
+    int stat[PORT_STAT_COUNT];      /* health, ki, blast stocks; -1 not said */
+    char problem[400]; /* what is wrong with it, "" nothing */
+} PortCharaDesc;
+int PortCharas_Describe(const char *folder, PortCharaDesc *out);
+/* the Mod Manager's preview: the folder at path answers for disc character as's files until changed (NULL / -1: none) */
+int PortCharas_Preview(const char *path, int as);
+
 #endif

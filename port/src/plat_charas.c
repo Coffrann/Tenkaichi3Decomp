@@ -89,6 +89,10 @@ static int sPkgCount;
 static int sInit;
 static int sReloads;                 /* how many times the folder was read again (PortCharas_Reload) */
 static int sModelSize;               /* Port_ModelSize's answer, 0 until asked (again after a reload) */
+static int sPreviews;                /* how many times the Mod Manager's preview changed (PortCharas_Preview) */
+static int sDry;                     /* scan() only describes a folder (PortCharas_Describe): nothing is kept */
+static char sDryNote[400];           /* ... and what it found wrong is put here */
+static int pkg_dir(const char *folder, char *out, size_t size);
 
 /* The load order (`load_order.txt` in the characters folder, written by the Mod Manager): which folders are used
    and in which order. Each line is `on <folder>` or `off <folder>`; the folders it lists come first, in its order,
@@ -133,7 +137,7 @@ static int id_of(const Chara *c) {
 /* Changes whenever what the game's file numbers answer may have changed: with a session's start and end, and with
    each reading of the folder again; the open files are then looked up again (plat_fcache.c). */
 int PortCharas_Epoch(void) {
-    return (Port_NetSession() ? 1 : 0) + 2 * sReloads;
+    return (Port_NetSession() ? 1 : 0) + 2 * (sReloads + sPreviews);
 }
 
 /* ---- the folder scan ---------------------------------------------------------------------------------------- */
@@ -216,6 +220,13 @@ static void note(const Chara *c, const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
+    if (sDry) {
+        size_t at = strlen(sDryNote);
+        if (at + 3 < sizeof(sDryNote)) {
+            snprintf(sDryNote + at, sizeof(sDryNote) - at, "%s%s", at > 0 ? "; " : "", msg);
+        }
+        return;
+    }
     fprintf(stderr, "bt3: characters: %s%s%s: %s\n", c->owner, c->owner[0] != '\0' ? "/" : "", c->name, msg);
     if (c->pkg >= 0) {
         PortCharaPkg *p = &sPkg[c->pkg];
@@ -565,7 +576,7 @@ static Chara *scan(const char *root, const char *name, const Chara *owner) {
     if (files == 0 && side[4][0] == '\0') {
         return NULL; /* nothing of a package in it: some other folder */
     }
-    if (sPkgCount < PKG_MAX) {
+    if (sPkgCount < PKG_MAX && !sDry) {
         c->pkg = sPkgCount++;
         p = &sPkg[c->pkg];
         memset(p, 0, sizeof(*p));
@@ -626,6 +637,9 @@ static Chara *scan(const char *root, const char *name, const Chara *owner) {
         c->chip[0] = '\0';
     }
 
+    if (sDry) {
+        return c; /* (PortCharas_Describe: the folder as read, kept nowhere) */
+    }
     if (c->replaces == -2) {
         return NULL; /* (said above) */
     }
@@ -946,6 +960,56 @@ int PortCharas_Reload(void) {
     load();
     sReloads++;
     fprintf(stderr, "bt3: characters: read again: %d added, %d replaced, %d listed\n", sCount, sReplCount, sPkgCount);
+    return 1;
+}
+
+/* What a folder of `characters` is, read by the same rules as when it is loaded but kept nowhere: for the Mod
+   Manager, which lists every folder (switched off ones too) and shows what each holds. `folder` is a folder directly
+   in `characters`. 0 if it is no package (or cannot be read). */
+int PortCharas_Describe(const char *folder, PortCharaDesc *out) {
+    char root[300], dir[400];
+    const Chara *c;
+    struct stat st;
+    int k;
+
+    memset(out, 0, sizeof(*out));
+    out->replaces = -1;
+    if (strchr(folder, '/') != NULL || !pkg_dir(folder, dir, sizeof(dir)) || !PortCharas_Root(root, sizeof(root))) {
+        return 0;
+    }
+    sDryNote[0] = '\0';
+    sDry = 1;
+    c = scan(root, folder, NULL);
+    sDry = 0;
+    snprintf(out->problem, sizeof(out->problem), "%s", sDryNote);
+    if (c == NULL) {
+        return 0;
+    }
+    snprintf(out->name, sizeof(out->name), "%s", c->shown);
+    out->nameSet = c->nameSet;
+    snprintf(out->label, sizeof(out->label), "%s", c->label);
+    out->labelSet = c->labelSet;
+    out->replaces = c->replaces;
+    out->base = c->replaces >= 0 ? c->replaces : c->base;
+    for (k = 0; k < F_COUNT; k++) {
+        if (c->file[k][0] != '\0') {
+            out->files |= 1 << k;
+            if (k < 8 && stat(c->file[k], &st) == 0 && st.st_size > 0xCE000) {
+                out->large = 1;
+            }
+        }
+    }
+    for (out->costumes = 0; out->costumes < 4 && c->file[out->costumes][0] != '\0'; out->costumes++) {
+    }
+    out->files |= (c->portrait[0] != '\0') << PORT_DESC_PORTRAIT | (c->chip[0] != '\0') << PORT_DESC_CHIP |
+                  (c->member[0][0] != '\0' || c->member[1][0] != '\0') << PORT_DESC_MEMBER |
+                  (c->lines[0][0] != '\0' || c->lines[1][0] != '\0') << PORT_DESC_LINES;
+    for (k = 0; k < SLOTS && k < PORT_DESC_LINKS; k++) {
+        snprintf(out->link[k], sizeof(out->link[k]), "%s", c->form[k]);
+    }
+    for (k = 0; k < PORT_STAT_COUNT; k++) {
+        out->stat[k] = c->stat[k];
+    }
     return 1;
 }
 
@@ -1291,20 +1355,56 @@ static int have(const char *path) {
 }
 
 /* A file number of the disc that is a replaced character's own: the package's file, if it has that one. */
+/* The Mod Manager's preview: a folder (a package, switched on or not, or one the browser looks at) whose files answer
+   for one disc character's file numbers ahead of everything, while the manager shows it. Never in a session. */
+static Chara sPreview;
+static int sPreviewAs = -1;
+
+int PortCharas_Preview(const char *path, int as) {
+    char root[400];
+    const char *slash = path != NULL ? strrchr(path, '/') : NULL;
+    const Chara *c = NULL;
+    sPreviews++;
+    sPreviewAs = -1;
+    if (path == NULL || path[0] == '\0' || as < 0 || as >= DISC_CHARAS || Port_NetSession() || slash == NULL || slash[1] == '\0' ||
+        (size_t)(slash - path) >= sizeof(root)) {
+        return 0;
+    }
+    snprintf(root, sizeof(root), "%.*s", (int)(slash - path), path);
+    sDryNote[0] = '\0';
+    sDry = 1;
+    c = scan(root, slash + 1, NULL);
+    sDry = 0;
+    if (c == NULL) {
+        return 0;
+    }
+    sPreview = *c;
+    sPreviewAs = as;
+    return 1;
+}
+
+/* the package whose files answer for disc character id: the preview, else its replacement */
+static const Chara *served(int id) {
+    if (sPreviewAs >= 0 && id == sPreviewAs && !Port_NetSession()) {
+        return &sPreview;
+    }
+    return repl_of(id);
+}
+
 static int alias_replaced(int arc, int index, char *out, unsigned n) {
     const Chara *c;
     const char *path = NULL;
     if (arc == 1) {
         int id = index + 1; /* (the first archive's file id N is its file N - 1) */
         if (id >= 8 && id < 8 + DISC_CHARAS * 2) {
-            c = repl_of((id - 8) / 2);
+            c = served((id - 8) / 2);
             path = c != NULL ? c->member[(id - 8) % 2] : NULL;
         } else if (id >= 0x2F9 && id < 0x2F9 + DISC_CHARAS) {
-            c = repl_of(id - 0x2F9);
+            c = served(id - 0x2F9);
             path = c != NULL ? c->portrait : NULL;
         } else if (id >= 0x590 && id < 0x590 + DISC_CHARAS * 10) {
             int k = (id - 0x590) % 10;
-            c = repl_of((id - 0x590) / 10);
+            c = served((id - 0x590) / 10);
             if (c != NULL) {
                 if (c->file[k][0] == '\0' && k >= 4 && k < 8 && c->file[k - 4][0] != '\0') {
                     k -= 4; /* its costume without a damaged model of its own: the costume as it is */
@@ -1319,16 +1419,16 @@ static int alias_replaced(int arc, int index, char *out, unsigned n) {
                 path = c->file[k];
             }
         } else if (id >= 0xBDA && id < 0xBDA + DISC_CHARAS) {
-            c = repl_of(id - 0xBDA);
+            c = served(id - 0xBDA);
             path = c != NULL ? c->file[F_VOICE] : NULL;
         } else if (id >= 0xC7B && id < 0xC7B + DISC_CHARAS) {
-            c = repl_of(id - 0xC7B);
+            c = served(id - 0xC7B);
             path = c != NULL ? c->file[F_VOICE + 1] : NULL;
         }
     } else {
         int id = index + 0xD48, set = id >= 0xCC32, at = id - (set ? 0xCC32 : 0x8D4E);
         if (id >= 0x8D4E && at >= 0 && at < DISC_CHARAS * 100 && (set || id < 0x8D4E + DISC_CHARAS * 100)) {
-            c = repl_of(at / 100);
+            c = served(at / 100);
             if (c != NULL && c->lines[set][0] != '\0') {
                 int w = snprintf(out, n, "%s/%03d.adx", c->lines[set], at % 100);
                 return w > 0 && (unsigned)w < n && have(out);
