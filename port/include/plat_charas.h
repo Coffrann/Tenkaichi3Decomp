@@ -101,6 +101,9 @@ typedef struct PortCharaDesc {
     char problem[400]; /* what is wrong with it, "" nothing */
 } PortCharaDesc;
 int PortCharas_Describe(const char *folder, PortCharaDesc *out);
+int PortCharas_DescribePath(const char *path, PortCharaDesc *out); /* a folder anywhere (the browser's) */
+/* the folders of `characters` in the order they are used (the load order's, then the others by name), each on or not */
+int PortCharas_OrderGet(char (*folder)[128], unsigned char *on, int max);
 /* the Mod Manager's preview: the folder at path answers for disc character as's files until changed (NULL / -1: none) */
 int PortCharas_Preview(const char *path, int as);
 

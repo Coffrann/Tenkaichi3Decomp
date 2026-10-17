@@ -193,6 +193,56 @@ static void tbo_push(int c) {
     SDL_UnlockSpinlock(&sTboLock);
 }
 
+/* The Mod Manager's screens (src/menu/port_modmgr.c): while one says so (Port_EscQuit(0)) Esc is theirs (back) and
+   does not ask to close the game; a file or folder dropped on the window is kept for them (Port_DropTake). The
+   window's events come in on the renderer's thread (PortInput_GameEvent, from the event loops, after the settings
+   window and the keypads had them). */
+static volatile int sEscQuit = 1, sEscHit;
+static char sDropPath[700];
+static int sDropHave;
+static SDL_SpinLock sDropLock;
+
+void Port_EscQuit(int on) {
+    sEscQuit = on != 0;
+    sEscHit = 0;
+}
+
+int Port_EscTake(void) {
+    int hit = sEscHit;
+    sEscHit = 0;
+    return hit;
+}
+
+int PortInput_GameEvent(const SDL_Event *ev) {
+    if (ev->type == SDL_EVENT_DROP_FILE && ev->drop.data != NULL) {
+        SDL_LockSpinlock(&sDropLock);
+        SDL_snprintf(sDropPath, sizeof(sDropPath), "%s", ev->drop.data);
+        sDropHave = strlen(ev->drop.data) < sizeof(sDropPath);
+        SDL_UnlockSpinlock(&sDropLock);
+        return 1;
+    }
+    if (!sEscQuit && ev->type == SDL_EVENT_KEY_DOWN && ev->key.key == SDLK_ESCAPE) {
+        if (!ev->key.repeat) {
+            sEscHit = 1;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* The path of the last thing dropped on the window, once: 1 and the path (NUL-terminated, cut to `size`), or 0. */
+int PortInput_DropTake(char *out, unsigned size) {
+    int have;
+    SDL_LockSpinlock(&sDropLock);
+    have = sDropHave;
+    if (have && size > 0) {
+        SDL_snprintf(out, size, "%s", sDropPath);
+    }
+    sDropHave = 0;
+    SDL_UnlockSpinlock(&sDropLock);
+    return have;
+}
+
 void PortTbo_TextMode(int on) {
     SDL_LockSpinlock(&sTboLock);
     sTboHead = sTboTail = 0;

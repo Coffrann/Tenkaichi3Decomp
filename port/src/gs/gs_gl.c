@@ -803,6 +803,7 @@ static void frame_end(void) {
         { extern void PortA11y_Event(const SDL_Event *ev); PortA11y_Event(&ev); } /* a11y.c: the repeat key and button */
         if (PortInput_Hotkey(&ev)) { Ui_Toggle(); continue; }
         if (Ui_Event(&ev)) { continue; }
+        { extern int PortInput_GameEvent(const SDL_Event *ev); if (PortInput_GameEvent(&ev)) { continue; } } /* gs_input.c: a drop, the Mod Manager's Esc */
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE) { if (!ev.key.repeat && !Ui_QuitAsk()) { exit(0); } /* (asks first) */ }
         if (ev.type == SDL_EVENT_KEY_DOWN && !ev.key.repeat && ev.key.key == SDLK_F9) { /* in-between pictures on / off */
             extern int gsInterp;

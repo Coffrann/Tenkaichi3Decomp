@@ -25,7 +25,37 @@
     X(TBO_BTN_TRIANGLE, "btn_triangle") \
     X(TBO_BTN_LEFTRIGHT, "btn_leftright") \
     X(TBO_BTN_CIRCLE, "btn_circle") \
-    X(TBO_BTN_START, "btn_start")
+    X(TBO_BTN_START, "btn_start") \
+    X(MM_BG, "mm_bg")               /* the Mod Manager's pictures (src/menu/port_mmkit.c), in mm_sizes.h's order */ \
+    X(MM_BAR, "mm_bar") \
+    X(MM_BAR_SEL, "mm_bar_sel") \
+    X(MM_TAB, "mm_tab") \
+    X(MM_TAB_SEL, "mm_tab_sel") \
+    X(MM_BAR_GREY, "mm_bar_grey") \
+    X(MM_NAVBAR, "mm_navbar") \
+    X(MM_FIELD, "mm_field") \
+    X(MM_KEY, "mm_key") \
+    X(MM_WINDOW_DARK, "mm_window_dark") \
+    X(MM_CARD, "mm_card") \
+    X(MM_WINDOW, "mm_window") \
+    X(MM_EMBLEM, "mm_emblem") \
+    X(MM_PLATFORM, "mm_platform") \
+    X(MM_FOLDER, "mm_folder") \
+    X(MM_FOLDER_MOD, "mm_folder_mod") \
+    X(MM_FOLDER_BATCH, "mm_folder_batch") \
+    X(MM_ZIP, "mm_zip") \
+    X(MM_KEYCAP, "mm_keycap") \
+    X(MM_KEYCAP_SEL, "mm_keycap_sel") \
+    X(MM_CELL, "mm_cell") \
+    X(MM_UP, "mm_up") \
+    X(MM_DOWN, "mm_down") \
+    X(MM_LEFT, "mm_left") \
+    X(MM_RIGHT, "mm_right") \
+    X(MM_BALL, "mm_ball") \
+    X(MM_LOCK, "mm_lock") \
+    X(MM_PIP, "mm_pip") \
+    X(MM_PIP_OFF, "mm_pip_off") \
+    X(MM_BG_DUSK, "mm_bg_dusk")     /* the character select's mod grid */
 
 #define TBO_ART_ENUM(id, name) id,
 enum { TBO_ART_LIST(TBO_ART_ENUM) TBO_ART_COUNT };
@@ -39,6 +69,6 @@ enum { TBO_ART_LIST(TBO_ART_ENUM) TBO_ART_COUNT };
 /* The lines of letters (port/src/gs/tbo_text.c) are drawn the same way: numbers TBO_TEXT_BASE and on, one per line
    the screens write, the picture made from a TrueType font of the font list. */
 #define TBO_TEXT_BASE 0x100
-#define TBO_TEXT_SLOTS 128
+#define TBO_TEXT_SLOTS 256
 
 #endif

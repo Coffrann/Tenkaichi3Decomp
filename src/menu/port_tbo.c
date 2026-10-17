@@ -612,6 +612,11 @@ static char *Tb_Fighter(s32 chara) {
     return name[chara];
 }
 
+/* A disc character's name for the PC's screens (the Mod Manager's lists: port/src/plat_modmgr.c); "?" past the list. */
+char *PortTbo_FighterName(s32 chara) {
+    return Tb_Fighter(chara);
+}
+
 static void Tb_SparUpdate(s32 live) {
     Pad *pad = &gPad[0];
     s32 *who;

@@ -386,6 +386,75 @@ void ChrView_Init(void) {
     Fade_Start(0, 1, 1.0f);
 }
 
+#ifdef PORT
+/* PC build, for a screen that opens the viewer while it is up (the mod grid of the character select): as ChrView_Init,
+   with its backdrop read in the background instead of behind the loading screen. The screen steps the jobs
+   (Job_Run) each frame and calls ChrView_PortInitDone until it says 1; only then is the viewer used. */
+static s32 sChrViewPortReady; /* (ChrView_PortInitDone: the rest of the set-up is done) */
+static s32 sChrViewKeepMusic; /* (ChrView_PortTermKeepMusic) */
+extern void MapBgm_Stop(void);
+
+void ChrView_Term(void);
+
+/* As ChrView_Term, for a screen opened over another whose music plays on (the mod grid of the character select):
+   every sound is not stopped, only the stage's. */
+void ChrView_PortTermKeepMusic(void) {
+    sChrViewKeepMusic = 1;
+    ChrView_Term();
+    sChrViewKeepMusic = 0;
+}
+
+void ChrView_PortInitAsync(void) {
+    s32 i;
+
+    sChrViewPortReady = 0;
+    ChrViewJob *job;
+
+    Battle_GetWork()->flags &= ~0x100;
+    gChrView = Heap_Alloc(sizeof(ChrView), 0x20, 0, HEAP_ANY);
+    memset(gChrView, 0, sizeof(ChrView));
+    gChrView->anim = 7;
+    for (i = 0; i < CHRVIEW_SLOT_COUNT; i++) {
+        gChrView->slot[i].file[0].buf = Heap_Alloc(ChrView_ModelSize(), 0x40, 0, HEAP_ANY);
+        gChrView->slot[i].file[0].size = 0;
+        gChrView->slot[i].file[0].id = -1;
+        *(s32 *)gChrView->slot[i].file[0].buf = 0;
+        SList_PushFront(&gChrView->free, &gChrView->slot[i].node);
+    }
+    BtlObj_Init(0);
+    BtlObj_SetUnk44FC4(1.0f);
+    OrbitCam_Init();
+    Job_Clear();
+    job = &ChrView_Get()->job;
+    memset(job, 0, sizeof(ChrViewJob));
+    job->step = ChrView_StepLoadStage;
+    Job_Push((Job *)job);
+}
+
+/* 1 once the backdrop is in and the viewer is set up (it then does the rest of what ChrView_Init does after its
+   load); 0 while it is still being read. */
+s32 ChrView_PortInitDone(void) {
+    if (gChrView == NULL) {
+        return 0;
+    }
+    if (sChrViewPortReady) {
+        return 1;
+    }
+    if (Job_Run()) {
+        return 0;
+    }
+    {
+        StgModel_InitStage();
+        StgAmb_Term();
+        StgFx_Init();
+        Ot_Init();
+        BtlScene_Init(8);
+        sChrViewPortReady = 1;
+    }
+    return 1;
+}
+#endif
+
 /* Ends the viewer and frees everything ChrView_Init set up, the backdrop file included. */
 void ChrView_Term(void) {
     s32 i;

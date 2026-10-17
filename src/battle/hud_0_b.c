@@ -234,12 +234,15 @@ u16 *BtlMenu_GetItemText(s32 n) {
 #ifdef PORT
     /* Tenkaichi Budokai Online's sparring fight goes back to its search, and its pause menu says so */
     static const char from[] = "Return to Character Select";
-    static const char to[] = "Back to Budokai Online";
+    static const char toTbo[] = "Back to Budokai Online";
+    static const char toManager[] = "Return to Mod Manager"; /* (the Mod Manager's test fight goes back to it) */
     static u16 line[32];
     extern s32 gPortTboSpar; /* menu/port_tbo.c */
+    extern s32 gPortModTest; /* menu/port_modmgr.c */
+    const char *to = gPortTboSpar ? toTbo : toManager;
     u16 *s = BtlMenu_GetText(n + 8);
 
-    if (gPortTboSpar) {
+    if (gPortTboSpar || gPortModTest) {
         u16 *t = *s == 0xFEFF ? s + 1 : s;
         s32 i;
 

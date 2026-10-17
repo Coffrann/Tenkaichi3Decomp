@@ -33,9 +33,40 @@ MainMenu *gMainMenu = NULL;
  * menu/port_tbo.c. It has no voiced line of the guides.
  */
 #include "port_tbo_label.h"
+/* "Mod Manager" (item 12), listed after Options. The label sheets have no free row left, so each plate state gets a
+   third sheet (PortMainMenu_AddSheet: a copy of the second with pixels of its own) whose first row is its label
+   (label 16), drawn with the font list's line font in the main menu's own colours (port/src/gs/menu_text.c,
+   Port_MainItemText); its icon is the Data Center's. Choosing it opens the Duel mode with gPortDuelRole 2, where
+   Duel_Main runs the manager's screen (menu/port_modmgr.c) instead of its own. */
 
 #define MAINMENU_TBO 11
-#define MM_ICON(item) ((item) == MAINMENU_TBO ? 4 : (item)) /* whose icon an item shows */
+#define MAINMENU_MOD_MANAGER 12
+s32 gPortDuelRole; /* the Duel screens (progress mode 38) are open for a screen of the PC's: 2 the Mod Manager */
+#define MM_LABEL(item) ((item) == MAINMENU_MOD_MANAGER ? 16 : (item)) /* whose label row an item shows */
+#define MM_ICON(item) ((item) == MAINMENU_MOD_MANAGER ? 7 : (item) == MAINMENU_TBO ? 4 : (item)) /* whose icon an item shows */
+
+/* A third label sheet for a plate state (slot 8: not chosen, 12: chosen): the movie takes a label's sheet as the
+   n-th entry behind the one in gMainMenu->tex[slot], so the two entries of the game are copied into a block with
+   room for a third, which is the second again with pixels of its own (the same palette: the PC's labels are made
+   for it). Returns the new sheet's entry. */
+static u8 sPortSheetEnt[2][3 * 0x40];
+static u8 *sPortSheetPix[2];
+
+static u8 *PortMainMenu_AddSheet(s32 slot) {
+    s32 n = slot == 8 ? 0 : 1;
+    u8 *ent = sPortSheetEnt[n];
+    u8 *third = ent + 0x80;
+    u32 size;
+
+    memcpy(ent, gMainMenu->tex[slot], 0x80);
+    memcpy(third, gMainMenu->tex[slot] + 0x40, 0x40);
+    size = *(u32 *)(third + 8);
+    sPortSheetPix[n] = Heap_Alloc(size, 0x40, 0, 2);
+    memcpy(sPortSheetPix[n], *(u8 **)(third + 0x38), size);
+    *(u8 **)(third + 0x38) = sPortSheetPix[n];
+    gMainMenu->tex[slot] = ent;
+    return third;
+}
 
 /* A label sheet's pixels are stored the way the GS keeps 8-bit textures (in blocks): where pixel (x, y) is. */
 static s32 PortMainMenu_PixelAt(s32 x, s32 y) {
@@ -77,8 +108,28 @@ static s32 PortMainMenu_WriteDisc(u8 *tex, s32 row, s32 lit) {
     }
     return 1;
 }
+/* A label of the PC's drawn with a TrueType font into row `row` of a sheet; the row keeps what it has without a font. */
+static void PortMainMenu_WriteText(u8 *tex, s32 row, s32 lit, char *text) {
+    extern s32 Port_MainItemText(s32 entry, s32 lit, s32 out, s32 text);
+    u8 *index = Heap_Alloc(512 * 32, 0x40, 1, 2);
+    u8 *px = *(u8 **)(tex + 0x38) + 0x60;
+    s32 x, y;
+
+    if (index == NULL) {
+        return;
+    }
+    if (Port_MainItemText((s32)(u32)tex, lit, (s32)(u32)index, (s32)(u32)text)) {
+        for (y = 0; y < 32; y++) {
+            for (x = 0; x < 512; x++) {
+                px[PortMainMenu_PixelAt(x, row * 0x20 + y)] = index[y * 512 + x];
+            }
+        }
+    }
+    Heap_Free(index);
+}
 #define MAINMENU_VOICED(item) ((item) < MAINMENU_TBO)
 #else
+#define MM_LABEL(item) (item)
 #define MM_ICON(item) (item)
 #define MAINMENU_VOICED(item) 1
 #endif
@@ -210,7 +261,7 @@ void MainMenu_Init(s32 section) {
         if (i == 4 && !Port_NetMenuListed()) {
             continue;
         }
-        if (i == MAINMENU_TBO) { /* (listed after Dragon Net Battle, below: not again at the end) */
+        if (i == MAINMENU_TBO || i == MAINMENU_MOD_MANAGER) { /* (listed after the game's they follow, below) */
             continue;
         }
 #else
@@ -226,6 +277,9 @@ void MainMenu_Init(s32 section) {
         if (i == (Port_NetMenuListed() ? 4 : 3)) {
             gMainMenu->items[gMainMenu->itemCount++] = MAINMENU_TBO;
         }
+        if (i == 9) {
+            gMainMenu->items[gMainMenu->itemCount++] = MAINMENU_MOD_MANAGER;
+        }
 #endif
     }
 #ifdef PORT
@@ -234,6 +288,9 @@ void MainMenu_Init(s32 section) {
         PortMainMenu_WriteRuns(gMainMenu->tex[8] + 0x40, 3, sPortTboOff, sizeof(sPortTboOff) / sizeof(sPortTboOff[0]));
         PortMainMenu_WriteRuns(gMainMenu->tex[12] + 0x40, 3, sPortTboOn, sizeof(sPortTboOn) / sizeof(sPortTboOn[0]));
     }
+    /* the Mod Manager: the first row of the third sheets */
+    PortMainMenu_WriteText(PortMainMenu_AddSheet(8), 0, 0, "Mod Manager");
+    PortMainMenu_WriteText(PortMainMenu_AddSheet(12), 0, 1, "Mod Manager");
 #endif
     gMainMenu->top = gMainMenu->itemCount - 1;
     for (i = 0; i < gMainMenu->itemCount; i++) {
@@ -268,6 +325,14 @@ void MainMenu_Term(void) {
         Heap_Free(gMainMenu->res);
         gMainMenu->res = NULL;
     }
+#ifdef PORT
+    for (i = 0; i < 2; i++) {
+        if (sPortSheetPix[i] != NULL) {
+            Heap_Free(sPortSheetPix[i]);
+            sPortSheetPix[i] = NULL;
+        }
+    }
+#endif
     if (gMainMenu != NULL) {
         Heap_Free(gMainMenu);
         gMainMenu = NULL;
@@ -322,15 +387,15 @@ void MainMenu_Draw(void) {
             item = gMainMenu->items[(gMainMenu->top + i) % gMainMenu->itemCount];
             uv.x0 = 0;
             uv.x1 = 0x200;
-            uv.y0 = (item % 8) * 0x20;
+            uv.y0 = (MM_LABEL(item) % 8) * 0x20;
             uv.y1 = uv.y0 + 0x20;
             sprintf(name, "mc_menu_plate_%d", i + 1);
             Flash_FindLabel(flash, name, "mc_menu_text_off", &ref);
             Flash_ClipSetUv(flash, &ref, &uv);
-            Flash_ClipSetTex(flash, &ref, item / 8);
+            Flash_ClipSetTex(flash, &ref, MM_LABEL(item) / 8);
             Flash_FindLabel(flash, name, "mc_menu_text_on", &ref);
             Flash_ClipSetUv(flash, &ref, &uv);
-            Flash_ClipSetTex(flash, &ref, item / 8);
+            Flash_ClipSetTex(flash, &ref, MM_LABEL(item) / 8);
             uv.x0 = (MM_ICON(item) % 4) * 0x40;
             uv.y0 = (MM_ICON(item) / 4) * 0x40;
             uv.x1 = uv.x0 + 0x40;
@@ -355,14 +420,14 @@ void MainMenu_Draw(void) {
         item = gMainMenu->items[gMainMenu->extra];
         uv.x1 = 0x200;
         uv.x0 = 0;
-        uv.y0 = (item % 8) * 0x20;
+        uv.y0 = (MM_LABEL(item) % 8) * 0x20;
         uv.y1 = uv.y0 + 0x20;
         Flash_FindLabel(flash, "mc_menu_plate_7", "mc_menu_text_off", &ref);
         Flash_ClipSetUv(flash, &ref, &uv);
-        Flash_ClipSetTex(flash, &ref, item / 8);
+        Flash_ClipSetTex(flash, &ref, MM_LABEL(item) / 8);
         Flash_FindLabel(flash, "mc_menu_plate_7", "mc_menu_text_on", &ref);
         Flash_ClipSetUv(flash, &ref, &uv);
-        Flash_ClipSetTex(flash, &ref, item / 8);
+        Flash_ClipSetTex(flash, &ref, MM_LABEL(item) / 8);
         uv.x0 = (MM_ICON(item) % 4) * 0x40;
         uv.y0 = (MM_ICON(item) / 4) * 0x40;
         uv.x1 = uv.x0 + 0x40;
@@ -571,6 +636,11 @@ void MainMenu_Input(s32 *result) {
             gPortScreen = PORT_SCREEN_TBO;
             MAINMENU_COUNT();
             MAINMENU_CHOOSE(MPROG_MODE_PORT_SCREEN);
+            break;
+        case MAINMENU_MOD_MANAGER: /* the Duel mode runs the manager's screen (menu_g_b.c) */
+            gPortDuelRole = 2;
+            MAINMENU_COUNT();
+            MAINMENU_CHOOSE(38);
             break;
 #endif
         }

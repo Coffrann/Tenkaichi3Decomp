@@ -984,6 +984,65 @@ int Port_MainItemLabel(int entry, int lit, int out) {
     return 1;
 }
 
+static Face *line_face(int kind);
+static int menu_text_row(Face *font, const MenuLabel *label, int resolution, Row *out);
+static void row_paste(uint8_t *dst, int stride, int x, int y, int rowWidth, int rowHeight, const Row *row);
+
+/* Another of the PC's items of the main menu (the Mod Manager): `text` drawn with the font list's line font (Fira
+   Sans Condensed Bold unless another is chosen), in the measures and colours menu_labels.c measures for the main
+   menu's own labels ("main-5" / "main-6": capitals 13 pixels grey on purple as the item is, 17 pixels gold on brown
+   while chosen), into `out` as Port_MainItemLabel puts its label. 0: no font to draw with (the row keeps what it
+   has). */
+int Port_MainItemText(int entry, int lit, int out, int textAt) {
+    const uint8_t *e = (const uint8_t *)Port_Ptr((uint32_t)entry);
+    const char *text = (const char *)Port_Ptr((uint32_t)textAt);
+    uint8_t *dst = (uint8_t *)Port_Ptr((uint32_t)out);
+    uint8_t *pic;
+    uint32_t clutAt;
+    MenuLabel label;
+    Row row;
+    Face *f;
+    size_t length = text != NULL ? strlen(text) : 0, i;
+    int ok = 0;
+
+    if (length == 0 || length >= sizeof(label.text) || lit < 0 || lit > 1 || (pic = malloc(512 * 32 * 4)) == NULL) {
+        return 0;
+    }
+    memset(&label, 0, sizeof(label));
+    label.width = 512;
+    label.height = 256;
+    label.rowWidth = 512;
+    label.rowHeight = 32;
+    label.cap = lit ? 17 : 13;
+    label.baseline = lit ? 23 : 22;
+    label.margin = lit ? 9 : 8;
+    label.widthMilli = 1000;
+    label.top = lit ? 0xF4EF89 : 0xCBCBCB;
+    label.bottom = lit ? 0xD2684B : 0xCBCBCB;
+    label.outline = label.outlineBottom = label.bevelDark = lit ? 0x2C151B : 0x5E236D;
+    label.bevelLight = label.top;
+    label.outlineMilli = -1;
+    label.shadow = 1;
+    memcpy(label.text, text, length + 1);
+    pthread_mutex_lock(&sLock);
+    f = line_face(0);
+    if (f != NULL && menu_text_row(f, &label, 1, &row)) {
+        row_paste(pic, 512, 0, 0, 512, 32, &row);
+        free(row.px);
+        ok = 1;
+    }
+    pthread_mutex_unlock(&sLock);
+    if (ok) {
+        for (i = 3; i < 512 * 32 * 4; i += 4) { /* (the row's alpha is the PS2's, the matcher takes 0..255) */
+            pic[i] = (uint8_t)((unsigned)pic[i] * 255 / 128);
+        }
+        memcpy(&clutAt, e + 0x3C, 4);
+        MenuLabels_ItemPixels(pic, (const uint8_t *)Port_Ptr(clutAt) + 0x60, dst);
+    }
+    free(pic);
+    return ok;
+}
+
 void MenuText_Poll(void) {
     item_start();
     if (sMake != 2) { return; }

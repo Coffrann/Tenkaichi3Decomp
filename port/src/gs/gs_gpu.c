@@ -589,6 +589,7 @@ static void vk_frame_end(void) {
         if (Ui_Event(&ev)) { /* the settings window is open and used it (Esc closes it) */
             continue;
         }
+        { extern int PortInput_GameEvent(const SDL_Event *ev); if (PortInput_GameEvent(&ev)) { continue; } } /* gs_input.c: a drop, the Mod Manager's Esc */
         if (ev.type == SDL_EVENT_KEY_DOWN && ev.key.key == SDLK_ESCAPE) {
             if (!ev.key.repeat && !Ui_QuitAsk()) { exit(0); } /* (asks first) */
         }

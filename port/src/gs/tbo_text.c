@@ -9,7 +9,8 @@
  * renderer asks here for the picture of that number (TboText_Pixels) the first time and whenever the line or the
  * font changed (its version). The picture is the line twice: filled above, outlined below, white, so the game
  * tints and blends it as it did its letter sheet; a heading (kind 2) is one picture in its colours, the main
- * menu's heading style (MenuText_Heading*).
+ * menu's heading style (MenuText_Heading*). Kinds 3 and 4 are the Mod Manager's (src/menu/port_mmkit.c): a line as
+ * kind 0 with a thicker outline, and a heading as kind 2.
  *
  * Nothing here is game state: the screens are a menu of the PC's, before and outside an online match.
  */
@@ -39,8 +40,10 @@ static pthread_mutex_t sLock = PTHREAD_MUTEX_INITIALIZER;
 
 /* The size the letters are drawn at, by kind (capitals, in pixels: the screens show them smaller, from smaller
    copies), and the outline's thickness: as the letter sheet had it, about a 16th of the capitals. */
-static int line_cap(int kind) { return kind == 0 ? 80 : 48; }
-static int line_outline(int kind) { return kind == 0 ? 5 : 3; }
+static int line_cap(int kind) { return kind == 1 ? 48 : 80; }
+static int line_outline(int kind) { return kind == 1 ? 3 : kind == 3 ? 7 : 5; }
+/* the font list's font of a kind: 3 is 0's (the Mod Manager's lines) */
+static int line_font(int kind) { return kind == 3 ? 0 : kind; }
 
 static int line_measure(TboLine *l, uint32_t generation) {
     l->generation = generation;
@@ -48,7 +51,7 @@ static int line_measure(TboLine *l, uint32_t generation) {
     if (sVersion == 0) {
         l->version = sVersion = 1;
     }
-    if (l->kind == 2) {
+    if (l->kind == 2 || l->kind == 4) {
         l->outline = 0;
         l->advance = MenuText_HeadingMeasure(l->text, &l->cap, &l->w, &l->h, &l->base, &l->pad);
         return l->advance > 0;
@@ -56,7 +59,7 @@ static int line_measure(TboLine *l, uint32_t generation) {
     l->cap = line_cap(l->kind);
     l->outline = line_outline(l->kind);
     l->pad = l->outline + 2;
-    l->advance = MenuText_LineMeasure(l->kind, l->text, l->cap, l->pad, &l->w, &l->h, &l->base);
+    l->advance = MenuText_LineMeasure(line_font(l->kind), l->text, l->cap, l->pad, &l->w, &l->h, &l->base);
     return l->advance > 0;
 }
 
@@ -66,7 +69,7 @@ int PortTbo_TextId(const char *text, int kind) {
     uint64_t now = SDL_GetTicks();
     int i, spare = -1, id = -1;
 
-    if (text == NULL || text[0] == '\0' || kind < 0 || kind > 2) {
+    if (text == NULL || text[0] == '\0' || kind < 0 || kind > 4) {
         return -1;
     }
     pthread_mutex_lock(&sLock);
@@ -101,11 +104,11 @@ int PortTbo_TextId(const char *text, int kind) {
    where to break a line). 0 without a font. */
 int PortTbo_TextMeasure(const char *text, int kind) {
     int w, h, base, cap, adv;
-    if (text == NULL || text[0] == '\0' || kind < 0 || kind > 1) {
+    if (text == NULL || text[0] == '\0' || kind < 0 || kind > 3 || kind == 2) {
         return 0;
     }
     cap = line_cap(kind);
-    adv = MenuText_LineMeasure(kind, text, cap, 0, &w, &h, &base);
+    adv = MenuText_LineMeasure(line_font(kind), text, cap, 0, &w, &h, &base);
     return (int)((int64_t)adv * 1000 / cap);
 }
 
@@ -154,7 +157,7 @@ uint32_t *TboText_Pixels(uint32_t id, uint32_t *version, uint32_t *w, uint32_t *
     if (l.version == 0 || l.advance <= 0) {
         return NULL;
     }
-    if (l.kind == 2) {
+    if (l.kind == 2 || l.kind == 4) {
         px = (uint32_t *)(void *)MenuText_HeadingRender(l.text, &lw, &lh);
         if (px != NULL && (lw != l.w || lh != l.h)) {
             free(px);
@@ -164,7 +167,7 @@ uint32_t *TboText_Pixels(uint32_t id, uint32_t *version, uint32_t *w, uint32_t *
         *h = (uint32_t)lh;
         return px;
     }
-    cov = MenuText_LineRender(l.kind, l.text, l.cap, l.pad, &lw, &lh, &lb);
+    cov = MenuText_LineRender(line_font(l.kind), l.text, l.cap, l.pad, &lw, &lh, &lb);
     if (cov == NULL) {
         return NULL;
     }

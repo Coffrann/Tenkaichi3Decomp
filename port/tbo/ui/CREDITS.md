@@ -8,5 +8,8 @@ The pictures of the Tenkaichi Budokai Online screens (this folder; `tbo/ui/` in 
   Changed for the port: cut out of the sheet, their background removed and scaled; the left and right directions
   combined into one picture (`btn_leftright.png`).
 
+- **The Mod Manager** (`mm_*.png`): contributed with the Mod Manager (src/menu/port_modmgr.c); their sizes are
+  `include/menu/mm_sizes.h`, written by `python3 port/tools/mm_sizes.py`.
+
 A picture replaced by one of another size: run `python3 port/tools/tbo_sizes.py` (the screens lay the pictures out
 by their sizes, `include/menu/tbo_sizes.h`).

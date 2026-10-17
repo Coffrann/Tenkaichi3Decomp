@@ -19,6 +19,10 @@ extern s32 TeamSel_Run(s32 section);  /* 0x351508: team character select (team a
 s32 Duel_Mode41(s32 arg);
 
 /* Runs the duel mode's screens until one of them leaves the mode. */
+#ifdef PORT
+extern s32 gPortDuelRole;
+extern s32 PortModMgr_Run(void);
+#endif
 s32 Duel_Main(void) {
     s32 bgm = 0;
     s32 done = 0;
@@ -27,6 +31,23 @@ s32 Duel_Main(void) {
     if (gMenuArc5 == NULL) {
         gMenuArc5 = File_LoadSync(gProgress->baseFile, NULL, 0);
     }
+#ifdef PORT
+    if (gPortDuelRole == 2) { /* opened from the main menu's Mod Manager item: its screen, then back */
+        Bgm_Play(0x10B16 + 2); /* "Innocent World" (the third piece of the music list) */
+        if (PortModMgr_Run()) { /* left for a test fight: a training battle is set up; from it the Training is next */
+            Adx_StopAll();
+            gPortDuelRole = 0;
+            gProgress->mode = 45;
+            result = 1;
+        } else {
+            Adx_StopAll();
+            gPortDuelRole = 0;
+            gProgress->mode = 4;
+            result = 0;
+        }
+        done = 1;
+    }
+#endif
     do {
         switch (gProgress->mode) {
         case 38:

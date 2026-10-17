@@ -111,6 +111,18 @@ s32 Progress_Main(s32 arg) {
         if (gMenuArc1 == NULL) {
             gMenuArc1 = File_LoadSync(gProgress->baseFile + 1, NULL, 0);
         }
+#ifdef PORT
+        { /* the Mod Manager's test fight: "Return to Mod Manager" opens the manager again (through the Duel mode) */
+            extern s32 gPortModTest;
+            extern s32 gPortDuelRole;
+
+            if (gPortModTest && (reason & 0x10)) {
+                gPortDuelRole = 2;
+                gProgress->mode = 38;
+            }
+            gPortModTest = 0;
+        }
+#endif
     }
     Snd_LoadBankFile(2, 0x14C);
 

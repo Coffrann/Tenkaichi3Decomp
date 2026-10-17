@@ -177,6 +177,20 @@ int __wrap_Progress_Main(int arg) {
                             time == 0 ? "60" : time == 1 ? "90" : time == 2 ? "180" : time == 3 ? "240" : "none");
                 }
             }
+            {   /* BT3_TEST_MODMGR=1 (testing): the Mod Manager at once, as its main-menu item opens it (the Duel mode with
+                   gPortDuelRole 2: src/menu/menu_g_b.c); =menu: the main menu */
+                static int entered;
+                if (!entered && getenv("BT3_TEST_MODMGR") != NULL && gProgress != NULL && gSaveData != NULL && !Port_NetSession()) {
+                    extern int gPortDuelRole;
+                    entered = 1;
+                    if (strcmp(getenv("BT3_TEST_MODMGR"), "menu") == 0) {
+                        gProgress->mode = 4; /* (=menu: the main menu, where its item is) */
+                    } else {
+                        gPortDuelRole = 2;
+                        gProgress->mode = 38;
+                    }
+                }
+            }
             gPortMenuMode = 1; /* the renderer treats all 2D as one centred 4:3 page while the menus run */
             r = __real_Progress_Main(arg);
             gPortMenuMode = 0;

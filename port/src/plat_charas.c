@@ -963,20 +963,75 @@ int PortCharas_Reload(void) {
     return 1;
 }
 
+/* The folders of `characters` in the order they are used, each with whether it is on: the load order's first, in
+   its order, then the others by name (as load() takes them). `max` at most; how many. */
+int PortCharas_OrderGet(char (*folder)[128], unsigned char *on, int max) {
+    static char names[256][128];
+    char root[300];
+    int n, i, j, count = 0;
+
+    if (!PortCharas_Root(root, sizeof(root))) {
+        return 0;
+    }
+    n = folders(root, names, 256, 0);
+    order_read(root);
+    for (j = 0; j < sOrderCount && count < max; j++) {
+        for (i = 0; i < n && strcmp(names[i], sOrder[j]) != 0; i++) {
+        }
+        if (i < n) {
+            snprintf(folder[count], 128, "%s", names[i]);
+            on[count++] = sOrderOn[j];
+        }
+    }
+    for (i = 0; i < n && count < max; i++) {
+        if (order_on(names[i]) < 0) {
+            snprintf(folder[count], 128, "%s", names[i]);
+            on[count++] = 1;
+        }
+    }
+    return count;
+}
+
+static int describe(const char *root, const char *folder, PortCharaDesc *out);
+
 /* What a folder of `characters` is, read by the same rules as when it is loaded but kept nowhere: for the Mod
    Manager, which lists every folder (switched off ones too) and shows what each holds. `folder` is a folder directly
    in `characters`. 0 if it is no package (or cannot be read). */
 int PortCharas_Describe(const char *folder, PortCharaDesc *out) {
     char root[300], dir[400];
-    const Chara *c;
-    struct stat st;
-    int k;
 
     memset(out, 0, sizeof(*out));
     out->replaces = -1;
     if (strchr(folder, '/') != NULL || !pkg_dir(folder, dir, sizeof(dir)) || !PortCharas_Root(root, sizeof(root))) {
         return 0;
     }
+    return describe(root, folder, out);
+}
+
+/* The same for a folder anywhere (the Mod Manager's browser, before the folder is added). */
+int PortCharas_DescribePath(const char *path, PortCharaDesc *out) {
+    char root[400];
+    const char *slash = strrchr(path, '/');
+#ifdef _WIN32
+    const char *back = strrchr(path, '\\');
+    if (back != NULL && (slash == NULL || back > slash)) {
+        slash = back;
+    }
+#endif
+    memset(out, 0, sizeof(*out));
+    out->replaces = -1;
+    if (slash == NULL || slash[1] == '\0' || (size_t)(slash - path) >= sizeof(root) || strlen(slash + 1) >= 64) {
+        return 0;
+    }
+    snprintf(root, sizeof(root), "%.*s", (int)(slash - path), path);
+    return describe(root, slash + 1, out);
+}
+
+static int describe(const char *root, const char *folder, PortCharaDesc *out) {
+    const Chara *c;
+    struct stat st;
+    int k;
+
     sDryNote[0] = '\0';
     sDry = 1;
     c = scan(root, folder, NULL);
