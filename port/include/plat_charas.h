@@ -13,17 +13,22 @@
 #define PORT_CHARA_LINE_INDEX 74000  /* two hundred per added character: its spoken lines, a hundred in each language */
 
 void PortCharas_Init(void); /* reads the folder; once */
+int PortCharas_Reload(void); /* reads it again (from the menus only; not in a session); 0 if not done */
+int PortCharas_Root(char *out, unsigned size); /* the folder; 0 if there is none */
+/* writes load_order.txt: the folders in order, each on or off; used by the next PortCharas_Reload */
+int PortCharas_OrderWrite(const char (*folder)[128], const unsigned char *on, int n);
 #define PORT_CHARA_FORMAT 1 /* the package format this game knows (`format=` of character.txt) */
 enum { PORT_STAT_HEALTH, PORT_STAT_KI, PORT_STAT_BLAST, PORT_STAT_COUNT };
 /* The folders looked at, for the settings window: every folder that is a package or was meant as one, in the
    order they were read (a character's inner folders after it). Also in a session, where none of them is used. */
-enum { PORT_PKG_ADDS, PORT_PKG_REPLACES, PORT_PKG_OFF };
+enum { PORT_PKG_ADDS, PORT_PKG_REPLACES, PORT_PKG_OFF, PORT_PKG_DISABLED };
 typedef struct PortCharaPkg {
     char folder[132];  /* "Name" or "Character/Form" */
     char name[64];     /* the name for the menus */
     char author[64], version[32], about[200]; /* the manifest's; "" where it says nothing */
     char problem[400]; /* what was found wrong with it, "" if nothing */
-    int kind;          /* PORT_PKG_ADDS, PORT_PKG_REPLACES, or PORT_PKG_OFF: not used (the problem says why) */
+    int kind;          /* PORT_PKG_ADDS, PORT_PKG_REPLACES, PORT_PKG_OFF: not used (the problem says why), or
+                          PORT_PKG_DISABLED: switched off in the load order (not read) */
     int id;            /* the id it got (an added character), the disc character it replaces; -1 */
 } PortCharaPkg;
 int Port_CharaPkgCount(void);

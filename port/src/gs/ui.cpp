@@ -1524,7 +1524,7 @@ static void mods_tab(void) {
         const PortCharaPkg *p = Port_CharaPkg(i);
         added += p->kind == PORT_PKG_ADDS;
         replaced += p->kind == PORT_PKG_REPLACES;
-        off += p->kind == PORT_PKG_OFF;
+        off += p->kind == PORT_PKG_OFF || p->kind == PORT_PKG_DISABLED;
     }
     if (Port_NetSession()) {
         ImGui::TextWrapped("Character packages are not part of online play: an online match has the game's own characters only, "
@@ -1562,6 +1562,8 @@ static void mods_tab(void) {
                 ImGui::TextDisabled("adds a character (id %d)", p->id);
             } else if (p->kind == PORT_PKG_REPLACES) {
                 ImGui::TextDisabled("replaces character %d", p->id);
+            } else if (p->kind == PORT_PKG_DISABLED) {
+                ImGui::TextDisabled("switched off (Mod Manager)");
             } else {
                 ImGui::TextDisabled("not used");
             }

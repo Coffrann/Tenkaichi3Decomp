@@ -87,6 +87,17 @@ static short sReplOf[DISC_CHARAS];   /* disc id -> its entry of sRepl + 1; 0 not
 static PortCharaPkg sPkg[PKG_MAX];   /* every folder looked at that is, or was meant to be, a package */
 static int sPkgCount;
 static int sInit;
+static int sReloads;                 /* how many times the folder was read again (PortCharas_Reload) */
+static int sModelSize;               /* Port_ModelSize's answer, 0 until asked (again after a reload) */
+
+/* The load order (`load_order.txt` in the characters folder, written by the Mod Manager): which folders are used
+   and in which order. Each line is `on <folder>` or `off <folder>`; the folders it lists come first, in its order,
+   then the others, on, by name. The order decides the ids of added characters and which of two packages for one
+   disc character wins (the first). */
+enum { ORDER_MAX = 256 };
+static char sOrder[ORDER_MAX][128];
+static unsigned char sOrderOn[ORDER_MAX];
+static int sOrderCount;
 
 /* Online play does not know character packages. In a session (Dragon Net Battle; gs/net.c) everything this file
    answers is what it answers with no `characters` folder at all: no character, no cell, no name line, no chip, no
@@ -119,10 +130,10 @@ static int id_of(const Chara *c) {
     return c->replaces >= 0 ? c->replaces : PORT_CHARA_FIRST + (int)(c - sChara);
 }
 
-/* 1 while what the game's file numbers answer may differ from the data folder's: flips with a session's start and
-   end, and the open files are then looked up again (plat_fcache.c). */
+/* Changes whenever what the game's file numbers answer may have changed: with a session's start and end, and with
+   each reading of the folder again; the open files are then looked up again (plat_fcache.c). */
 int PortCharas_Epoch(void) {
-    return Port_NetSession() ? 1 : 0;
+    return (Port_NetSession() ? 1 : 0) + 2 * sReloads;
 }
 
 /* ---- the folder scan ---------------------------------------------------------------------------------------- */
@@ -756,25 +767,110 @@ static void resolve(Chara *c) {
     }
 }
 
-void PortCharas_Init(void) {
-    static char names[256][128], inner[64][128];
-    char root[300];
-    int n = 0, i;
+/* load_order.txt of `root` into sOrder (nothing if there is none) */
+static void order_read(const char *root) {
+    static char text[65536]; /* (256 folders of 63 bytes with their words take about 17 KB) */
+    char path[400], *line, *next;
+    size_t len;
+    FILE *f;
 
-    if (sInit) {
+    sOrderCount = 0;
+    if (!join(path, sizeof(path), root, "load_order.txt") || !regular(path) || (f = fopen(path, "rb")) == NULL) {
         return;
     }
-    sInit = 1;
-    if (getenv("BT3_NET_SESSION") != NULL && (getenv("BT3_NET_HOST") != NULL || getenv("BT3_NET_JOIN") != NULL)) {
-        return; /* the program was started for an online session: the folder is not read */
+    len = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[len] = '\0';
+    if (len >= 3 && memcmp(text, "\xEF\xBB\xBF", 3) == 0) {
+        text[0] = text[1] = text[2] = ' ';
     }
+    for (line = text; line != NULL && *line != '\0' && sOrderCount < ORDER_MAX; line = next) {
+        char *end, *name;
+        int on;
+        next = strchr(line, '\n');
+        if (next != NULL) {
+            *next++ = '\0';
+        }
+        end = line + strlen(line);
+        while (end > line && (end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t')) {
+            *--end = '\0';
+        }
+        while (*line == ' ' || *line == '\t') {
+            line++;
+        }
+        if (strncmp(line, "on ", 3) == 0 || strncmp(line, "on\t", 3) == 0) {
+            on = 1, name = line + 3;
+        } else if (strncmp(line, "off ", 4) == 0 || strncmp(line, "off\t", 4) == 0) {
+            on = 0, name = line + 4;
+        } else {
+            continue; /* (comments, empty lines, anything else) */
+        }
+        while (*name == ' ' || *name == '\t') {
+            name++;
+        }
+        if (name[0] == '\0' || name[0] == '.' || strlen(name) >= 64 || strchr(name, '/') != NULL || strchr(name, '\\') != NULL) {
+            continue;
+        }
+        snprintf(sOrder[sOrderCount], sizeof(sOrder[0]), "%s", name);
+        sOrderOn[sOrderCount++] = (unsigned char)on;
+    }
+}
+
+/* -1: the load order does not name the folder; else whether it is on */
+static int order_on(const char *name) {
+    int i;
+    for (i = 0; i < sOrderCount; i++) {
+        if (strcmp(sOrder[i], name) == 0) {
+            return sOrderOn[i];
+        }
+    }
+    return -1;
+}
+
+/* a folder the load order switches off: listed for the Mod Manager and the settings window, not read */
+static void listed_off(const char *name) {
+    PortCharaPkg *p;
+    if (sPkgCount >= PKG_MAX) {
+        return;
+    }
+    p = &sPkg[sPkgCount++];
+    memset(p, 0, sizeof(*p));
+    snprintf(p->folder, sizeof(p->folder), "%s", name);
+    snprintf(p->name, sizeof(p->name), "%s", name);
+    p->kind = PORT_PKG_DISABLED;
+    p->id = -1;
+}
+
+/* Reads the folder: the packages the load order has on, in its order, then the others by name. */
+static void load(void) {
+    static char names[256][128], use[256][128], inner[64][128];
+    char root[300];
+    int n = 0, used = 0, i, j;
+
     if (!PortExtras_Dir("characters", "BT3_CHARACTERS", root, sizeof(root))) {
         return;
     }
     n = folders(root, names, 256, 0);
-    for (i = 0; i < n; i++) {
+    order_read(root);
+    for (j = 0; j < sOrderCount; j++) { /* the listed ones that are there, in the list's order */
+        for (i = 0; i < n; i++) {
+            if (strcmp(names[i], sOrder[j]) == 0) {
+                break;
+            }
+        }
+        if (i < n && sOrderOn[j]) {
+            snprintf(use[used++], sizeof(use[0]), "%s", names[i]);
+        }
+    }
+    for (i = 0; i < n; i++) { /* then the others, by name */
+        int on = order_on(names[i]);
+        if (on < 0) {
+            snprintf(use[used++], sizeof(use[0]), "%s", names[i]);
+        }
+    }
+    for (i = 0; i < used; i++) {
         int m, k;
-        const Chara *owner = scan(root, names[i], NULL);
+        const Chara *owner = scan(root, use[i], NULL);
         if (owner == NULL) {
             continue;
         }
@@ -783,6 +879,11 @@ void PortCharas_Init(void) {
         m = folders(owner->dir, inner, 64, 1);
         for (k = 0; k < m; k++) {
             scan(owner->dir, inner[k], owner);
+        }
+    }
+    for (i = 0; i < n; i++) { /* the ones switched off: listed, not read */
+        if (order_on(names[i]) == 0) {
+            listed_off(names[i]);
         }
     }
     for (i = 0; i < sCount; i++) {
@@ -816,13 +917,92 @@ void PortCharas_Init(void) {
     }
 }
 
+void PortCharas_Init(void) {
+    if (sInit) {
+        return;
+    }
+    sInit = 1;
+    if (getenv("BT3_NET_SESSION") != NULL && (getenv("BT3_NET_HOST") != NULL || getenv("BT3_NET_JOIN") != NULL)) {
+        return; /* the program was started for an online session: the folder is not read */
+    }
+    load();
+}
+
+/* Reads the folder again (the Mod Manager, after it changed packages or their order). Only from the menus, never
+   during a fight or a session: the ids of added characters may change, and a screen with a roster takes its names
+   and chips when it starts. The model buffers' size is worked out again for the next fight, and the open files
+   are looked up again (PortCharas_Epoch). 0 if it was not done. */
+int PortCharas_Reload(void) {
+    if (Port_NetSession() || (getenv("BT3_NET_SESSION") != NULL && (getenv("BT3_NET_HOST") != NULL || getenv("BT3_NET_JOIN") != NULL))) {
+        return 0;
+    }
+    PortChips_Free();
+    sCount = sReplCount = sPkgCount = 0;
+    memset(sReplOf, 0, sizeof(sReplOf));
+    memset(sChipHave, 0, sizeof(sChipHave));
+    sNameFirst = sFormFirst = -1;
+    sModelSize = 0;
+    sInit = 1;
+    load();
+    sReloads++;
+    fprintf(stderr, "bt3: characters: read again: %d added, %d replaced, %d listed\n", sCount, sReplCount, sPkgCount);
+    return 1;
+}
+
+/* The folder the packages are in ("" if there is none). */
+int PortCharas_Root(char *out, unsigned size) {
+    char root[300];
+    if (!PortExtras_Dir("characters", "BT3_CHARACTERS", root, sizeof(root))) {
+        if (size > 0) {
+            out[0] = '\0';
+        }
+        return 0;
+    }
+    snprintf(out, size, "%s", root);
+    return 1;
+}
+
+/* Writes the load order: `n` folders in order, each on or off (the Mod Manager). Written beside and then put in
+   place, so a load never sees half of it. The next PortCharas_Reload uses it. */
+int PortCharas_OrderWrite(const char (*folder)[128], const unsigned char *on, int n) {
+    char root[300], path[400], tmp[420];
+    FILE *f;
+    int i;
+    if (!PortCharas_Root(root, sizeof(root)) || !join(path, sizeof(path), root, "load_order.txt")) {
+        return 0;
+    }
+    snprintf(tmp, sizeof(tmp), "%s.new", path);
+    if ((f = fopen(tmp, "wb")) == NULL) {
+        return 0;
+    }
+    fprintf(f, "# The order of the character packages and which are on (written by the Mod Manager).\n"
+               "# The first wins where two replace the same character; added characters get their ids in this order.\n");
+    for (i = 0; i < n; i++) {
+        if (folder[i][0] != '\0' && folder[i][0] != '.' && strchr(folder[i], '/') == NULL && strchr(folder[i], '\\') == NULL && strchr(folder[i], '\n') == NULL) {
+            fprintf(f, "%s %s\n", on[i] ? "on" : "off", folder[i]);
+        }
+    }
+    if (fclose(f) != 0) {
+        remove(tmp);
+        return 0;
+    }
+#ifdef _WIN32
+    remove(path); /* (rename does not replace a file there) */
+#endif
+    if (rename(tmp, path) != 0) {
+        remove(tmp);
+        return 0;
+    }
+    return 1;
+}
+
 /* The size of the fight's model buffers: the original's (0xCE000), or the largest model file there is to load if that
    is larger: a package's, or one of the data folder's own (0x590 + id * 10 + 0..7, the first archive; the file under
    mods/ where there is one, which is the one loaded), which a disc with replaced characters can have. Whole pages;
    not over PORT_MODEL_MAX (a larger file of the data folder is reported once: it would be read past the buffer's
    end). */
 int Port_ModelSize(void) {
-    static int size;
+    int size = sModelSize;
     if (size == 0) {
         const char *root = getenv("BT3_DATA") != NULL ? getenv("BT3_DATA") : "gamedata";
         long most = 0xCE000;
@@ -863,6 +1043,7 @@ int Port_ModelSize(void) {
             fprintf(stderr, "bt3: the fight's model buffers are %d KB (the largest model there is to load)\n", size / 1024);
         }
     }
+    sModelSize = size;
     return size;
 }
 
