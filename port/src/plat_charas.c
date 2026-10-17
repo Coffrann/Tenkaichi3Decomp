@@ -45,6 +45,11 @@ extern int PortExtras_Dir(const char *kind, const char *env, char *out, unsigned
    "<Name>_Voice_US.pak"; until 2026-10-13 this file had them the other way round.) */
 enum { F_ANM = 8, F_EFF = 9, F_VOICE = 10, F_COUNT = 12 };
 enum { SLOTS = 19 };
+/* The parameter block of a model (its table entry 17; object + 0x91C in the fight): the bytes of its forms from
+   0x98, as character.txt can set them (docs/port/character_packages.md, section 6). */
+enum { PAR_BASE = 0x98, PAR_COUNT = 0xC6 - 0x98, PAR_COST = 0x9C - 0x98, PAR_TYPE = 0xA0 - 0x98, PAR_EFFECT = 0xA4 - 0x98,
+       PAR_ASSIST = 0xA8 - 0x98, PAR_DEFAULT = 0xAC - 0x98, PAR_FCOST = 0xAE - 0x98, PAR_FTYPE = 0xB1 - 0x98,
+       PAR_FLEAD = 0xB7 - 0x98 };
 enum { DISC_CHARAS = 161 };
 
 typedef struct {
@@ -68,6 +73,9 @@ typedef struct {
     int labelSet;              /* a label was given (an empty one: no label); without, the base's label */
     int stat[PORT_STAT_COUNT]; /* health, ki, blast stocks: -1 not said */
     int pkg;                   /* its entry in sPkg, or -1 */
+    short par[PAR_COUNT];      /* bytes of the parameter block from 0x98 (PAR_*): -1 not said */
+    unsigned char freshSet;    /* bits 0..3: `<slot>_fresh` said (bit 4 + k of +0xAD) */
+    unsigned char freshOn;
 } Chara;
 
 enum { CHIP_SIZE = 5504, NAME_ENTRY = 128, NAME_LINES_MAX = 256, PKG_MAX = 320, TEXT_MAX = 16384 };
@@ -259,6 +267,66 @@ static int number(const char *v, int lo, int hi, int *out) {
 }
 
 /* One `key=value` of a package (character.txt, and what the older files say, each as its key). */
+/* The other numbers of the forms (section 6): <slot>_cost, _type, _effect, _assist, _fresh, default; fusionN_cost,
+   _type, _lead. 1 if the key is one of them. */
+static int apply_par(Chara *c, const char *key, const char *value) {
+    static const char *const kSlot[4] = {"left", "up", "right", "down"};
+    static const struct { const char *end; int at, lo, hi; } kSlotKeys[] = {
+        {"_cost", PAR_COST, 0, 9}, {"_type", PAR_TYPE, 0, 4}, {"_effect", PAR_EFFECT, 0, 11}, {"_assist", PAR_ASSIST, 0, DISC_CHARAS - 1},
+    };
+    int k, j, x;
+    size_t n;
+
+    if (strcmp(key, "default") == 0) {
+        for (k = 0; k < 4 && strcmp(value, kSlot[k]) != 0; k++) {
+        }
+        c->par[PAR_DEFAULT] = (short)(k < 4 ? k : strcmp(value, "none") == 0 ? 0xFF : -1);
+        if (c->par[PAR_DEFAULT] < 0) {
+            note(c, "default is not left, up, right, down or none");
+        }
+        return 1;
+    }
+    for (k = 0; k < 4; k++) {
+        n = strlen(kSlot[k]);
+        if (strncmp(key, kSlot[k], n) != 0 || key[n] != '_') {
+            continue;
+        }
+        if (strcmp(key + n, "_fresh") == 0) {
+            c->freshSet |= (unsigned char)(1 << k);
+            c->freshOn = (unsigned char)((c->freshOn & ~(1 << k)) | ((strcmp(value, "1") == 0) << k));
+            return 1;
+        }
+        for (j = 0; j < (int)(sizeof(kSlotKeys) / sizeof(kSlotKeys[0])); j++) {
+            if (strcmp(key + n, kSlotKeys[j].end) == 0) {
+                if (kSlotKeys[j].at == PAR_ASSIST && strcmp(value, "none") == 0) {
+                    c->par[PAR_ASSIST + k] = 0xFF;
+                } else if (number(value, kSlotKeys[j].lo, kSlotKeys[j].hi, &x)) {
+                    c->par[kSlotKeys[j].at + k] = (short)x;
+                } else {
+                    note(c, "%s is not a number from %d to %d", key, kSlotKeys[j].lo, kSlotKeys[j].hi);
+                }
+                return 1;
+            }
+        }
+    }
+    if (strncmp(key, "fusion", 6) == 0 && key[6] >= '1' && key[6] <= '3' && key[7] == '_') {
+        int f = key[6] - '1';
+        if (strcmp(key + 7, "_cost") == 0 && number(value, 0, 9, &x)) {
+            c->par[PAR_FCOST + f] = (short)x;
+        } else if (strcmp(key + 7, "_type") == 0 && (strcmp(value, "dance") == 0 || strcmp(value, "potara") == 0)) {
+            c->par[PAR_FTYPE + f] = (short)(value[0] == 'd' ? 1 : 2);
+        } else if (strcmp(key + 7, "_lead") == 0 && (number(value, 0, DISC_CHARAS - 1, &x) || strcmp(value, "none") == 0)) {
+            c->par[PAR_FLEAD + f] = (short)(strcmp(value, "none") == 0 ? 0xFF : x);
+        } else if (strcmp(key + 7, "_scene") == 0) {
+            /* (the scene's motions: kept for the Mod Manager, not used by the fight yet) */
+        } else {
+            note(c, "%s=%s is not understood", key, value);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 static void apply(Chara *c, const char *key, const char *value) {
     static const char *const kSlot[7] = {"left", "up", "right", "down", "fusion1", "fusion2", "fusion3"};
     static const char *const kStat[PORT_STAT_COUNT] = {"health", "ki", "blast"};
@@ -340,6 +408,9 @@ static void apply(Chara *c, const char *key, const char *value) {
                 }
                 return;
             }
+        }
+        if (apply_par(c, key, value)) {
+            return;
         }
         /* (any other key: a later format's, or a note of the maker's; ignored) */
     }
@@ -528,6 +599,9 @@ static Chara *scan(const char *root, const char *name, const Chara *owner) {
     c->pkg = -1;
     for (k = 0; k < PORT_STAT_COUNT; k++) {
         c->stat[k] = -1;
+    }
+    for (k = 0; k < PAR_COUNT; k++) {
+        c->par[k] = -1;
     }
     snprintf(c->name, sizeof(c->name), "%s", name);
     snprintf(c->dir, sizeof(c->dir), "%s", path);
@@ -763,6 +837,9 @@ static void resolve(Chara *c) {
             continue;
         }
         c->target[k] = 0xFF;
+        if (strcmp(want, "none") == 0) {
+            continue; /* (that transformation or fusion is switched off, as said) */
+        }
         if (strncmp(want, "disc:", 5) == 0) {
             int id;
             c->target[k] = number(want + 5, 0, DISC_CHARAS - 1, &id) ? id : 0xFF;
@@ -1583,6 +1660,51 @@ static int alias(const char *rel, char *out, unsigned n) {
 
 /* A link of a package's manifest as a character id, for an added character or a replaced one of the disc: -1
    where nothing is said (the character's own table counts). */
+/* The fight (src/battle/btl_obj.c, BtlObj_Setup): a package's forms into the parameter block of the model its
+   fighter was just set up from (the bytes from 0x98: transformations 0x98..0xAD, fusions 0xAE..0xC5). Its links (the
+   targets, the fusions and their partners) and the other numbers its manifest says; the rest as the model has them.
+   Nothing in a session, and nothing for a character no package is for. */
+void Port_CharaParamApply(int chara, void *param) {
+    unsigned char *p = param;
+    const Chara *c;
+    int k;
+
+    PortCharas_Init();
+    if (p == NULL || (c = chara_of(chara)) == NULL) {
+        return;
+    }
+    for (k = 0; k < 4; k++) {
+        if (c->target[k] >= 0) {
+            p[0x98 + k] = (unsigned char)c->target[k];
+        }
+    }
+    for (k = 0; k < 3; k++) {
+        int m;
+        if (c->target[4 + k] >= 0) {
+            p[0xB4 + k] = (unsigned char)c->target[4 + k];
+        }
+        for (m = 0; m < 4; m++) {
+            if (c->target[7 + k * 4 + m] >= 0) {
+                p[0xBA + k * 4 + m] = (unsigned char)c->target[7 + k * 4 + m];
+            }
+        }
+    }
+    for (k = 0; k < PAR_COUNT; k++) {
+        if (c->par[k] >= 0) {
+            p[PAR_BASE + k] = (unsigned char)c->par[k];
+        }
+    }
+    p[0xAD] = (unsigned char)((p[0xAD] & ~(c->freshSet << 4)) | ((c->freshOn & c->freshSet) << 4));
+    if (p[0xAC] != 0xFF && (p[0xAC] > 3 || p[0x98 + p[0xAC]] == 0xFF)) { /* (the plain R3 slot must lead somewhere) */
+        p[0xAC] = 0xFF;
+        for (k = 0; k < 3 && p[0xAC] == 0xFF; k++) {
+            if (p[0x98 + k] != 0xFF) {
+                p[0xAC] = (unsigned char)k;
+            }
+        }
+    }
+}
+
 int Port_CharaFormTarget(int chara, int slot) {
     const Chara *c;
     PortCharas_Init();

@@ -728,16 +728,358 @@ static void trans_clear(PortTrans *t) {
     }
 }
 
+static const char *const kSlotKey[4] = {"left", "up", "right", "down"};
+
+static const char *data_dir(void) {
+    const char *d = getenv("BT3_DATA");
+    return d != NULL ? d : "gamedata";
+}
+
+/* A whole file (at most `max` bytes); NULL if it cannot be read or is larger. */
+static uint8_t *read_file(const char *path, long *len, long max) {
+    FILE *f = fopen(path, "rb");
+    uint8_t *d = NULL;
+    long n;
+    if (f == NULL) {
+        return NULL;
+    }
+    fseek(f, 0, SEEK_END);
+    n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n > 0 && n <= max && (d = malloc((size_t)n)) != NULL && fread(d, 1, (size_t)n, f) != (size_t)n) {
+        free(d);
+        d = NULL;
+    }
+    fclose(f);
+    *len = n;
+    return d;
+}
+
+/* A character id of a model's table as the manager's reference: -1 none, a disc id, or PORT_REF_MOD + the package
+   of an added character. */
+static int ref_of_id(int id) {
+    int i;
+    if (id == 0xFF || id < 0) {
+        return -1;
+    }
+    if (id < DISC) {
+        return id;
+    }
+    for (i = 0; i < sLibCount; i++) {
+        if (Port_ModFighterId(i) == id) {
+            return PORT_REF_MOD + i;
+        }
+    }
+    return -1;
+}
+
+/* The forms as a model's table has them (entry 17 of the model file, its bytes 0x98..0xC5). */
+static int trans_of_file(const char *path, PortTrans *t) {
+    long len = 0;
+    uint8_t *d = read_file(path, &len, 0x180000);
+    uint32_t n, a, b;
+    int k, j, ok = 0;
+
+    if (d == NULL) {
+        return 0;
+    }
+    memcpy(&n, d, 4);
+    if (len >= 4 + 19 * 4 && n > 18 && n < 4096) {
+        memcpy(&a, d + 4 + 17 * 4, 4);
+        memcpy(&b, d + 4 + 18 * 4, 4);
+        if (a < b && b <= (uint32_t)len && b - a >= 0xC6) {
+            const uint8_t *q = d + a;
+            for (k = 0; k < 4; k++) {
+                t->target[k] = ref_of_id(q[0x98 + k]);
+                t->cost[k] = q[0x9C + k];
+                t->type[k] = q[0xA0 + k];
+                t->effect[k] = q[0xA4 + k];
+                t->assist[k] = q[0xA8 + k] == 0xFF ? -1 : q[0xA8 + k];
+                t->fresh[k] = (q[0xAD] >> (4 + k)) & 1;
+            }
+            t->next = q[0xAC] == 0xFF ? -1 : q[0xAC];
+            t->adLow = q[0xAD] & 0x0F;
+            for (k = 0; k < 3; k++) {
+                t->fuseCost[k] = q[0xAE + k];
+                t->fuseType[k] = q[0xB1 + k];
+                t->fuse[k] = ref_of_id(q[0xB4 + k]);
+                t->fuseLead[k] = q[0xB7 + k] == 0xFF ? -1 : q[0xB7 + k];
+                for (j = 0; j < 4; j++) {
+                    t->partner[k][j] = ref_of_id(q[0xBA + k * 4 + j]);
+                }
+            }
+            ok = 1;
+        }
+    }
+    free(d);
+    return ok;
+}
+
+/* The package used for disc character `chara` (the replacement that is on and first in the order), -1 none. */
+static int repl_index(int chara) {
+    int i, best = -1;
+    for (i = 0; i < sLibCount; i++) {
+        if (sLib[i].on && sLib[i].d.replaces == chara && (best < 0 || sLib[i].place < sLib[best].place)) {
+            best = i;
+        }
+    }
+    return best;
+}
+
+/* The package a fighter of the manager is: PORT_REF_MOD + index, or a disc character's replacement; -1 none. */
+static int pkg_of(int who) {
+    if (who >= PORT_REF_MOD) {
+        return who - PORT_REF_MOD < sLibCount ? who - PORT_REF_MOD : -1;
+    }
+    return who >= 0 && who < DISC ? repl_index(who) : -1;
+}
+
+/* The model its fighter is set up from: the package's first costume, else the disc's (the first archive's file
+   0x590 + id * 10, stored as pzs3us1/<id - 1>). */
+static void model_path(int who, char *out, size_t size) {
+    char root[300], dir[420];
+    int i = pkg_of(who), chara = who < DISC ? who : (i >= 0 ? chara_of(&sLib[i]) : 0);
+    DIR *d;
+    struct dirent *e;
+
+    out[0] = '\0';
+    if (i >= 0 && (sLib[i].d.files & 1) && PortCharas_Root(root, sizeof(root))) {
+        snprintf(dir, sizeof(dir), "%s/%s", root, sLib[i].folder);
+        if ((d = opendir(dir)) != NULL) {
+            while ((e = readdir(d)) != NULL) {
+                size_t l = strlen(e->d_name);
+                if (l > 7 && SDL_strcasecmp(e->d_name + l - 7, "_1p.pak") == 0 && (out[0] == '\0' || SDL_strcasecmp(e->d_name, strrchr(out, '/') + 1) < 0)) {
+                    snprintf(out, size, "%s/%s", dir, e->d_name);
+                }
+            }
+            closedir(d);
+        }
+    }
+    if (out[0] == '\0') {
+        snprintf(out, size, "%s/pzs3us1/%05d.bin", data_dir(), 0x590 + chara * 10 - 1);
+    }
+}
+
+/* A link of character.txt as the manager's reference; -2 a folder that is not there (the file's own stands). */
+static int ref_of_link(const char *link) {
+    int i, x;
+    if (strcmp(link, "none") == 0) {
+        return -1;
+    }
+    if (strncmp(link, "disc:", 5) == 0) {
+        x = atoi(link + 5);
+        return x >= 0 && x < DISC ? x : -2;
+    }
+    for (i = 0; i < sLibCount; i++) {
+        if (strcmp(sLib[i].folder, link) == 0) {
+            return PORT_REF_MOD + i;
+        }
+    }
+    return -2;
+}
+
+static void link_of_ref(int ref, char *out, size_t size) {
+    if (ref >= PORT_REF_MOD && ref - PORT_REF_MOD < sLibCount) {
+        snprintf(out, size, "%s", sLib[ref - PORT_REF_MOD].folder);
+    } else if (ref >= 0 && ref < DISC) {
+        snprintf(out, size, "disc:%d", ref);
+    } else {
+        snprintf(out, size, "none");
+    }
+}
+
+static int get_num(const char *folder, const char *key, int *out) {
+    char v[64];
+    if (!PortCharas_ManifestGet(folder, key, v, sizeof(v)) || v[0] == '\0') {
+        return 0;
+    }
+    if (strcmp(v, "none") == 0) {
+        *out = -1;
+    } else {
+        *out = atoi(v);
+    }
+    return 1;
+}
+
+/* who: a disc character, or PORT_REF_MOD + a package. What its model has, with what its package says over it
+   (set / fuseSet: the package says something of that part). */
 void Port_TransGet(s32 who, PortTrans *out) {
-    (void)who;
+    char path[700], key[32], v[300];
+    const char *folder;
+    int i, k, m, x;
+
+    ensure();
     trans_clear(out);
+    model_path(who, path, sizeof(path));
+    trans_of_file(path, out);
+    out->set = out->fuseSet = 0;
+    if (Port_NetSession() || (i = pkg_of(who)) < 0) {
+        return;
+    }
+    folder = sLib[i].folder;
+    for (k = 0; k < 4; k++) {
+        if (PortCharas_ManifestGet(folder, kSlotKey[k], v, sizeof(v)) && (x = ref_of_link(v)) != -2) {
+            out->target[k] = x;
+            out->set = 1;
+        }
+        snprintf(key, sizeof(key), "%s_cost", kSlotKey[k]);
+        out->set |= get_num(folder, key, &out->cost[k]);
+        snprintf(key, sizeof(key), "%s_type", kSlotKey[k]);
+        out->set |= get_num(folder, key, &out->type[k]);
+        snprintf(key, sizeof(key), "%s_effect", kSlotKey[k]);
+        out->set |= get_num(folder, key, &out->effect[k]);
+        snprintf(key, sizeof(key), "%s_assist", kSlotKey[k]);
+        out->set |= get_num(folder, key, &out->assist[k]);
+        snprintf(key, sizeof(key), "%s_fresh", kSlotKey[k]);
+        out->set |= get_num(folder, key, &out->fresh[k]);
+    }
+    if (PortCharas_ManifestGet(folder, "default", v, sizeof(v))) {
+        out->next = -1;
+        for (k = 0; k < 4; k++) {
+            if (strcmp(v, kSlotKey[k]) == 0) {
+                out->next = k;
+            }
+        }
+        out->set = 1;
+    }
+    for (k = 0; k < 3; k++) {
+        snprintf(key, sizeof(key), "fusion%d", k + 1);
+        if (PortCharas_ManifestGet(folder, key, v, sizeof(v)) && (x = ref_of_link(v)) != -2) {
+            out->fuse[k] = x;
+            out->fuseSet = 1;
+        }
+        snprintf(key, sizeof(key), "partner%d", k + 1);
+        if (PortCharas_ManifestGet(folder, key, v, sizeof(v))) {
+            char *at = v;
+            for (m = 0; m < 4; m++) {
+                char one[80];
+                size_t len = strcspn(at, ",");
+                snprintf(one, sizeof(one), "%.*s", (int)(len < sizeof(one) - 1 ? len : sizeof(one) - 1), at);
+                x = ref_of_link(one);
+                out->partner[k][m] = x == -2 ? -1 : x;
+                at += len + (at[len] == ',');
+            }
+            out->fuseSet = 1;
+        }
+        snprintf(key, sizeof(key), "fusion%d_cost", k + 1);
+        out->fuseSet |= get_num(folder, key, &out->fuseCost[k]);
+        snprintf(key, sizeof(key), "fusion%d_type", k + 1);
+        if (PortCharas_ManifestGet(folder, key, v, sizeof(v))) {
+            out->fuseType[k] = strcmp(v, "potara") == 0 ? 2 : 1;
+            out->fuseSet = 1;
+        }
+        snprintf(key, sizeof(key), "fusion%d_lead", k + 1);
+        out->fuseSet |= get_num(folder, key, &out->fuseLead[k]);
+        snprintf(key, sizeof(key), "fusion%d_scene", k + 1);
+        out->fuseSet |= get_num(folder, key, &out->fuseAnim[k]);
+    }
 }
 
+/* A disc character's package for its forms, made when its forms are first set here: "<its name> forms", replacing
+   it with nothing but the manifest. Its index, -1 not made. */
+static int forms_package(int chara) {
+    char root[300], name[64], dir[420], path[440];
+    FILE *f;
+    int k, n;
+
+    if (!PortCharas_Root(root, sizeof(root))) {
+        return -1;
+    }
+    mkdir_one(root);
+    Port_ModCharaName(chara, name, 48);
+    for (k = 0; name[k] != '\0'; k++) {
+        if (strchr("/\\:*?\"<>|", name[k]) != NULL || (unsigned char)name[k] < 0x20) {
+            name[k] = '_';
+        }
+    }
+    snprintf(name + strlen(name), sizeof(name) - strlen(name), " forms");
+    snprintf(dir, sizeof(dir), "%s/%s", root, name);
+    for (n = 2; exists(dir) && n < 100; n++) {
+        snprintf(dir, sizeof(dir), "%s/%s %d", root, name, n);
+    }
+    if (exists(dir) || mkdir_one(dir) != 0) {
+        return -1;
+    }
+    snprintf(path, sizeof(path), "%s/character.txt", dir);
+    if ((f = fopen(path, "wb")) == NULL) {
+        return -1;
+    }
+    fprintf(f, "format=1\n# the transformations and fusions of a disc character, set in the Mod Manager\nreplaces=%d\n", chara);
+    fclose(f);
+    lib_read();
+    for (k = 0; k < sLibCount; k++) {
+        if (strcmp(sLib[k].folder, strrchr(dir, '/') + 1) == 0) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+static void put_num(const char *folder, const char *key, int on, int value) {
+    char v[16];
+    snprintf(v, sizeof(v), "%d", value);
+    PortCharas_ManifestSet(folder, key, on ? (value < 0 ? "none" : v) : NULL);
+}
+
+/* What the FORMS screen made: written into the package's character.txt (set 0 / fuseSet 0: that part's keys taken
+   out, the model's own again). A disc character without a package gets one (forms_package). */
 void Port_TransSet(s32 who, PortTrans *in) {
-    (void)who;
-    (void)in;
+    char folder[64], key[32], v[300], one[80];
+    int i, k, m, on;
+
+    ensure();
+    if (Port_NetSession() || in == NULL) {
+        return;
+    }
+    i = pkg_of(who);
+    if (i < 0 && who >= 0 && who < DISC && (in->set || in->fuseSet)) {
+        i = forms_package(who);
+    }
+    if (i < 0) {
+        return;
+    }
+    snprintf(folder, sizeof(folder), "%s", sLib[i].folder);
+    on = in->set != 0;
+    for (k = 0; k < 4; k++) {
+        link_of_ref(in->target[k], v, sizeof(v));
+        PortCharas_ManifestSet(folder, kSlotKey[k], on ? v : NULL);
+        snprintf(key, sizeof(key), "%s_cost", kSlotKey[k]);
+        put_num(folder, key, on, in->cost[k] < 0 ? 0 : in->cost[k] > 9 ? 9 : in->cost[k]);
+        snprintf(key, sizeof(key), "%s_type", kSlotKey[k]);
+        put_num(folder, key, on, in->type[k] < 0 || in->type[k] > 4 ? 0 : in->type[k]);
+        snprintf(key, sizeof(key), "%s_effect", kSlotKey[k]);
+        put_num(folder, key, on, in->effect[k] < 0 || in->effect[k] > 11 ? 1 : in->effect[k]);
+        snprintf(key, sizeof(key), "%s_assist", kSlotKey[k]);
+        put_num(folder, key, on, in->assist[k] >= 0 && in->assist[k] < DISC ? in->assist[k] : -1);
+        snprintf(key, sizeof(key), "%s_fresh", kSlotKey[k]);
+        put_num(folder, key, on, in->fresh[k] != 0);
+    }
+    PortCharas_ManifestSet(folder, "default", on ? (in->next >= 0 && in->next < 4 ? kSlotKey[in->next] : "none") : NULL);
+    on = in->fuseSet != 0;
+    for (k = 0; k < 3; k++) {
+        snprintf(key, sizeof(key), "fusion%d", k + 1);
+        link_of_ref(in->fuse[k], v, sizeof(v));
+        PortCharas_ManifestSet(folder, key, on ? v : NULL);
+        v[0] = '\0';
+        for (m = 0; m < 4; m++) {
+            link_of_ref(in->partner[k][m], one, sizeof(one));
+            snprintf(v + strlen(v), sizeof(v) - strlen(v), "%s%s", m > 0 ? "," : "", one);
+        }
+        snprintf(key, sizeof(key), "partner%d", k + 1);
+        PortCharas_ManifestSet(folder, key, on ? v : NULL);
+        snprintf(key, sizeof(key), "fusion%d_cost", k + 1);
+        put_num(folder, key, on, in->fuseCost[k] < 0 ? 0 : in->fuseCost[k] > 9 ? 9 : in->fuseCost[k]);
+        snprintf(key, sizeof(key), "fusion%d_type", k + 1);
+        PortCharas_ManifestSet(folder, key, on ? (in->fuseType[k] == 2 ? "potara" : "dance") : NULL);
+        snprintf(key, sizeof(key), "fusion%d_lead", k + 1);
+        put_num(folder, key, on, in->fuseLead[k] >= 0 && in->fuseLead[k] < DISC ? in->fuseLead[k] : -1);
+        snprintf(key, sizeof(key), "fusion%d_scene", k + 1);
+        put_num(folder, key, on, in->fuseAnim[k] < 0 || in->fuseAnim[k] > 5 ? 0 : in->fuseAnim[k]);
+    }
+    changed();
 }
 
+/* (the patch's own way, writing into the loaded model, is Port_CharaParamApply's in the package reader) */
 void Port_TransApplyFile(s32 modelFile, void *param) {
     (void)modelFile;
     (void)param;

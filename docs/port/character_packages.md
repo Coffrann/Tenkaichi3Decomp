@@ -236,6 +236,28 @@ A link is one of:
   cell of its own; it is one of the forms under that character's cell. An added character that only a replaced
   disc character transforms into keeps a cell of its own.
 - The fusion input is R3 held with left, up or right, in a team battle with the partner on the team.
+- A link may be `none`: that transformation or fusion (or partner) is switched off, with no remark.
+
+**The other numbers of a form.** What a transformation or a fusion costs and what it looks like are numbers of the
+character's own table too. These keys set them; a key that is not written leaves the table's own (the Mod Manager's
+FORMS screen writes them all for the part it changed):
+
+| Key | Value | What it sets (the table's byte) |
+|---|---|---|
+| `left_cost`, `up_cost`, `right_cost`, `down_cost` | `0`..`9` | blast stocks it costs (+0x9C) |
+| `left_type`, ... | `0`..`4` | 0 power up, 1 back to the earlier form, 2 great ape, 3 absorption, 4 machine merge (+0xA0) |
+| `left_effect`, ... | `0`..`11` | the scene's effect; 3 needs the moon (+0xA4) |
+| `left_assist`, ... | a disc character id, or `none` | the other fighter its scene shows (+0xA8) |
+| `left_fresh`, ... | `0` or `1` | the new form starts with its clothes whole (bit 4..7 of +0xAD) |
+| `default` | `left`, `up`, `right`, `down` or `none` | the form plain R3 (no direction) takes (+0xAC) |
+| `fusion1_cost`, `fusion2_cost`, `fusion3_cost` | `0`..`9` | blast stocks the fusion costs (+0xAE) |
+| `fusion1_type`, ... | `dance` or `potara` | which kind of fusion (+0xB1) |
+| `fusion1_lead`, ... | a disc character id, or `none` | the partner its scene shows (+0xB7) |
+| `fusion1_scene`, ... | `0`..`5` | the scene's motions as the Mod Manager names them; kept, not used by the fight yet |
+
+They are put into the parameter table of the character's model when a fighter is set up from it (offline only, as
+everything of a package). A disc character's forms set in the Mod Manager go into a package made for them,
+`<the character's name> forms`, which replaces the character with nothing but its manifest.
 
 ## 7. Health, ki, blast stocks
 
