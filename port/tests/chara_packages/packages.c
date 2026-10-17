@@ -589,6 +589,54 @@ static void order(const char *root) {
         sFail++;
     }
     sSession = 0;
+    {   /* the manifest writer: set, replace, take out; other lines kept; hostile folder names refused */
+        static const char *const bad[] = {"", ".", "..", "../A first", "/etc", "A first/../B second", "a/b/c", "x\\y", ".hidden", "/"};
+        char got[256], text[2048];
+        size_t n;
+        d = sub(root, "M manifest");
+        filled(d, "m_1p.pak", 4000, 1);
+        TEXT(d, "character.txt", "\xEF\xBB\xBF# kept comment\r\nNAME = Old\r\nmine=keep me\r\nname=Older\r\nbase=3");
+        if (!PortCharas_ManifestSet("M manifest", "name", "New\nname=evil") || !PortCharas_ManifestGet("M manifest", "Name", got, sizeof(got)) ||
+            strcmp(got, "New name=evil") != 0) {
+            printf("FAIL: name set: '%s'\n", got);
+            sFail++;
+        }
+        if (!PortCharas_ManifestSet("M manifest", "author", "Someone") || !PortCharas_ManifestSet("M manifest", "base", NULL) ||
+            PortCharas_ManifestGet("M manifest", "base", got, sizeof(got))) {
+            printf("FAIL: author added / base taken out\n");
+            sFail++;
+        }
+        snprintf(path, sizeof(path), "%s/M manifest/character.txt", root);
+        f = fopen(path, "rb");
+        n = fread(text, 1, sizeof(text) - 1, f);
+        fclose(f);
+        text[n] = '\0';
+        printf("manifest now:\n%s", text);
+        if (memcmp(text, "\xEF\xBB\xBF# kept comment", 17) != 0 || strstr(text, "mine=keep me") == NULL || strstr(text, "Older") != NULL ||
+            strstr(text, "author=Someone\n") == NULL || strstr(text, "base") != NULL) {
+            printf("FAIL: the other lines\n");
+            sFail++;
+        }
+        PortCharas_Reload();
+        expect_id("manifest (name read back)", "M manifest", pkg_id("M manifest"));
+        for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+            if (PortCharas_ManifestSet(bad[i], "name", "x")) {
+                printf("FAIL: wrote into '%s'\n", bad[i]);
+                sFail++;
+            }
+        }
+        if (PortCharas_ManifestSet("M manifest", "a=b", "x") || PortCharas_ManifestSet("M manifest", "", "x") ||
+            PortCharas_ManifestSet("M manifest", "#c", "x")) {
+            printf("FAIL: a bad key was written\n");
+            sFail++;
+        }
+        if (!PortCharas_ManifestSet("New one", "name", "Fresh")) { /* (a folder that is not there yet: refused, no folder made) */
+            printf("new folder refused, as it should be\n");
+        } else {
+            printf("FAIL: wrote into a folder that was not there\n");
+            sFail++;
+        }
+    }
     printf(sFail == 0 ? "order OK\n" : "order FAILED\n");
 }
 

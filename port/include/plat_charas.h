@@ -17,6 +17,9 @@ int PortCharas_Reload(void); /* reads it again (from the menus only; not in a se
 int PortCharas_Root(char *out, unsigned size); /* the folder; 0 if there is none */
 /* writes load_order.txt: the folders in order, each on or off; used by the next PortCharas_Reload */
 int PortCharas_OrderWrite(const char (*folder)[128], const unsigned char *on, int n);
+/* one key of a package's character.txt ("Name" or "Character/Form"): set (value NULL takes it out), read */
+int PortCharas_ManifestSet(const char *folder, const char *key, const char *value);
+int PortCharas_ManifestGet(const char *folder, const char *key, char *out, unsigned size);
 #define PORT_CHARA_FORMAT 1 /* the package format this game knows (`format=` of character.txt) */
 enum { PORT_STAT_HEALTH, PORT_STAT_KI, PORT_STAT_BLAST, PORT_STAT_COUNT };
 /* The folders looked at, for the settings window: every folder that is a package or was meant as one, in the

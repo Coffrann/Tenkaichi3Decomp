@@ -996,6 +996,170 @@ int PortCharas_OrderWrite(const char (*folder)[128], const unsigned char *on, in
     return 1;
 }
 
+/* The folder of a package as the Mod Manager names it ("Name" or "Character/Form", as PortCharaPkg.folder) inside
+   the characters folder; 0 for a name that could lead elsewhere (empty, a dot first, "..", a backslash, a slash
+   first or more than one, a part of 64 bytes or more). */
+static int pkg_dir(const char *folder, char *out, size_t size) {
+    char root[300];
+    const char *slash = strchr(folder, '/');
+    size_t a = slash != NULL ? (size_t)(slash - folder) : strlen(folder), b = slash != NULL ? strlen(slash + 1) : 1;
+    if (a == 0 || a >= 64 || b == 0 || b >= 64 || folder[0] == '.' || (slash != NULL && (slash[1] == '.' || strchr(slash + 1, '/') != NULL)) ||
+        strchr(folder, '\\') != NULL || strstr(folder, "..") != NULL || !PortCharas_Root(root, sizeof(root))) {
+        return 0;
+    }
+    return join(out, size, root, folder);
+}
+
+/* whether the n bytes at p are the key, without regard to case */
+static int key_is(const char *p, const char *key, size_t n) {
+    size_t i;
+    for (i = 0; i < n; i++) {
+        if (tolower((unsigned char)p[i]) != tolower((unsigned char)key[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Sets one key of a package's character.txt (value NULL: takes the key out), keeping every other line as it is
+   (comments, unknown keys, their order); the file is written beside and put in place. Control characters of the
+   value become spaces. The change is used at the next PortCharas_Reload. 0 if it was not done. */
+int PortCharas_ManifestSet(const char *folder, const char *key, const char *value) {
+    static char text[TEXT_MAX], out[TEXT_MAX + 512];
+    char dir[400], path[420], tmp[440], clean[256];
+    size_t klen = strlen(key), o = 0;
+    long len = 0;
+    char *line, *next;
+    int done = 0, k;
+    FILE *f;
+
+    if (klen == 0 || klen > 32 || strpbrk(key, "=\r\n#") != NULL || !pkg_dir(folder, dir, sizeof(dir)) || !join(path, sizeof(path), dir, "character.txt")) {
+        return 0;
+    }
+    if (regular(path) && (len = read_text(path, text)) < 0) {
+        return 0;
+    }
+    if (len >= TEXT_MAX - 1) {
+        return 0; /* (longer than the game reads: it is not rewritten from a part of it) */
+    }
+    if (value != NULL) {
+        snprintf(clean, sizeof(clean), "%s", value);
+        for (k = 0; clean[k] != '\0'; k++) {
+            if ((unsigned char)clean[k] < 0x20 || clean[k] == 0x7F) {
+                clean[k] = ' ';
+            }
+        }
+    }
+    text[len > 0 ? len : 0] = '\0';
+    line = text;
+    if (memcmp(text, "\xEF\xBB\xBF", 3) == 0) { /* (a byte order mark stays where it is) */
+        memcpy(out, text, 3);
+        o = 3;
+        line += 3;
+    }
+    for (; *line != '\0'; line = next) {
+        const char *p = line, *eq;
+        next = strchr(line, '\n');
+        next = next != NULL ? next + 1 : line + strlen(line);
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        eq = memchr(p, '=', (size_t)(next - p));
+        if (*p != '#' && eq != NULL) {
+            const char *e = eq;
+            while (e > p && (e[-1] == ' ' || e[-1] == '\t')) {
+                e--;
+            }
+            if ((size_t)(e - p) == klen && key_is(p, key, klen)) {
+                if (value != NULL && !done) { /* (the first such line becomes the new one; others go: the last would count) */
+                    o += (size_t)snprintf(out + o, sizeof(out) - o, "%s=%s\n", key, clean);
+                    done = 1;
+                }
+                continue;
+            }
+        }
+        if (o + (size_t)(next - line) + 1 >= sizeof(out)) {
+            return 0;
+        }
+        memcpy(out + o, line, (size_t)(next - line));
+        o += (size_t)(next - line);
+        if (next[-1] != '\n' && *next == '\0') {
+            out[o++] = '\n';
+        }
+    }
+    if (value != NULL && !done) {
+        if (o == 0) {
+            o += (size_t)snprintf(out + o, sizeof(out) - o, "format=%d\n", PORT_CHARA_FORMAT);
+        }
+        o += (size_t)snprintf(out + o, sizeof(out) - o, "%s=%s\n", key, clean);
+    }
+    if (o >= TEXT_MAX - 1) {
+        return 0;
+    }
+    snprintf(tmp, sizeof(tmp), "%s.new", path);
+    if ((f = fopen(tmp, "wb")) == NULL) {
+        return 0;
+    }
+    if (fwrite(out, 1, o, f) != o || fclose(f) != 0) {
+        remove(tmp);
+        return 0;
+    }
+#ifdef _WIN32
+    remove(path);
+#endif
+    if (rename(tmp, path) != 0) {
+        remove(tmp);
+        return 0;
+    }
+    return 1;
+}
+
+/* A key of a package's character.txt as it is written there (the last line that says it); "" and 0 if none. */
+int PortCharas_ManifestGet(const char *folder, const char *key, char *out, unsigned size) {
+    static char text[TEXT_MAX];
+    char dir[400], path[420];
+    size_t klen = strlen(key);
+    long len;
+    char *line, *next;
+    int found = 0;
+
+    if (size > 0) {
+        out[0] = '\0';
+    }
+    if (klen == 0 || !pkg_dir(folder, dir, sizeof(dir)) || !join(path, sizeof(path), dir, "character.txt") || !regular(path) ||
+        (len = read_text(path, text)) <= 0) {
+        return 0;
+    }
+    text[len] = '\0';
+    for (line = text; *line != '\0'; line = next) {
+        char *p = line, *eq, *e, *v, *ve;
+        next = strchr(line, '\n');
+        next = next != NULL ? next + 1 : line + strlen(line);
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (p == text && memcmp(p, "\xEF\xBB\xBF", 3) == 0) {
+            p += 3;
+        }
+        eq = memchr(p, '=', (size_t)(next - p));
+        if (*p == '#' || eq == NULL) {
+            continue;
+        }
+        for (e = eq; e > p && (e[-1] == ' ' || e[-1] == '\t'); e--) {
+        }
+        if ((size_t)(e - p) != klen || !key_is(p, key, klen)) {
+            continue;
+        }
+        for (v = eq + 1; *v == ' ' || *v == '\t'; v++) {
+        }
+        for (ve = next; ve > v && (ve[-1] == '\n' || ve[-1] == '\r' || ve[-1] == ' ' || ve[-1] == '\t'); ve--) {
+        }
+        snprintf(out, size, "%.*s", (int)(ve - v), v);
+        found = 1;
+    }
+    return found;
+}
+
 /* The size of the fight's model buffers: the original's (0xCE000), or the largest model file there is to load if that
    is larger: a package's, or one of the data folder's own (0x590 + id * 10 + 0..7, the first archive; the file under
    mods/ where there is one, which is the one loaded), which a disc with replaced characters can have. Whole pages;
