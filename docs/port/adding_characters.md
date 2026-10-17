@@ -416,3 +416,26 @@ blank 27160 on (the binary of 0.1.34 does the same; four runs fall into two grou
 Checked (all without a window): see the section of 2026-10-13 in README.md.
 NOT seen on a screen by a person: any replacement; the Mods tab's list (one offscreen picture); a link from a
 replaced character; numbers on the fight's display beyond the disc's range.
+
+## The Mod Manager on character packages (2026-10-17): what is left
+
+The contributed Mod Manager runs on the packages (port/src/gs/modmgr.c; src/menu/port_modmgr*.c, port_mmkit.c). Done:
+the library (on / off, priority, rename, the form label, author, version, about, replace / new / its fighter, remove
+and restore, the folder), the platform model of any package (on or not), the main menu plate, and the FORMS screen
+(transformations and fusions into character.txt, put into the fighter's table in the fight; seen working by the
+user). To do:
+
+- The test fight (START / TEST) and the way back to the manager from its pause menu.
+- The Mod Fighters grid on the character select (Square), on the added characters' ids instead of the
+  contribution's costume codes; its order is the load order (the Mod Fighters order screen already writes it).
+- The icon crop (chip.bin from the portrait and its square) and the portrait maker (portrait.bin from a picture),
+  with the contribution's portrait decoder made safe (it read past its input).
+- Adding packages: a folder, a dropped folder, zip files (7z / rar through the system's tar on Windows), the
+  community's file names recognised (port/src/plat_modmgr_prefix.inc, kept out of the tree until used); no symlink
+  followed when the unpack folder is cleaned up.
+- Fusions: the scenes' motions (fusionN_scene is kept, not used), with the contribution's motion splicer made safe
+  (a heap overflow from a mod's file); the skill list's transformation page written again.
+- A fighter's moves on the library's panel (Port_ModMoves), and the name lists the contribution read from text files
+  (to come from the player's disc, not the source).
+- The credit of the manager's pictures (port/tbo/ui/CREDITS.md): the author's name, if they want it there.
+- Then: docs, and the merge into main.
