@@ -1439,6 +1439,53 @@ void TeamSel_Update(void) {
 #define CUR_CUSTOM_CELL                                                                                                 \
     (gTeamSel->custom[i + gTeamSel->base][CUR_MEMBER.customCol + CUR_MEMBER.customRow * TS_COLS])
 
+#ifdef PORT
+/* PC build: the Mod Fighters grid (src/menu/port_modmgr2.c, PortModGrid_Pick), opened with square on the grid, as
+   on the character select (menu_c_e.c): a fighter picked there is taken as if the cursor had been moved onto its cell
+   (or the cell it is a form under) and cross pressed the next frame, with the costume chosen there. The team's own
+   rules (a fighter once, the DP limit) are the cross's, as they are. */
+extern s32 PortModGrid_Pick(s32 padNo, s32 *chara, s32 *code);
+extern s32 Port_SkinCount(void);
+extern int Port_NetSession(void);
+static s32 sPortGridCross[TEAMSEL_SIDES]; /* (cross for this side on its next frame) */
+static s32 sPortGridCostume[TEAMSEL_SIDES];
+
+static s32 TeamSel_PortGrid(s32 pad, s32 n) {
+    TeamSelSide *side = gTeamSel->side[n];
+    s32 id;
+    s32 costume;
+    s32 r;
+    s32 c;
+    s32 f;
+
+    if (!PortModGrid_Pick(pad, &id, &costume)) {
+        return 0;
+    }
+    for (r = 0; r < gTeamSel->rows[n]; r++) {
+        for (c = 0; c < TS_COLS; c++) {
+            TsCell *cell = &gTeamSel->cells[n][r * TS_COLS + c];
+            s32 hit = cell->id == id;
+
+            for (f = 0; !hit && f < cell->formCount && f < 7; f++) {
+                hit = cell->form[f] == id;
+            }
+            if (hit) {
+                TeamSel_ClipGoto(n + 3, n, TEAMSEL_CLIP_CHIP, "fl_off_start");
+                side->member[side->cur].col = c;
+                side->member[side->cur].row = r;
+                TeamSel_ClipGoto(n + 3, n, TEAMSEL_CLIP_CHIP, "fl_on_start");
+                TeamSel_SetChips(n);
+                side->chara = side->chip[0][c];
+                TeamSel_RequestFace(n);
+                sPortGridCostume[n] = costume;
+                return 1;
+            }
+        }
+    }
+    return 0; /* (no cell has it: not on this screen) */
+}
+#endif
+
 /*
  * The pad handler, once per frame while no fade runs and the screen is not frozen. Does nothing until the
  * background movie accepts input. While TEAMSEL_STAGE is set pad 0 chooses the stage and the music; before
@@ -1619,6 +1666,19 @@ f32 TeamSel_Input(s32 *result) {
             }
             switch (CUR_SIDE->state) {
             case TEAMSEL_ST_GRID:
+#ifdef PORT
+                if (sPortGridCross[CUR_N]) { /* (a fighter picked on the Mod Fighters grid: taken as cross on its cell) */
+                    sPortGridCross[CUR_N] = 0;
+                    gPad[i].gamePressed |= PADG_CROSS;
+                    gPad[i].gameRepeat = 0;
+                } else if ((gPad[i].gamePressed & PADG_SQUARE) && !Port_NetSession() && Port_SkinCount() > 0) {
+                    if (TeamSel_PortGrid(i, CUR_N)) {
+                        sPortGridCross[CUR_N] = 1;
+                        Snd_PlaySe(1, 1);
+                    }
+                    continue;
+                }
+#endif
                 if (gPad[i].gameRepeat & 1) {
                     TeamSel_ClipGoto(CUR_N + 3, CUR_N, TEAMSEL_CLIP_CHIP, "fl_off_start");
                     ChrGrid_MoveLeft(gTeamSel->cells[CUR_N], &CUR_MEMBER.col, CUR_MEMBER.row);
@@ -1716,6 +1776,12 @@ f32 TeamSel_Input(s32 *result) {
                                 CUR_MEMBER.plate = 0;
                             }
                             TeamSel_ClipGoto(CUR_N + 5, CUR_N, TEAMSEL_CLIP_CUSTOM_PLATE, "fl_on_start");
+#ifdef PORT
+                            if (sPortGridCostume[CUR_N] > 0) { /* (the costume chosen on the Mod Fighters grid) */
+                                CUR_MEMBER.color = sPortGridCostume[CUR_N];
+                            }
+                            sPortGridCostume[CUR_N] = 0;
+#endif
                             gTeamSel->colorCount[CUR_N] = ChrTbl_WrapCostume(CUR_SIDE->chara, &CUR_MEMBER.color);
                             CUR_SIDE->state = TEAMSEL_ST_PLATE;
                             Snd_PlaySe(1, 1);
@@ -1797,6 +1863,12 @@ f32 TeamSel_Input(s32 *result) {
                             }
                         }
                         TeamSel_ClipGoto(CUR_N + 5, CUR_N, TEAMSEL_CLIP_CUSTOM_PLATE, "fl_on_start");
+#ifdef PORT
+                        if (sPortGridCostume[CUR_N] > 0) { /* (the costume chosen on the Mod Fighters grid) */
+                            CUR_MEMBER.color = sPortGridCostume[CUR_N];
+                        }
+                        sPortGridCostume[CUR_N] = 0;
+#endif
                         gTeamSel->colorCount[CUR_N] = ChrTbl_WrapCostume(CUR_SIDE->chara, &CUR_MEMBER.color);
                         CUR_SIDE->state = TEAMSEL_ST_PLATE;
                         Snd_PlaySe(1, 1);
@@ -2165,6 +2237,12 @@ f32 TeamSel_Input(s32 *result) {
                             CUR_MEMBER.plate = 0;
                         }
                         TeamSel_ClipGoto(CUR_N + 5, CUR_N, TEAMSEL_CLIP_CUSTOM_PLATE, "fl_on_start");
+#ifdef PORT
+                        if (sPortGridCostume[CUR_N] > 0) { /* (the costume chosen on the Mod Fighters grid) */
+                            CUR_MEMBER.color = sPortGridCostume[CUR_N];
+                        }
+                        sPortGridCostume[CUR_N] = 0;
+#endif
                         gTeamSel->colorCount[CUR_N] = ChrTbl_WrapCostume(CUR_SIDE->chara, &CUR_MEMBER.color);
                         CUR_SIDE->state = TEAMSEL_ST_PLATE;
                         Snd_PlaySe(1, 1);
