@@ -1786,6 +1786,7 @@ static char *sTrFuseType[3] = {"-", "FUSION DANCE", "POTARA"};
 /* The kind of change (+0xA0), as the FORMS screen names it. */
 static char *sTrKind[5] = {"POWER UP", "BACK TO BASE", "GREAT APE", "ABSORB (CELL)", "MACHINE MERGE (PILAF)"};
 static const s8 sTrKindAura[5] = {2, 1, 4, 7, 0}; /* (the aura a kind starts with when it is chosen) */
+#define TR_KINDS 3 /* the kinds offered: absorption (Cell) and machine merge (Pilaf) do not work for a mod yet */
 
 static char *sTrDir[4] = {"LEFT + R3", "UP + R3", "RIGHT + R3", "DOWN + R3"};
 static char *sTrHold[3] = {"LEFT + HOLD R3", "UP + HOLD R3", "RIGHT + HOLD R3"}; /* (fusions: the skill list marks them held) */
@@ -1955,7 +1956,7 @@ static s32 Trans_Step(s32 dir) {
     if (sMm->trPage == 0) {
         switch (sMm->trField) {
         case TF_KIND:
-            sMm->tr.type[k] = (sMm->tr.type[k] + 5 + dir) % 5;
+            sMm->tr.type[k] = ((sMm->tr.type[k] >= 0 && sMm->tr.type[k] < TR_KINDS ? sMm->tr.type[k] : 0) + TR_KINDS + dir) % TR_KINDS;
             Trans_KindAura(k);
             return 1;
         case TF_COST:
@@ -2007,7 +2008,7 @@ static s32 Trans_Choices(void) {
     if (sMm->trPage == 0) {
         switch (sMm->trField) {
         case TF_KIND:
-            return 5;
+            return TR_KINDS;
         case TF_COST:
             return 8;
         case TF_FRESH:
@@ -2053,7 +2054,7 @@ static s32 Trans_ChoiceNow(void) {
     if (sMm->trPage == 0) {
         switch (sMm->trField) {
         case TF_KIND:
-            return sMm->tr.type[k];
+            return sMm->tr.type[k] >= 0 && sMm->tr.type[k] < TR_KINDS ? sMm->tr.type[k] : -1;
         case TF_COST:
             return sMm->tr.cost[k];
         case TF_AURA: {
