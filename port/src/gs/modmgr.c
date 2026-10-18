@@ -1261,8 +1261,24 @@ static void model_path(int who, char *out, size_t size) {
     }
 }
 
-/* A link of character.txt as the manager's reference; -2 a folder that is not there (the file's own stands). */
-static int ref_of_link(const char *link) {
+/* the entry of the library whose folder is `folder`, -1 none */
+static int lib_index(const char *folder) {
+    int i;
+    for (i = 0; i < sLibCount; i++) {
+        if (strcmp(sLib[i].folder, folder) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* A link of package `from`'s character.txt as the manager's reference, read as the package reader reads it (find in
+   plat_charas.c): "..", the character whose folder `from` is in; a name, a folder inside the same character's folder
+   (from the character itself: one inside its own), else a folder of the top; or "Character/Form". -2 a folder that
+   is not there (the model's own stands). (A link was compared with the whole folder only, so a form's name beside it
+   was not found and the model's own table was shown: the disc character the mod had taken the place of.) */
+static int ref_of_link(const char *from, const char *link) {
+    char family[128], path[260];
     int i, x;
     if (strcmp(link, "none") == 0) {
         return -1;
@@ -1271,12 +1287,20 @@ static int ref_of_link(const char *link) {
         x = atoi(link + 5);
         return x >= 0 && x < DISC ? x : -2;
     }
-    for (i = 0; i < sLibCount; i++) {
-        if (strcmp(sLib[i].folder, link) == 0) {
+    snprintf(family, sizeof(family), "%s", from);
+    if (strchr(family, '/') != NULL) {
+        *strchr(family, '/') = '\0';
+    }
+    if (strcmp(link, "..") == 0) {
+        return strchr(from, '/') != NULL && (i = lib_index(family)) >= 0 ? PORT_REF_MOD + i : -2;
+    }
+    if (strchr(link, '/') == NULL) {
+        snprintf(path, sizeof(path), "%s/%s", family, link);
+        if ((i = lib_index(path)) >= 0) {
             return PORT_REF_MOD + i;
         }
     }
-    return -2;
+    return (i = lib_index(link)) >= 0 ? PORT_REF_MOD + i : -2;
 }
 
 static void link_of_ref(int ref, char *out, size_t size) {
@@ -1319,7 +1343,7 @@ void Port_TransGet(s32 who, PortTrans *out) {
     }
     folder = sLib[i].folder;
     for (k = 0; k < 4; k++) {
-        if (PortCharas_ManifestGet(folder, kSlotKey[k], v, sizeof(v)) && (x = ref_of_link(v)) != -2) {
+        if (PortCharas_ManifestGet(folder, kSlotKey[k], v, sizeof(v)) && (x = ref_of_link(folder, v)) != -2) {
             out->target[k] = x;
             out->set = 1;
         }
@@ -1345,7 +1369,7 @@ void Port_TransGet(s32 who, PortTrans *out) {
     }
     for (k = 0; k < 3; k++) {
         snprintf(key, sizeof(key), "fusion%d", k + 1);
-        if (PortCharas_ManifestGet(folder, key, v, sizeof(v)) && (x = ref_of_link(v)) != -2) {
+        if (PortCharas_ManifestGet(folder, key, v, sizeof(v)) && (x = ref_of_link(folder, v)) != -2) {
             out->fuse[k] = x;
             out->fuseSet = 1;
         }
@@ -1356,7 +1380,7 @@ void Port_TransGet(s32 who, PortTrans *out) {
                 char one[80];
                 size_t len = strcspn(at, ",");
                 snprintf(one, sizeof(one), "%.*s", (int)(len < sizeof(one) - 1 ? len : sizeof(one) - 1), at);
-                x = ref_of_link(one);
+                x = ref_of_link(folder, one);
                 out->partner[k][m] = x == -2 ? -1 : x;
                 at += len + (at[len] == ',');
             }
