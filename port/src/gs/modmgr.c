@@ -2345,9 +2345,3 @@ s32 Port_ModImportAll(char *path) {
     return 0;
 }
 
-s32 Port_ModListName(s32 list, s32 i, char *out) {
-    (void)list;
-    (void)i;
-    out[0] = '\0';
-    return 0;
-}

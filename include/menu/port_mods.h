@@ -91,7 +91,6 @@ extern s32 Port_RemovedList(void);             /* the mods in mods_removed: how 
 extern void Port_RemovedName(s32 i, char *out); /* 64 bytes */
 extern s32 Port_RemovedRestore(s32 i);         /* back into the library: its index there, -1 not done */
 extern s32 Port_DropTake(char *path);     /* 1: a folder or file was dropped on the window, its path (700 bytes) */
-extern s32 Port_ModListName(s32 list, s32 i, char *out); /* names of <data>/modmgr lists: 1 moves, 2 items, 3 maps, 4 songs; 48 bytes */
 extern s32 Port_ModTestStage(void);       /* the stage of the manager's test fight */
 extern s32 PortModGrid_Pick(s32 padNo, s32 *chara, s32 *code);
 extern u16 *PortMods_SkinName(s32 code, s32 which, s32 side, void *table); /* a picked new fighter's name, NULL = the template's */
