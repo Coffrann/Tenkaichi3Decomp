@@ -1290,6 +1290,52 @@ void CharSel_Update(void) {
    original loads the upper half of that string's address once, in front of the branch (its delay slot), and
    starts both arms with `move a1,a2`, while this compiles with `move a1,a2` in the delay slot and the `lui` at
    the start of each arm. Everything else, including every branch, is the original's code. */
+#ifdef PORT
+/* PC build: the Mod Fighters grid (src/menu/port_modmgr2.c, PortModGrid_Pick), opened with square on the grid of a
+   side: the added characters that are on, with their model and costumes. A fighter picked there is taken as if the
+   cursor had been moved onto its cell (or the cell it is a form under) and cross pressed (the next frame), with the
+   costume chosen there: the select then goes on as it does. */
+extern s32 PortModGrid_Pick(s32 padNo, s32 *chara, s32 *code);
+extern s32 Port_SkinCount(void);
+extern int Port_NetSession(void);
+static s32 sPortGridCross[CHARSEL_SIDES]; /* (cross for this side on its next frame) */
+static s32 sPortGridCostume[CHARSEL_SIDES];
+
+static s32 CharSel_PortGrid(s32 pad, s32 n) {
+    s32 id;
+    s32 costume;
+    s32 r;
+    s32 c;
+    s32 f;
+
+    if (!PortModGrid_Pick(pad, &id, &costume)) {
+        return 0;
+    }
+    for (r = 0; r < gCharSel->rows[n]; r++) {
+        for (c = 0; c < 7; c++) {
+            MChrCell *cell = &gCharSel->cells[n][c + r * 7];
+            s32 hit = cell->id == id;
+
+            for (f = 0; !hit && f < cell->formCount && f < 7; f++) {
+                hit = cell->form[f] == id;
+            }
+            if (hit) {
+                CharSel_ClipGoto(n + 1, n, CHARSEL_CLIP_CHIP, "fl_off_start");
+                gCharSel->side[n]->col = c;
+                gCharSel->side[n]->row = r;
+                CharSel_ClipGoto(n + 1, n, CHARSEL_CLIP_CHIP, "fl_on_start");
+                CharSel_SetRowChips(n);
+                gCharSel->side[n]->chara = gCharSel->side[n]->chip[c];
+                CharSel_RequestFace(n);
+                sPortGridCostume[n] = costume;
+                return 1;
+            }
+        }
+    }
+    return 0; /* (no cell has it: not on this screen) */
+}
+#endif
+
 void CharSel_Input(s32 *running) {
     s32 count = 0;
     s32 i;
@@ -1466,6 +1512,19 @@ void CharSel_Input(s32 *running) {
         }
         switch (CS_SIDE->state) {
         case CHARSEL_ST_GRID:
+#ifdef PORT
+            if (sPortGridCross[CS_N]) { /* (a fighter picked on the Mod Fighters grid: taken as cross on its cell) */
+                sPortGridCross[CS_N] = 0;
+                gPad[i].gamePressed |= PADG_CROSS;
+                gPad[i].gameRepeat = 0;
+            } else if ((gPad[i].gamePressed & PADG_SQUARE) && !Port_NetSession() && Port_SkinCount() > 0) {
+                if (CharSel_PortGrid(i, CS_N)) {
+                    sPortGridCross[CS_N] = 1;
+                    Snd_PlaySe(1, 1);
+                }
+                continue;
+            }
+#endif
             if (gPad[i].gameRepeat & 1) {
                 CharSel_ClipGoto(CS_N + 1, CS_N, CHARSEL_CLIP_CHIP, "fl_off_start");
                 ChrGrid_MoveLeft(gCharSel->cells[CS_N], &CS_SIDE->col, CS_SIDE->row);
@@ -1560,6 +1619,12 @@ void CharSel_Input(s32 *running) {
                         CS_SIDE->customPlate = 0;
                     }
 #endif
+#ifdef PORT
+                    if (sPortGridCostume[CS_N] > 0) { /* (the costume chosen on the Mod Fighters grid) */
+                        CS_SIDE->colorPlate = sPortGridCostume[CS_N];
+                    }
+                    sPortGridCostume[CS_N] = 0;
+#endif
                     gCharSel->colorCount[CS_N] = ChrTbl_WrapCostume(CS_SIDE->chara, &CS_SIDE->colorPlate);
                     CharSel_ClipGoto(CS_N + 3, CS_N, CHARSEL_CLIP_CUSTOM_PLATE, "fl_on_start");
                     CS_SIDE->state = CHARSEL_ST_ITEMSET;
@@ -1619,6 +1684,12 @@ void CharSel_Input(s32 *running) {
                     gCharSel->customRows[CS_N] = 4;
                 }
                 CharSel_ClipGoto(CS_N + 3, CS_N, CHARSEL_CLIP_CUSTOM_PLATE, "fl_on_start");
+#ifdef PORT
+                if (sPortGridCostume[CS_N] > 0) { /* (the costume chosen on the Mod Fighters grid) */
+                    CS_SIDE->colorPlate = sPortGridCostume[CS_N];
+                }
+                sPortGridCostume[CS_N] = 0;
+#endif
                 gCharSel->colorCount[CS_N] = ChrTbl_WrapCostume(CS_SIDE->chara, &CS_SIDE->colorPlate);
                 CS_SIDE->state = CHARSEL_ST_ITEMSET;
                 Snd_PlaySe(1, 1);
@@ -1872,6 +1943,12 @@ void CharSel_Input(s32 *running) {
                         CS_SIDE->customPlate = 0;
                     }
                     CharSel_ClipGoto(CS_N + 3, CS_N, CHARSEL_CLIP_CUSTOM_PLATE, "fl_on_start");
+#ifdef PORT
+                    if (sPortGridCostume[CS_N] > 0) { /* (the costume chosen on the Mod Fighters grid) */
+                        CS_SIDE->colorPlate = sPortGridCostume[CS_N];
+                    }
+                    sPortGridCostume[CS_N] = 0;
+#endif
                     gCharSel->colorCount[CS_N] = ChrTbl_WrapCostume(CS_SIDE->chara, &CS_SIDE->colorPlate);
                     CS_SIDE->state = CHARSEL_ST_ITEMSET;
                     Snd_PlaySe(1, 1);

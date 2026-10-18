@@ -3027,8 +3027,8 @@ u16 *PortMods_SkinName(s32 code, s32 which, s32 side, void *table) {
 
 /* ---- the mod grid of the character select ----
  * Opened with square: the new fighters as a grid of faces in another colour, the one under the cursor large at the
- * right. Cross picks, L1 / R1 change the costume, triangle or square go back. Returns 1 with the template's
- * character id and the costume code that carries the skin, 0 when nothing was picked.
+ * right. Cross picks, L1 / R1 change the costume, triangle or square go back. Returns 1 with the added character's
+ * own id (0xC6 on) and the costume (0..3), 0 when nothing was picked.
  */
 #define MG_COLS 5
 #define MG_ROWS 4
@@ -3372,8 +3372,12 @@ s32 PortModGrid_Pick(s32 padNo, s32 *chara, s32 *code) {
             }
         }
         if (pad->gamePressed & PADG_CROSS) {
-            *chara = g->info[g->cur].chara;
-            *code = PORT_SKIN_CODE(g->cur, g->costume);
+            *chara = Port_ModFighterId(Port_SkinMod(g->cur)); /* (its own id: 0xC6 on) */
+            *code = g->costume;                               /* (its costume, 0..3) */
+            if (*chara < 0) { /* (not on after all) */
+                Snd_PlaySe(1, 7);
+                continue;
+            }
             result = 1;
             g->pickT = 1;
             Snd_PlaySe(1, 1);
