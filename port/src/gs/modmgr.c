@@ -1512,11 +1512,66 @@ void Port_TransApplyFile(s32 modelFile, void *param) {
 
 /* ---- the moves of a package (its first costume's move list) -------------------------------------------------- */
 
+/* Its blasts, for the Library's panel: the first page of the skill list its model carries (section 45 of the model
+   file, the text the fight's pause menu shows: "$0" the special attacks, each "*" line one, after its three-digit
+   cost), from the package's first costume or the disc's. Letters with accents as the plain ones (the panel's font
+   has no others); anything else '?', which the panel takes for a name it cannot show. Up to `max` names of 40 bytes. */
 s32 Port_ModMoves(s32 i, void *out, s32 max) {
-    (void)i;
-    (void)out;
-    (void)max;
-    return 0;
+    /* (U+00C0..U+00FF as plain letters) */
+    static const char kPlain[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
+    char (*names)[40] = out, path[600];
+    unsigned char *d;
+    long n, at, len, p;
+    int count = 0, page = -1;
+
+    if (!valid(i) || max <= 0) {
+        return 0;
+    }
+    model_path(PORT_REF_MOD + i, path, sizeof(path));
+    if ((d = file_all(path, 8L << 20, &n)) == NULL) {
+        return 0;
+    }
+    if (pack_section(d, n, 45, &at, &len) && len >= 4 && d[at] == 0xFF && d[at + 1] == 0xFE) {
+        for (p = at + 2; p + 1 < at + len && count < max;) {
+            unsigned line[80];
+            int k = 0;
+            while (p + 1 < at + len) { /* (one line, UTF-16) */
+                unsigned c = d[p] | (unsigned)d[p + 1] << 8;
+                p += 2;
+                if (c == '\n' || c == 0) {
+                    break;
+                }
+                if (k < 80) {
+                    line[k++] = c;
+                }
+            }
+            if (k >= 3 && line[0] == '!') { /* ("!F" and the like: what shows it, then the line itself) */
+                const unsigned *t = line + 2;
+                int m = k - 2, c, o = 0;
+                if (t[0] == '@') {
+                    break;
+                }
+                if (t[0] == '$' && m >= 2) {
+                    if (page == 0) {
+                        break; /* (the special attacks' page is over) */
+                    }
+                    page = (int)t[1] - '0';
+                } else if (t[0] == '*' && page == 0 && m > 4) {
+                    for (c = 4; c < m && o < 39; c++) {
+                        unsigned u = t[c];
+                        names[count][o++] = u >= 32 && u < 127 ? (char)u : u >= 0xC0 && u <= 0xFF ? kPlain[u - 0xC0] : '?';
+                    }
+                    while (o > 0 && names[count][o - 1] == ' ') {
+                        o--;
+                    }
+                    names[count][o] = '\0';
+                    count += o > 0;
+                }
+            }
+        }
+    }
+    free(d);
+    return count;
 }
 
 /* ---- the portrait made in the manager (Port_ModArt*) -----------------------------------------------------------
