@@ -113,8 +113,8 @@ Each catalog handles missing entries differently:
 ## The European disc's languages
 
 The European release (SLES-54945) has the menus, the battle HUD and their text five times, once per language
-(English, Spanish, German, French, Italian). The port extracts 60 translated menu/HUD entries and one native
-language-selector entry:
+(English, Spanish, German, French, Italian). The port extracts 60 translated menu/HUD entries, one native
+language-selector entry, and the opening soundtrack:
 
 - the setup window takes them from a second, optional disc image (in a release folder: native.cpp `step_eu`;
   the "Ready to play" page has "Add languages..." for a game set up before; without a window
