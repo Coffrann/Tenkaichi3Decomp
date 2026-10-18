@@ -105,14 +105,9 @@ s32 Progress_Main(s32 arg) {
             }
             gPortTboSpar = 0;
         }
-#endif
-    }
-    if (gProgress->mode == 1 || gProgress->mode == 4) {
-        if (gMenuArc1 == NULL) {
-            gMenuArc1 = File_LoadSync(gProgress->baseFile + 1, NULL, 0);
-        }
-#ifdef PORT
-        { /* the Mod Manager's test fight: "Return to Mod Manager" opens the manager again (through the Duel mode) */
+        { /* the Mod Manager's test fight: "Return to Mod Manager" opens the manager again (through the Duel mode).
+             (Here, after the game's own choice: the fight is started from the Duel mode, which sends "Return to
+             Character Select" to its select, so a test made below for the title and the main menu was never met.) */
             extern s32 gPortModTest;
             extern s32 gPortDuelRole;
 
@@ -124,6 +119,17 @@ s32 Progress_Main(s32 arg) {
         }
 #endif
     }
+    if (gProgress->mode == 1 || gProgress->mode == 4) {
+        if (gMenuArc1 == NULL) {
+            gMenuArc1 = File_LoadSync(gProgress->baseFile + 1, NULL, 0);
+        }
+    }
+#ifdef PORT
+    { /* (however the test fight ended: the next fight is not one) */
+        extern s32 gPortModTest;
+        gPortModTest = 0;
+    }
+#endif
     Snd_LoadBankFile(2, 0x14C);
 
     do {

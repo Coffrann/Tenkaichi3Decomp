@@ -2398,9 +2398,15 @@ s32 PortModMgr_Run(void) {
 
         sMmResume = sMm->cur;
         gPortModTest = 1;
-        testChara = m->chara;
-        /* a new fighter is its template in a costume number that says which one it is */
-        testCostume = m->isNew ? 8 + m->skin * 4 + sMm->costume : sMm->costume;
+        /* an added fighter by its own id (0xC6 on), a replacement as the disc character it replaces; the costume
+           shown. (The contribution's "its base in costume 8 and on" was a model file of another character's numbers:
+           the fight crashed binding it.) */
+        testChara = m->isNew ? Port_ModFighterId(sMm->cur) : m->chara;
+        testCostume = sMm->costume >= 0 && sMm->costume < 4 ? sMm->costume : 0;
+        if (testChara < 0) {
+            test = 0; /* (not on after all: no fight) */
+            gPortModTest = 0;
+        }
     }
     Mm_Term();
     Dma_ResetBuffers();
