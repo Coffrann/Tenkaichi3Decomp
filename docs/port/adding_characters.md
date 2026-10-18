@@ -428,7 +428,12 @@ user). To do:
 - The test fight (START / TEST) and the way back to the manager from its pause menu.
 - The Mod Fighters grid on the character select (Square), on the added characters' ids instead of the
   contribution's costume codes; its order is the load order (the Mod Fighters order screen already writes it).
-- The portrait maker (portrait.bin from a picture). (The icon crop is done: the square of the portrait, averaged
+- (Done: the portrait maker. A PNG or BMP, or the package's own portrait, put whole into the frame (512 x 512 on
+  the screen, stored 256 x 512), moved and sized as the screen shows it, brought down to 256 colours (fewer if packed
+  it would not fit 92,160 bytes), packed with the game's byte pair coder (checked by unpacking it again) and written
+  as portrait.bin; the package's own kept as portrait_original.bin (its name in portrait_was) and the picture as
+  portrait_source.png / .bmp, so it can be framed again; the reset puts the own one back. Port_ModArt* in
+  gs/modmgr.c. And the icon crop: the square of the portrait, averaged
   down to 64 x 64 in the portrait's colours, written into the package's chip.bin, its own kept as chip_original.bin
   and put back by "automatic"; else into the base character's chip of the disc. Port_ModSet 3..5 in gs/modmgr.c,
   with its own bounded unpacker; tested under the sanitizers with 600 damaged portraits.)

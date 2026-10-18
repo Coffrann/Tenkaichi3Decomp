@@ -15,6 +15,7 @@
  */
 #include <SDL3/SDL.h>
 #include <ctype.h>
+#include <math.h>
 #include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -271,6 +272,10 @@ void Port_ModGetInfo(s32 i, PortModInfo *out) {
     out->charas = 1;
     out->charaList[0] = out->chara;
     out->art[3] = out->artH = 100;
+    if (PortCharas_ManifestGet(p->folder, "portrait_frame", v, sizeof(v)) &&
+        sscanf(v, "%d,%d,%d,%d", &out->art[1], &out->art[2], &out->art[3], &out->artH) == 4) {
+        out->art[0] = 1; /* (a portrait made in the manager: its frame, to open it again) */
+    }
     if (PortCharas_ManifestGet(p->folder, "chip_square", v, sizeof(v))) {
         sscanf(v, "%d,%d,%d", &out->chip[0], &out->chip[1], &out->chip[2]);
     }
@@ -1448,32 +1453,602 @@ s32 Port_ModMoves(s32 i, void *out, s32 max) {
     return 0;
 }
 
-/* ---- pictures made in the manager (later) -------------------------------------------------------------------- */
+/* ---- the portrait made in the manager (Port_ModArt*) -----------------------------------------------------------
+ * The picture: a PNG or BMP picked in the browser (kept in the package as portrait_source.png / .bmp when the
+ * portrait is saved, so it can be framed again), else the package's own portrait. A picture is put whole into the
+ * frame as the select screen shows it: 512 x 512 on the screen, stored 256 x 512 (the portraits are kept squeezed
+ * and shown twice as wide). The screen then moves it (x, y: the frame's pixels) and sizes it (width and height in
+ * percent, about the frame's middle); saving draws that into a 256 x 512 picture, brings it down to 256 colours
+ * (fewer, if packed it would not fit the game's 92,160 bytes), packs it and writes portrait.bin. The package's own
+ * portrait is moved aside as portrait_original.bin (its name kept in character.txt as portrait_was) and put back by
+ * the reset. The file written into is the package's own portrait, else the base character's of the disc. */
+enum { ART_W = 256, ART_H = 512, ART_PACKED_MAX = 0x16800 };
+static int sArtMod = -1;                /* the package a picture was picked for this time */
+static unsigned char *sArtPick;         /* that picture in the frame (ART_W x ART_H, RGBA) */
+static char sArtPickPath[700];
 
+/* A picture file as RGBA put whole into the frame (centred, its shape kept on the screen); 0 if it is not read. */
+static int art_fit(const char *path, unsigned char *out) {
+    SDL_Surface *s = SDL_LoadPNG(path), *r;
+    int x, y, W, H;
+    double scale, offx, offy;
+    if (s == NULL) {
+        s = SDL_LoadBMP(path);
+    }
+    if (s == NULL) {
+        return 0;
+    }
+    r = SDL_ConvertSurface(s, SDL_PIXELFORMAT_RGBA32);
+    SDL_DestroySurface(s);
+    if (r == NULL) {
+        return 0;
+    }
+    W = r->w;
+    H = r->h;
+    if (W < 1 || H < 1 || W > 8192 || H > 8192) {
+        SDL_DestroySurface(r);
+        return 0;
+    }
+    scale = (double)ART_H / (W > H ? W : H); /* (screen pixels a picture pixel: it fits 512 x 512) */
+    offx = (ART_H - W * scale) / 2.0;
+    offy = (ART_H - H * scale) / 2.0;
+    for (y = 0; y < ART_H; y++) {
+        for (x = 0; x < ART_W; x++) {
+            /* the stored pixel covers two screen pixels across: the picture's pixels under them, averaged */
+            double sx0 = (x * 2.0 - offx) / scale, sx1 = (x * 2.0 + 2.0 - offx) / scale, sy0 = (y - offy) / scale, sy1 = (y + 1.0 - offy) / scale;
+            int ix0 = (int)floor(sx0), ix1 = (int)ceil(sx1), iy0 = (int)floor(sy0), iy1 = (int)ceil(sy1), xx, yy;
+            long rr = 0, gg = 0, bb = 0, aa = 0, n = 0;
+            unsigned char *o = out + ((long)y * ART_W + x) * 4;
+            ix0 = ix0 < 0 ? 0 : ix0;
+            iy0 = iy0 < 0 ? 0 : iy0;
+            ix1 = ix1 > W ? W : ix1;
+            iy1 = iy1 > H ? H : iy1;
+            for (yy = iy0; yy < iy1; yy++) {
+                const unsigned char *row = (const unsigned char *)r->pixels + (long)yy * r->pitch;
+                for (xx = ix0; xx < ix1; xx++) {
+                    const unsigned char *p = row + xx * 4;
+                    rr += (long)p[0] * p[3];
+                    gg += (long)p[1] * p[3];
+                    bb += (long)p[2] * p[3];
+                    aa += p[3];
+                    n++;
+                }
+            }
+            if (aa > 0 && n > 0) {
+                o[0] = (unsigned char)(rr / aa);
+                o[1] = (unsigned char)(gg / aa);
+                o[2] = (unsigned char)(bb / aa);
+                o[3] = (unsigned char)(aa / n);
+            } else {
+                o[0] = o[1] = o[2] = o[3] = 0;
+            }
+        }
+    }
+    SDL_DestroySurface(r);
+    return 1;
+}
+
+/* the package's folder; its portrait as it came (kept aside, else the one there); the file it was kept from */
+static int art_dir(int i, char *dir, size_t n) {
+    char root[300];
+    if (!valid(i) || !PortCharas_Root(root, sizeof(root))) {
+        return 0;
+    }
+    snprintf(dir, n, "%s/%s", root, sLib[i].folder);
+    return 1;
+}
+
+static unsigned char *art_own_body(int i, long *n) {
+    char dir[420], path[600];
+    unsigned char *raw, *body;
+    long len;
+    if (!art_dir(i, dir, sizeof(dir))) {
+        return NULL;
+    }
+    snprintf(path, sizeof(path), "%s/portrait_original.bin", dir);
+    if ((raw = file_all(path, PORTRAIT_MAX, &len)) == NULL) {
+        return portrait_body(i, n);
+    }
+    if (rd32(raw) != 1 && (body = bpe_unpack(raw, len, PORTRAIT_MAX * 4, n)) != NULL) {
+        free(raw);
+        return body;
+    }
+    *n = len;
+    return raw;
+}
+
+/* the file to write into: the package's own portrait, else the base character's of the disc (unpacked) */
+static unsigned char *art_template(int i, long *n) {
+    const char *data = getenv("BT3_DATA");
+    char path[600];
+    unsigned char *raw, *body;
+    long len, pix, clut;
+    int w, h;
+    if ((body = art_own_body(i, n)) != NULL && pic_parse(body, *n, &w, &h, &pix, &clut) && w == ART_W && h == ART_H) {
+        return body;
+    }
+    free(body);
+    snprintf(path, sizeof(path), "%s/pzs3us1/%05d.bin", data != NULL && data[0] != '\0' ? data : "gamedata", 0x2F9 + chara_of(&sLib[i]) - 1);
+    if ((raw = file_all(path, PORTRAIT_MAX, &len)) == NULL) {
+        return NULL;
+    }
+    body = rd32(raw) != 1 ? bpe_unpack(raw, len, PORTRAIT_MAX * 4, n) : NULL;
+    free(raw);
+    if (body != NULL && pic_parse(body, *n, &w, &h, &pix, &clut) && w == ART_W && h == ART_H) {
+        return body;
+    }
+    free(body);
+    return NULL;
+}
+
+/* a portrait file's picture as RGBA (alpha 0..255) */
+static int art_rgba_of(const unsigned char *body, long n, unsigned char *out) {
+    long pix, clut;
+    int w, h, x, y;
+    if (!pic_parse(body, n, &w, &h, &pix, &clut) || w != ART_W || h != ART_H) {
+        return 0;
+    }
+    for (y = 0; y < ART_H; y++) {
+        for (x = 0; x < ART_W; x++) {
+            const unsigned char *c = body + clut + pic_slot(body[pix + pic_place(x, y, ART_W)]) * 4;
+            unsigned char *o = out + ((long)y * ART_W + x) * 4;
+            o[0] = c[0];
+            o[1] = c[1];
+            o[2] = c[2];
+            o[3] = (unsigned char)(c[3] * 2 - (c[3] >> 7) > 255 ? 255 : c[3] * 2 - (c[3] >> 7));
+        }
+    }
+    return 1;
+}
+
+/* The picture the portrait is made from, in the frame (RGBA): the one picked now, the one kept in the package, or
+   the package's own portrait. */
+static int art_base(int i, unsigned char *rgba) {
+    char dir[420], path[600];
+    unsigned char *body;
+    long n;
+    int ok;
+    if (i == sArtMod && sArtPick != NULL) {
+        memcpy(rgba, sArtPick, (size_t)ART_W * ART_H * 4);
+        return 1;
+    }
+    if (art_dir(i, dir, sizeof(dir))) {
+        snprintf(path, sizeof(path), "%s/portrait_source.png", dir);
+        if (exists(path) && art_fit(path, rgba)) {
+            return 1;
+        }
+        snprintf(path, sizeof(path), "%s/portrait_source.bmp", dir);
+        if (exists(path) && art_fit(path, rgba)) {
+            return 1;
+        }
+    }
+    if ((body = art_own_body(i, &n)) == NULL) {
+        return 0;
+    }
+    ok = art_rgba_of(body, n, rgba);
+    free(body);
+    return ok;
+}
+
+/* Median cut: `colours` colours (index 0 kept for the clear) for an RGBA picture; the indices into idx. */
+typedef struct {
+    int from, to;
+} ArtBox;
+static const unsigned char *sCutPx;
+static int sCutChan;
+static int art_cut_cmp(const void *a, const void *b) {
+    return (int)sCutPx[*(const int *)a * 4 + sCutChan] - (int)sCutPx[*(const int *)b * 4 + sCutChan];
+}
+static int art_quantize(const unsigned char *rgba, int count, int colours, unsigned char pal[256][4], unsigned char *idx) {
+    int *order = malloc(sizeof(int) * (size_t)count), n = 0, boxes = 1, k, b;
+    ArtBox box[256];
+    if (order == NULL) {
+        return 0;
+    }
+    memset(pal, 0, 256 * 4);
+    for (k = 0; k < count; k++) {
+        if (rgba[k * 4 + 3] < 2) {
+            idx[k] = 0;
+        } else {
+            order[n++] = k;
+        }
+    }
+    box[0].from = 0;
+    box[0].to = n;
+    sCutPx = rgba;
+    while (boxes < colours - 1) { /* (the box with the widest spread, weighed by how many it holds, cut at its median) */
+        int best = -1, bestChan = 0;
+        double bestW = 0.0;
+        for (b = 0; b < boxes; b++) {
+            int lo[4] = {255, 255, 255, 255}, hi[4] = {0, 0, 0, 0}, c, j;
+            if (box[b].to - box[b].from < 2) {
+                continue;
+            }
+            for (j = box[b].from; j < box[b].to; j++) {
+                for (c = 0; c < 4; c++) {
+                    int v = rgba[order[j] * 4 + c];
+                    lo[c] = v < lo[c] ? v : lo[c];
+                    hi[c] = v > hi[c] ? v : hi[c];
+                }
+            }
+            for (c = 0; c < 4; c++) {
+                double w = (double)(hi[c] - lo[c]) * sqrt((double)(box[b].to - box[b].from));
+                if (w > bestW) {
+                    bestW = w;
+                    best = b;
+                    bestChan = c;
+                }
+            }
+        }
+        if (best < 0) {
+            break;
+        }
+        sCutChan = bestChan;
+        qsort(order + box[best].from, (size_t)(box[best].to - box[best].from), sizeof(int), art_cut_cmp);
+        box[boxes].from = box[best].from + (box[best].to - box[best].from) / 2;
+        box[boxes].to = box[best].to;
+        box[best].to = box[boxes].from;
+        boxes++;
+    }
+    for (b = 0; b < boxes && n > 0; b++) {
+        long s[4] = {0, 0, 0, 0}, m = box[b].to - box[b].from;
+        int j, c;
+        if (m <= 0) {
+            continue;
+        }
+        for (j = box[b].from; j < box[b].to; j++) {
+            for (c = 0; c < 4; c++) {
+                s[c] += rgba[order[j] * 4 + c];
+            }
+            idx[order[j]] = (unsigned char)(b + 1);
+        }
+        for (c = 0; c < 4; c++) {
+            pal[b + 1][c] = (unsigned char)(s[c] / m);
+        }
+    }
+    free(order);
+    return 1;
+}
+
+/* The game's byte pair coder (bpe_pack of port/tools/import_chara.py): blocks of up to 4096 bytes of at most 200
+   kinds, pairs replaced by unused bytes while a pair is there four times or more. */
+static unsigned char *bpe_pack(const unsigned char *d, long n, long *outLen) {
+    long cap = n + n / 2 + 4096, o = 8, at = 0;
+    unsigned char *out = malloc((size_t)cap), *buf = malloc(4096);
+    unsigned *pairs = calloc(65536, sizeof(unsigned));
+    if (out == NULL || buf == NULL || pairs == NULL) {
+        free(out);
+        free(buf);
+        free(pairs);
+        return NULL;
+    }
+    while (at < n) {
+        unsigned char used[256], left[256], right[256], free_[256];
+        long end = at, len;
+        int kinds = 0, nfree = 0, c;
+        memset(used, 0, sizeof(used));
+        while (end < n && end - at < 4096 && (kinds < 200 || used[d[end]])) {
+            if (!used[d[end]]) {
+                used[d[end]] = 1;
+                kinds++;
+            }
+            end++;
+        }
+        len = end - at;
+        memcpy(buf, d + at, (size_t)len);
+        at = end;
+        for (c = 0; c < 256; c++) {
+            left[c] = (unsigned char)c;
+            right[c] = 0;
+        }
+        for (c = 255; c >= 0; c--) { /* (from the highest down: taken from the end, the lowest first) */
+            if (!used[c]) {
+                free_[nfree++] = (unsigned char)c;
+            }
+        }
+        while (nfree > 0 && len > 2) {
+            unsigned best = 0, bestK = 0;
+            long j, w;
+            unsigned char a, b2, code;
+            for (j = 0; j + 1 < len; j++) {
+                pairs[buf[j] << 8 | buf[j + 1]]++;
+            }
+            for (j = 0; j + 1 < len; j++) { /* (the first pair of the greatest count, in order of first appearance) */
+                unsigned k = (unsigned)(buf[j] << 8 | buf[j + 1]);
+                if (pairs[k] > best) {
+                    best = pairs[k];
+                    bestK = k;
+                }
+            }
+            for (j = 0; j + 1 < len; j++) {
+                pairs[buf[j] << 8 | buf[j + 1]] = 0;
+            }
+            if (best < 4) {
+                break;
+            }
+            code = free_[--nfree];
+            a = (unsigned char)(bestK >> 8);
+            b2 = (unsigned char)(bestK & 255);
+            left[code] = a;
+            right[code] = b2;
+            for (j = 0, w = 0; j < len;) {
+                if (j + 1 < len && buf[j] == a && buf[j + 1] == b2) {
+                    buf[w++] = code;
+                    j += 2;
+                } else {
+                    buf[w++] = buf[j++];
+                }
+            }
+            len = w;
+        }
+        if (o + 600 + len > cap) {
+            free(out);
+            free(buf);
+            free(pairs);
+            return NULL;
+        }
+        /* the pair table: runs of bytes that stand for themselves skipped (a count above 127, then one entry), the
+           others listed (a count, then that many entries and one more) */
+        c = 0;
+        while (c < 256) {
+            int cnt = 0, k;
+            if (left[c] == c) {
+                cnt = 1;
+                c++;
+                while (cnt < 127 && c < 256 && left[c] == c) {
+                    cnt++;
+                    c++;
+                }
+                out[o++] = (unsigned char)(cnt + 127);
+                cnt = 0;
+                if (c == 256) {
+                    break;
+                }
+            } else {
+                c++;
+                while (cnt < 127 && c < 256 && left[c] != c) {
+                    cnt++;
+                    c++;
+                }
+                out[o++] = (unsigned char)cnt;
+                c -= cnt + 1;
+            }
+            for (k = 0; k <= cnt; k++) {
+                out[o++] = left[c];
+                if (left[c] != c) {
+                    out[o++] = right[c];
+                }
+                c++;
+            }
+        }
+        out[o++] = (unsigned char)(len >> 8);
+        out[o++] = (unsigned char)(len & 255);
+        memcpy(out + o, buf, (size_t)len);
+        o += len;
+    }
+    out[0] = (unsigned char)(n & 255);
+    out[1] = (unsigned char)(n >> 8 & 255);
+    out[2] = (unsigned char)(n >> 16 & 255);
+    out[3] = (unsigned char)(n >> 24 & 255);
+    out[4] = (unsigned char)((o - 8) & 255);
+    out[5] = (unsigned char)((o - 8) >> 8 & 255);
+    out[6] = (unsigned char)((o - 8) >> 16 & 255);
+    out[7] = (unsigned char)((o - 8) >> 24 & 255);
+    free(buf);
+    free(pairs);
+    *outLen = o;
+    return out;
+}
+
+/* An RGBA picture (ART_W x ART_H) written into the template's pixels and colours, in `colours` colours. */
+static void art_into(unsigned char *body, long pix, long clut, const unsigned char *rgba, int colours, unsigned char *idx) {
+    unsigned char pal[256][4];
+    int x, y, k;
+    art_quantize(rgba, ART_W * ART_H, colours, pal, idx);
+    for (y = 0; y < ART_H; y++) {
+        for (x = 0; x < ART_W; x++) {
+            body[pix + pic_place(x, y, ART_W)] = idx[y * ART_W + x];
+        }
+    }
+    for (k = 0; k < 256; k++) {
+        unsigned char *c = body + clut + pic_slot(k) * 4;
+        c[0] = pal[k][0];
+        c[1] = pal[k][1];
+        c[2] = pal[k][2];
+        c[3] = (unsigned char)((pal[k][3] + 1) >> 1);
+    }
+}
+
+s32 Port_ModArtSource(s32 i, char *path) {
+    unsigned char *rgba;
+    if (!valid(i) || path == NULL || (rgba = malloc((size_t)ART_W * ART_H * 4)) == NULL) {
+        return 0;
+    }
+    if (!art_fit(path, rgba)) {
+        free(rgba);
+        return 0;
+    }
+    free(sArtPick);
+    sArtPick = rgba;
+    sArtMod = i;
+    snprintf(sArtPickPath, sizeof(sArtPickPath), "%s", path);
+    return 1;
+}
+
+/* The picture whole in the frame, as an unpacked portrait file (the screen shows it and moves it). */
 s32 Port_ModArtBase(s32 i, void *out, s32 max) {
-    (void)i;
-    (void)out;
-    (void)max;
-    return 0;
+    unsigned char *rgba = malloc((size_t)ART_W * ART_H * 4), *idx = malloc((size_t)ART_W * ART_H), *body = NULL;
+    long n = 0, pix, clut;
+    int w, h;
+    s32 got = 0;
+    if (rgba != NULL && idx != NULL && art_base(i, rgba) && (body = art_template(i, &n)) != NULL && n <= max &&
+        pic_parse(body, n, &w, &h, &pix, &clut)) {
+        art_into(body, pix, clut, rgba, 256, idx);
+        memcpy(out, body, (size_t)n);
+        got = (s32)n;
+    }
+    free(rgba);
+    free(idx);
+    free(body);
+    return got;
 }
-s32 Port_ModArtSet2(s32 i, s32 x, s32 y, s32 zoom, s32 zoomY) {
-    (void)i;
-    (void)x;
-    (void)y;
-    (void)zoom;
-    (void)zoomY;
-    return 0;
+
+/* Saves the portrait: the picture moved by (x, y) and sized zx, zy percent about the frame's middle. */
+s32 Port_ModArtSet2(s32 i, s32 x, s32 y, s32 zx, s32 zy) {
+    unsigned char *base = malloc((size_t)ART_W * ART_H * 4), *pic = malloc((size_t)ART_W * ART_H * 4), *idx = malloc((size_t)ART_W * ART_H);
+    unsigned char *body = NULL, *packed = NULL, *check = NULL;
+    char dir[420], path[600], keep[620], frame[64], was[200] = "";
+    long n = 0, pix, clut, plen = 0, clen = 0;
+    int w, h, u, v, colours, ok = 0, ours;
+    double fx = zx / 100.0, fy = zy / 100.0, x0 = 128.0 + x - 128.0 * fx, y0 = 256.0 + y - 256.0 * fy;
+
+    if (base == NULL || pic == NULL || idx == NULL || zx < 1 || zy < 1 || !art_dir(i, dir, sizeof(dir)) || !art_base(i, base) ||
+        (body = art_template(i, &n)) == NULL || !pic_parse(body, n, &w, &h, &pix, &clut)) {
+        goto done;
+    }
+    /* the picture where the screen showed it: each pixel of the frame the average of the picture's under it */
+    for (v = 0; v < ART_H; v++) {
+        for (u = 0; u < ART_W; u++) {
+            double a0 = (u - x0) / fx, a1 = (u + 1 - x0) / fx, b0 = (v - y0) / fy, b1 = (v + 1 - y0) / fy;
+            int ix0 = (int)floor(a0), ix1 = (int)ceil(a1), iy0 = (int)floor(b0), iy1 = (int)ceil(b1), xx, yy;
+            long rr = 0, gg = 0, bb = 0, aa = 0, cnt = 0;
+            unsigned char *o = pic + ((long)v * ART_W + u) * 4;
+            ix0 = ix0 < 0 ? 0 : ix0;
+            iy0 = iy0 < 0 ? 0 : iy0;
+            ix1 = ix1 > ART_W ? ART_W : ix1;
+            iy1 = iy1 > ART_H ? ART_H : iy1;
+            for (yy = iy0; yy < iy1; yy++) {
+                for (xx = ix0; xx < ix1; xx++) {
+                    const unsigned char *p = base + ((long)yy * ART_W + xx) * 4;
+                    rr += (long)p[0] * p[3];
+                    gg += (long)p[1] * p[3];
+                    bb += (long)p[2] * p[3];
+                    aa += p[3];
+                    cnt++;
+                }
+            }
+            { /* (the part of the frame pixel the picture covers: its edges come out soft, not stepped) */
+                long all = (long)((ceil(a1) - floor(a0)) * (ceil(b1) - floor(b0)));
+                cnt = all > cnt ? all : cnt;
+            }
+            if (aa > 0 && cnt > 0) {
+                o[0] = (unsigned char)(rr / aa);
+                o[1] = (unsigned char)(gg / aa);
+                o[2] = (unsigned char)(bb / aa);
+                o[3] = (unsigned char)(aa / cnt);
+            } else {
+                o[0] = o[1] = o[2] = o[3] = 0;
+            }
+        }
+    }
+    /* in as many colours as still pack into the game's room for a portrait */
+    for (colours = 256; colours >= 16 && !ok; colours /= 2) {
+        free(packed);
+        free(check);
+        check = NULL;
+        art_into(body, pix, clut, pic, colours, idx);
+        packed = bpe_pack(body, n, &plen);
+        ok = packed != NULL && plen <= ART_PACKED_MAX && (check = bpe_unpack(packed, plen, n, &clen)) != NULL && clen == n &&
+             memcmp(check, body, (size_t)n) == 0;
+    }
+    if (!ok) {
+        fprintf(stderr, "bt3: mod manager: the portrait of %s was not made (%s)\n", sLib[i].folder,
+                packed == NULL ? "not packed" : plen > ART_PACKED_MAX ? "too large packed, even in 16 colours" : "the packed file did not unpack to it");
+        goto done;
+    }
+    ok = 0;
+    /* the package's own portrait kept aside the first time (its name remembered) */
+    ours = PortCharas_ManifestGet(sLib[i].folder, "portrait_frame", frame, sizeof(frame)) && frame[0] != '\0';
+    snprintf(keep, sizeof(keep), "%s/portrait_original.bin", dir);
+    if (!ours && !exists(keep)) {
+        DIR *d = opendir(dir);
+        struct dirent *e;
+        while (d != NULL && was[0] == '\0' && (e = readdir(d)) != NULL) {
+            size_t l = strlen(e->d_name);
+            if (SDL_strcasecmp(e->d_name, "portrait.bin") == 0 || (l > 9 && SDL_strcasecmp(e->d_name + l - 9, "_img.cdbt") == 0)) {
+                snprintf(was, sizeof(was), "%s", e->d_name);
+            }
+        }
+        if (d != NULL) {
+            closedir(d);
+        }
+        if (was[0] != '\0') {
+            snprintf(path, sizeof(path), "%s/%s", dir, was);
+            if (rename(path, keep) != 0) {
+                goto done;
+            }
+            PortCharas_ManifestSet(sLib[i].folder, "portrait_was", was);
+        }
+    }
+    snprintf(path, sizeof(path), "%s/portrait.bin", dir);
+    if (!put_file(path, packed, plen)) {
+        goto done;
+    }
+    if (i == sArtMod && sArtPick != NULL) { /* the picture kept with it, to frame it again later */
+        const char *dot = strrchr(sArtPickPath, '.');
+        int bmp = dot != NULL && SDL_strcasecmp(dot, ".bmp") == 0;
+        unsigned char *src;
+        long sl;
+        snprintf(path, sizeof(path), "%s/portrait_source.png", dir);
+        remove(path);
+        snprintf(path, sizeof(path), "%s/portrait_source.bmp", dir);
+        remove(path);
+        snprintf(path, sizeof(path), "%s/portrait_source.%s", dir, bmp ? "bmp" : "png");
+        if ((src = file_all(sArtPickPath, 64L << 20, &sl)) != NULL) {
+            put_file(path, src, sl);
+            free(src);
+        }
+    }
+    snprintf(frame, sizeof(frame), "%d,%d,%d,%d", x, y, zx, zy);
+    PortCharas_ManifestSet(sLib[i].folder, "portrait_frame", frame);
+    changed();
+    ok = 1;
+done:
+    free(base);
+    free(pic);
+    free(idx);
+    free(body);
+    free(packed);
+    free(check);
+    return ok;
 }
+
 s32 Port_ModArtSet(s32 i, s32 x, s32 y, s32 zoom) {
     return Port_ModArtSet2(i, x, y, zoom, zoom);
 }
+
+/* The package's own portrait back, and the picture forgotten. */
 void Port_ModArtReset(s32 i) {
-    (void)i;
-}
-s32 Port_ModArtSource(s32 i, char *path) {
-    (void)i;
-    (void)path;
-    return 0;
+    char dir[420], path[600], keep[620], was[200];
+    if (i == sArtMod) {
+        free(sArtPick);
+        sArtPick = NULL;
+        sArtMod = -1;
+    }
+    if (!art_dir(i, dir, sizeof(dir))) {
+        return;
+    }
+    snprintf(keep, sizeof(keep), "%s/portrait_original.bin", dir);
+    snprintf(path, sizeof(path), "%s/portrait.bin", dir);
+    if (exists(keep)) {
+        if (!PortCharas_ManifestGet(sLib[i].folder, "portrait_was", was, sizeof(was)) || was[0] == '\0' || strchr(was, '/') != NULL ||
+            strchr(was, '\\') != NULL || strcmp(was, "..") == 0) {
+            snprintf(was, sizeof(was), "portrait.bin");
+        }
+        remove(path);
+        snprintf(path, sizeof(path), "%s/%s", dir, was);
+        remove(path);
+        rename(keep, path);
+    } else if (PortCharas_ManifestGet(sLib[i].folder, "portrait_frame", was, sizeof(was)) && was[0] != '\0') {
+        remove(path); /* (made here, and it had none of its own) */
+    }
+    snprintf(path, sizeof(path), "%s/portrait_source.png", dir);
+    remove(path);
+    snprintf(path, sizeof(path), "%s/portrait_source.bmp", dir);
+    remove(path);
+    PortCharas_ManifestSet(sLib[i].folder, "portrait_frame", NULL);
+    PortCharas_ManifestSet(sLib[i].folder, "portrait_was", NULL);
+    changed();
 }
 
 /* ---- the browser: the PC's folders ---------------------------------------------------------------------------- */
