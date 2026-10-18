@@ -358,6 +358,348 @@ void Port_ModPreview(s32 i) {
     PortCharas_Preview(path, chara_of(&sLib[i]));
 }
 
+/* ---- the icon made from the portrait: the chip's square (Port_ModSet 3..5) -------------------------------------
+ * chip.bin is one texture of the game: 8 bits a pixel with 256 colours of 4 bytes (the alpha 0..128), the pixels and
+ * the colours in the order the console's video memory keeps them, each after the commands that upload it (0x60
+ * bytes). portrait.bin is the same kind of file, packed with the game's byte pair coder (Bpe_Decode). The square
+ * (in the portrait's own pixels, as the crop screen shows it) is averaged down to the chip's size and each pixel
+ * given the nearest of the portrait's colours, which the chip takes over whole. The chip it is written into is the
+ * package's own (kept as chip_original.bin, which nothing reads, and put back by "automatic"), else the base
+ * character's from the disc (the character select's pack: menu archive file 0x1C1, section 2 packed, its section
+ * 45, entry id + 1). Every offset of the files is checked: they are a mod's, or a damaged disc's. */
+enum { CHIP_BYTES = 5504, PIC_HEAD = 0x60, PORTRAIT_MAX = 0x100000, ARCHIVE_MAX = 0x4000000 };
+static int exists(const char *path);
+
+static uint32_t rd32(const unsigned char *b) {
+    return (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24;
+}
+
+/* Bpe_Decode (src/sys/bpe.c): the unpacked size and the packed size, then blocks of a pair table and bytes. A new
+   buffer of the unpacked size (no more is written, so a table that loops ends there), *size; NULL if it is not one. */
+static unsigned char *bpe_unpack(const unsigned char *src, long n, long max, long *size) {
+    long want, packed, p = 8, end, got = 0;
+    unsigned char *out;
+    if (n < 8 || (want = (int32_t)rd32(src)) <= 0 || want > max || (packed = (int32_t)rd32(src + 4)) <= 0 || packed > n - 8 ||
+        (out = malloc((size_t)want)) == NULL) {
+        return NULL;
+    }
+    end = 8 + packed;
+    while (p < end && got < want) {
+        unsigned char left[256], right[256], stack[1024];
+        int c = 0, count, k, depth = 0;
+        long len;
+        for (k = 0; k < 256; k++) {
+            left[k] = (unsigned char)k;
+            right[k] = 0;
+        }
+        count = src[p++];
+        for (;;) {
+            if (count > 127) {
+                c += count - 127;
+                count = 0;
+            }
+            if (c >= 256) {
+                break;
+            }
+            for (k = 0; k <= count; k++) {
+                if (c >= 256 || p >= end) {
+                    free(out);
+                    return NULL;
+                }
+                left[c] = src[p++];
+                if (c != left[c]) {
+                    if (p >= end) {
+                        free(out);
+                        return NULL;
+                    }
+                    right[c] = src[p++];
+                }
+                c++;
+            }
+            if (c >= 256) {
+                break;
+            }
+            if (p >= end) {
+                free(out);
+                return NULL;
+            }
+            count = src[p++];
+        }
+        if (p + 2 > end) {
+            free(out);
+            return NULL;
+        }
+        len = (long)src[p] << 8 | src[p + 1];
+        p += 2;
+        if (len > end - p) {
+            free(out);
+            return NULL;
+        }
+        while (got < want) {
+            if (depth > 0) {
+                c = stack[--depth];
+            } else if (len > 0) {
+                len--;
+                c = src[p++];
+            } else {
+                break;
+            }
+            if (c == left[c]) {
+                out[got++] = (unsigned char)c;
+            } else if (depth + 2 <= (int)sizeof(stack)) {
+                stack[depth++] = right[c];
+                stack[depth++] = left[c];
+            } else {
+                free(out);
+                return NULL;
+            }
+        }
+        p += len; /* (what was left of the block when the size was reached) */
+    }
+    if (got < want) {
+        free(out);
+        return NULL;
+    }
+    *size = want;
+    return out;
+}
+
+/* A picture file: one texture, 8 bits a pixel, 256 colours. Its size and where its pixels and colours are. */
+static int pic_parse(const unsigned char *b, long n, int *w, int *h, long *pix, long *clut) {
+    long rec, p, c, ps, cs;
+    uint64_t tex0;
+    int psm;
+    if (n < PIC_HEAD || rd32(b) != 1 || (rec = (long)rd32(b + 4) * 4) < 8 || rec > n - 0x38) {
+        return 0;
+    }
+    p = (long)rd32(b + rec) * 4;
+    c = (long)rd32(b + rec + 4) * 4;
+    ps = (int32_t)rd32(b + rec + 8);
+    cs = (int32_t)rd32(b + rec + 12);
+    tex0 = (uint64_t)rd32(b + rec + 0x30) | (uint64_t)rd32(b + rec + 0x34) << 32;
+    psm = (int)(tex0 >> 20 & 0x3F);
+    *w = 1 << (tex0 >> 26 & 0xF);
+    *h = 1 << (tex0 >> 30 & 0xF);
+    if (psm != 0x13 || *w < 16 || *h < 16 || *w > 1024 || *h > 1024 || ps != PIC_HEAD + (long)*w * *h + 0x20 ||
+        cs != PIC_HEAD + 1024 + 0x20 || p < 0 || c < 0 || p > n - ps || c > n - cs) {
+        return 0;
+    }
+    *pix = p + PIC_HEAD;
+    *clut = c + PIC_HEAD;
+    return 1;
+}
+
+/* where pixel (x, y) of an 8-bit texture `w` wide lies in its stored bytes; where colour i lies among the colours */
+static long pic_place(int x, int y, int w) {
+    long block = (long)(y & ~0xF) * w + (x & ~0xF) * 2;
+    int swap = ((y + 2) >> 2 & 1) * 4, row = (((y & ~3) >> 1) + (y & 1)) & 7;
+    return block + (long)row * w * 2 + ((x + swap) & 7) * 4 + (y >> 1 & 1) + (x >> 2 & 2);
+}
+static int pic_slot(int i) {
+    return (i & 0x18) == 8 || (i & 0x18) == 16 ? i ^ 0x18 : i;
+}
+
+static unsigned char *file_all(const char *path, long max, long *n) {
+    FILE *f = fopen(path, "rb");
+    unsigned char *d = NULL;
+    long len;
+    if (f == NULL) {
+        return NULL;
+    }
+    if (fseek(f, 0, SEEK_END) == 0 && (len = ftell(f)) > 0 && len <= max && fseek(f, 0, SEEK_SET) == 0 && (d = malloc((size_t)len)) != NULL &&
+        fread(d, 1, (size_t)len, f) == (size_t)len) {
+        *n = len;
+    } else {
+        free(d);
+        d = NULL;
+    }
+    fclose(f);
+    return d;
+}
+
+/* Section i (from 1) of a pack: word 0 the count, word k the offset of section k (the low two bits are flags). */
+static int pack_section(const unsigned char *b, long n, unsigned i, long *at, long *len) {
+    unsigned count;
+    long a, z;
+    if (n < 8 || (count = rd32(b)) == 0 || i < 1 || i > count || (long)(i + 1) * 4 + 4 > n) {
+        return 0;
+    }
+    a = (long)(rd32(b + 4 * i) & ~3u);
+    z = i < count ? (long)(rd32(b + 4 * (i + 1)) & ~3u) : n;
+    if (a < 0 || z < a || z > n) {
+        return 0;
+    }
+    *at = a;
+    *len = z - a;
+    return 1;
+}
+
+/* The base character's chip of the disc, into out (CHIP_BYTES). */
+static int disc_chip(int chara, unsigned char *out) {
+    const char *data = getenv("BT3_DATA");
+    char path[600];
+    unsigned char *arc, *res;
+    long n, at, len, size, at2, len2, at3, len3;
+    int ok = 0;
+    snprintf(path, sizeof(path), "%s/pzs3us1/00448.bin", data != NULL && data[0] != '\0' ? data : "gamedata");
+    if ((arc = file_all(path, ARCHIVE_MAX, &n)) == NULL) {
+        return 0;
+    }
+    if (pack_section(arc, n, 2, &at, &len) && (res = bpe_unpack(arc + at, len, ARCHIVE_MAX, &size)) != NULL) {
+        if (pack_section(res, size, 45, &at2, &len2) && pack_section(res + at2, len2, (unsigned)chara + 1, &at3, &len3)) {
+            memset(out, 0, CHIP_BYTES);
+            memcpy(out, res + at2 + at3, (size_t)(len3 < CHIP_BYTES ? len3 : CHIP_BYTES));
+            ok = 1;
+        }
+        free(res);
+    }
+    free(arc);
+    return ok;
+}
+
+/* The package's portrait, unpacked: a new buffer, *n its size. */
+static unsigned char *portrait_body(int i, long *n) {
+    unsigned char *raw = malloc(PORTRAIT_MAX), *body;
+    long len;
+    if (raw == NULL) {
+        return NULL;
+    }
+    len = Port_ModPortrait(i, raw, PORTRAIT_MAX);
+    if (len < 8) {
+        free(raw);
+        return NULL;
+    }
+    if (rd32(raw) != 1 && (body = bpe_unpack(raw, len, PORTRAIT_MAX * 4, n)) != NULL) {
+        free(raw);
+        return body;
+    }
+    *n = len; /* (a portrait kept unpacked) */
+    return raw;
+}
+
+static int put_file(const char *path, const unsigned char *d, long n) {
+    char tmp[620];
+    FILE *f;
+    snprintf(tmp, sizeof(tmp), "%s.new", path);
+    if ((f = fopen(tmp, "wb")) == NULL) {
+        return 0;
+    }
+    if (fwrite(d, 1, (size_t)n, f) != (size_t)n) {
+        fclose(f);
+        remove(tmp);
+        return 0;
+    }
+    fclose(f);
+    remove(path); /* (Windows does not rename over a file) */
+    if (rename(tmp, path) != 0) {
+        remove(tmp);
+        return 0;
+    }
+    return 1;
+}
+
+/* Makes package i's chip.bin from the square (x, y, s) of its portrait; 0 (and why) if it could not. `ours`: the
+   chip.bin there is one made here before (its square was set), not the package's own. */
+static int chip_make(int i, int x, int y, int s, int ours, const char *dir, char *why, size_t whyLen) {
+    unsigned char tpl[CHIP_BYTES], *body;
+    char path[600], keep[620];
+    long n, pix, clut, cpix, cclut, got = 0;
+    int w, h, cw, ch, ox, oy, k, clear = 0;
+    unsigned char *f;
+
+    if ((body = portrait_body(i, &n)) == NULL || !pic_parse(body, n, &w, &h, &pix, &clut)) {
+        snprintf(why, whyLen, "its portrait is not a picture file of the game");
+        free(body);
+        return 0;
+    }
+    if (s < 1 || x < 0 || y < 0 || x > w - s || y > h - s) {
+        snprintf(why, whyLen, "the square is outside the portrait (%dx%d)", w, h);
+        free(body);
+        return 0;
+    }
+    /* the chip to write into: the package's own (or kept) one, else the disc's */
+    snprintf(keep, sizeof(keep), "%s/chip_original.bin", dir);
+    snprintf(path, sizeof(path), "%s/chip.bin", dir);
+    if ((f = file_all(keep, CHIP_BYTES, &got)) == NULL && !ours) {
+        f = file_all(path, CHIP_BYTES, &got);
+    }
+    memset(tpl, 0, sizeof(tpl));
+    if (f != NULL) {
+        memcpy(tpl, f, (size_t)got);
+        free(f);
+    }
+    if ((f == NULL || !pic_parse(tpl, CHIP_BYTES, &cw, &ch, &cpix, &cclut)) && !disc_chip(chara_of(&sLib[i]), tpl)) {
+        snprintf(why, whyLen, "no chip to start from (the package's or the disc's)");
+        free(body);
+        return 0;
+    }
+    if (!pic_parse(tpl, CHIP_BYTES, &cw, &ch, &cpix, &cclut)) {
+        snprintf(why, whyLen, "the chip to start from is not a picture file of the game");
+        free(body);
+        return 0;
+    }
+    for (k = 1; k < 256; k++) { /* the most transparent of the colours, for what is clear */
+        if (body[clut + pic_slot(k) * 4 + 3] < body[clut + pic_slot(clear) * 4 + 3]) {
+            clear = k;
+        }
+    }
+    for (oy = 0; oy < ch; oy++) {
+        for (ox = 0; ox < cw; ox++) {
+            int x0 = x + ox * s / cw, x1 = x + (ox + 1) * s / cw, y0 = y + oy * s / ch, y1 = y + (oy + 1) * s / ch, xx, yy, best = clear;
+            long r = 0, g = 0, b = 0, a = 0, cnt = 0, bestD = -1;
+            x1 = x1 > x0 ? x1 : x0 + 1;
+            y1 = y1 > y0 ? y1 : y0 + 1;
+            for (yy = y0; yy < y1; yy++) {
+                for (xx = x0; xx < x1; xx++) {
+                    const unsigned char *c = body + clut + pic_slot(body[pix + pic_place(xx, yy, w)]) * 4;
+                    r += (long)c[0] * c[3];
+                    g += (long)c[1] * c[3];
+                    b += (long)c[2] * c[3];
+                    a += c[3];
+                    cnt++;
+                }
+            }
+            if (a > 0) { /* (the average, the alpha weighing the colours; then the nearest colour, alpha first) */
+                long ar = r / a, ag = g / a, ab = b / a, aa = a / cnt;
+                for (k = 0; k < 256; k++) {
+                    const unsigned char *c = body + clut + pic_slot(k) * 4;
+                    long da = aa - c[3], d = da * da * 16 + (ar - c[0]) * (ar - c[0]) + (ag - c[1]) * (ag - c[1]) + (ab - c[2]) * (ab - c[2]);
+                    if (bestD < 0 || d < bestD) {
+                        bestD = d;
+                        best = k;
+                    }
+                }
+            }
+            tpl[cpix + pic_place(ox, oy, cw)] = (unsigned char)best;
+        }
+    }
+    memcpy(tpl + cclut, body + clut, 1024); /* (the portrait's colours, in their stored order: the indices stay right) */
+    free(body);
+    /* the package's own chip kept the first time, then the new one in its place */
+    if (!ours && !exists(keep) && exists(path) && rename(path, keep) != 0) {
+        snprintf(why, whyLen, "could not keep the package's chip.bin as chip_original.bin");
+        return 0;
+    }
+    if (!put_file(path, tpl, CHIP_BYTES)) {
+        snprintf(why, whyLen, "could not write %s", path);
+        return 0;
+    }
+    return 1;
+}
+
+/* "Automatic": the package's own chip back (or none, if it had none and the one there was made here). */
+static void chip_unmake(int ours, const char *dir) {
+    char path[600], keep[620];
+    snprintf(keep, sizeof(keep), "%s/chip_original.bin", dir);
+    snprintf(path, sizeof(path), "%s/chip.bin", dir);
+    if (exists(keep)) {
+        remove(path);
+        rename(keep, path);
+    } else if (ours) {
+        remove(path);
+    }
+}
+
 /* 0: a new fighter (value 1) or a replacement (0); 1: the disc character a new one stands on; 2: the one it
    replaces; 3..5: the chip's square (x, y, size; 0 0 0: the usual one), written with 5. */
 void Port_ModSet(s32 i, s32 field, s32 value) {
@@ -392,11 +734,23 @@ void Port_ModSet(s32 i, s32 field, s32 value) {
         if (field != 5) {
             return;
         }
-        if (sChipEdit[2] <= 0) {
-            PortCharas_ManifestSet(p->folder, "chip_square", NULL);
-        } else {
-            snprintf(num, sizeof(num), "%d,%d,%d", sChipEdit[0], sChipEdit[1], sChipEdit[2]);
-            PortCharas_ManifestSet(p->folder, "chip_square", num);
+        {   /* the icon made (or the package's own put back) with the square, then the square kept */
+            char root[300], dir[420], was[48], why[200] = "";
+            int ours = PortCharas_ManifestGet(p->folder, "chip_square", was, sizeof(was)) && was[0] != '\0';
+            if (!PortCharas_Root(root, sizeof(root))) {
+                return;
+            }
+            snprintf(dir, sizeof(dir), "%s/%s", root, p->folder);
+            if (sChipEdit[2] <= 0) {
+                chip_unmake(ours, dir);
+                PortCharas_ManifestSet(p->folder, "chip_square", NULL);
+            } else if (chip_make(i, sChipEdit[0], sChipEdit[1], sChipEdit[2], ours, dir, why, sizeof(why))) {
+                snprintf(num, sizeof(num), "%d,%d,%d", sChipEdit[0], sChipEdit[1], sChipEdit[2]);
+                PortCharas_ManifestSet(p->folder, "chip_square", num);
+            } else {
+                fprintf(stderr, "bt3: mod manager: the icon of %s was not made: %s\n", p->folder, why);
+                return;
+            }
         }
         break;
     default:
