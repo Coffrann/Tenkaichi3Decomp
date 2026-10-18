@@ -18,6 +18,8 @@ int PortCharas_Root(char *out, unsigned size); /* the folder; 0 if there is none
 /* writes load_order.txt: the folders in order, each on or off; used by the next PortCharas_Reload */
 int PortCharas_OrderWrite(const char (*folder)[128], const unsigned char *on, int n);
 /* one key of a package's character.txt ("Name" or "Character/Form"): set (value NULL takes it out), read */
+/* A package's forms (the folders inside it that are packages) and what one of them is, for the Mod Manager */
+int PortCharas_Forms(const char *folder, char (*names)[128], int max);
 int PortCharas_ManifestSet(const char *folder, const char *key, const char *value);
 int PortCharas_ManifestGet(const char *folder, const char *key, char *out, unsigned size);
 #define PORT_CHARA_FORMAT 1 /* the package format this game knows (`format=` of character.txt) */
@@ -101,6 +103,7 @@ typedef struct PortCharaDesc {
     char problem[400]; /* what is wrong with it, "" nothing */
 } PortCharaDesc;
 int PortCharas_Describe(const char *folder, PortCharaDesc *out);
+int PortCharas_DescribeForm(const char *folder, const char *form, PortCharaDesc *out); /* a form of it (PortCharas_Forms) */
 int PortCharas_DescribePath(const char *path, PortCharaDesc *out); /* a folder anywhere (the browser's) */
 /* the folders of `characters` in the order they are used (the load order's, then the others by name), each on or not */
 int PortCharas_OrderGet(char (*folder)[128], unsigned char *on, int max);

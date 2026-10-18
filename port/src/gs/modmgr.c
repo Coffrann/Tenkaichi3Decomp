@@ -47,10 +47,11 @@ extern int PortInput_DropTake(char *out, unsigned size);
 #define DISC 161
 
 typedef struct {
-    char folder[64];
+    char folder[128]; /* "Name", or "Name/Form" for a form (a package inside a package) */
     PortCharaDesc d;
     int on;
     int place;   /* its place in the order of use (load order), 0 first */
+    int form;    /* a form: on, off and its place are its package's */
 } Pkg;
 
 static Pkg sLib[LIB_MAX];
@@ -106,7 +107,24 @@ static void lib_read(void) {
         snprintf(p->folder, sizeof(p->folder), "%s", order[i]);
         p->on = on[i];
         p->place = i;
+        p->form = 0;
         sLibCount++;
+        {   /* its forms (the folders inside it that are packages: added characters of their own, as the game reads
+               them), each an entry of its own after it */
+            static char forms[64][128];
+            int m = PortCharas_Forms(order[i], forms, 64), f;
+            for (f = 0; f < m && sLibCount < LIB_MAX; f++) {
+                Pkg *q = &sLib[sLibCount];
+                if (strlen(order[i]) + 1 + strlen(forms[f]) >= sizeof(q->folder) || !PortCharas_DescribeForm(order[i], forms[f], &q->d)) {
+                    continue;
+                }
+                snprintf(q->folder, sizeof(q->folder), "%s/%s", order[i], forms[f]);
+                q->on = on[i];
+                q->place = i;
+                q->form = 1;
+                sLibCount++;
+            }
+        }
     }
     qsort(sLib, (size_t)sLibCount, sizeof(Pkg), name_cmp);
     for (k = 0; k < 3; k++) {
@@ -129,12 +147,17 @@ static int valid(int i) {
 
 /* Writes the order of use with folder `at` moved to `to` (0 first; -1 where it is) and switched `on` (-1 as it is),
    then reads the packages again. */
-static void order_put(const char *folder, int to, int on) {
+static void order_put(const char *whole, int to, int on) {
     static char order[LIB_MAX][128];
     static unsigned char ons[LIB_MAX];
     int n = PortCharas_OrderGet(order, ons, LIB_MAX), i, from = -1;
-    char keep[128];
+    char keep[128], folder[128];
     unsigned char keepOn;
+
+    snprintf(folder, sizeof(folder), "%s", whole);
+    if (strchr(folder, '/') != NULL) {
+        *strchr(folder, '/') = '\0'; /* (a form: its package is what is in the order) */
+    }
 
     for (i = 0; i < n; i++) {
         if (strcmp(order[i], folder) == 0) {
@@ -279,9 +302,9 @@ void Port_ModGetInfo(s32 i, PortModInfo *out) {
     if (PortCharas_ManifestGet(p->folder, "chip_square", v, sizeof(v))) {
         sscanf(v, "%d,%d,%d", &out->chip[0], &out->chip[1], &out->chip[2]);
     }
-    for (k = 0; k < sLibCount; k++) {
-        onCount += sLib[k].on;
-        before += sLib[k].on && sLib[k].place < p->place;
+    for (k = 0; k < sLibCount; k++) { /* (the packages: a form is counted with its package) */
+        onCount += sLib[k].on && !sLib[k].form;
+        before += sLib[k].on && !sLib[k].form && sLib[k].place < p->place;
     }
     out->onCount = onCount;
     out->priority = p->on ? before + 1 : 0;
@@ -300,7 +323,7 @@ void Port_ModGetInfo(s32 i, PortModInfo *out) {
    same disc character is switched off; that one is returned, -1 none. */
 s32 Port_ModToggle(s32 i) {
     int rival, off = -1;
-    char folder[64], other[64] = "";
+    char folder[128], other[128] = "";
     if (!valid(i)) {
         return -1;
     }
@@ -824,8 +847,8 @@ static int exists(const char *path) {
 s32 Port_ModRemove(s32 i) {
     char root[300], gone[320], from[400], to[420];
     int n;
-    if (!valid(i) || !PortCharas_Root(root, sizeof(root)) || !removed_dir(gone, sizeof(gone))) {
-        return 0;
+    if (!valid(i) || sLib[i].form || !PortCharas_Root(root, sizeof(root)) || !removed_dir(gone, sizeof(gone))) {
+        return 0; /* (a form is not taken out of its package alone) */
     }
     mkdir_one(gone);
     snprintf(from, sizeof(from), "%s/%s", root, sLib[i].folder);
@@ -992,14 +1015,19 @@ static long file_into(const char *path, void *out, long max) {
     return n;
 }
 
-/* A package's chip.bin (one entry of the select's chip pack, 5504 bytes, as the reader took it); 0 without one. */
+/* A package's chip.bin as an entry of the select's chip pack (5504 bytes; a shorter one, as some tools write them,
+   filled out with zeros, as the package reader takes it); 0 without one, or if it is not a picture of the game. */
 s32 Port_ModChip(s32 i, void *out, s32 max) {
     char root[300], path[420];
-    if (!valid(i) || !(sLib[i].d.files >> PORT_DESC_CHIP & 1) || !PortCharas_Root(root, sizeof(root)) || max < 5504) {
+    long n, pix, clut;
+    int w, h;
+    if (!valid(i) || !(sLib[i].d.files >> PORT_DESC_CHIP & 1) || !PortCharas_Root(root, sizeof(root)) || max < CHIP_BYTES) {
         return 0;
     }
     snprintf(path, sizeof(path), "%s/%s/chip.bin", root, sLib[i].folder);
-    return file_into(path, out, max) == 5504 ? 5504 : 0;
+    memset(out, 0, CHIP_BYTES);
+    n = file_into(path, out, CHIP_BYTES);
+    return n >= PIC_HEAD && pic_parse(out, CHIP_BYTES, &w, &h, &pix, &clut) ? CHIP_BYTES : 0;
 }
 
 /* The package's portrait file (portrait.bin or *_img.cdbt, the game's packed form); 0 without one. */
@@ -1397,7 +1425,7 @@ static void put_num(const char *folder, const char *key, int on, int value) {
 /* What the FORMS screen made: written into the package's character.txt (set 0 / fuseSet 0: that part's keys taken
    out, the model's own again). A disc character without a package gets one (forms_package). */
 void Port_TransSet(s32 who, PortTrans *in) {
-    char folder[64], key[32], v[300], one[80];
+    char folder[128], key[32], v[300], one[80];
     int i, k, m, on;
 
     ensure();

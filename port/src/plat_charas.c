@@ -784,7 +784,12 @@ static int folders(const char *dir, char names[][128], int max, int skip) {
         return 0;
     }
     while ((de = readdir(d)) != NULL && n < max) {
-        if (de->d_name[0] != '.' && strlen(de->d_name) < 64 && !(skip && (same_nocase(de->d_name, "voice_us") || same_nocase(de->d_name, "voice_jp")))) {
+        char path[600];
+        struct stat st;
+        if (de->d_name[0] != '.' && strlen(de->d_name) < 64 && !(skip && (same_nocase(de->d_name, "voice_us") || same_nocase(de->d_name, "voice_jp"))) &&
+            join(path, sizeof(path), dir, de->d_name) && stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+            /* (folders only: a file beside them, load_order.txt above all, is no package, and was written into the
+               load order as one) */
             snprintf(names[n++], 128, "%s", de->d_name);
         }
     }
@@ -1069,7 +1074,7 @@ int PortCharas_OrderGet(char (*folder)[128], unsigned char *on, int max) {
     return count;
 }
 
-static int describe(const char *root, const char *folder, PortCharaDesc *out);
+static int describe(const char *root, const char *folder, const Chara *owner, PortCharaDesc *out);
 
 /* What a folder of `characters` is, read by the same rules as when it is loaded but kept nowhere: for the Mod
    Manager, which lists every folder (switched off ones too) and shows what each holds. `folder` is a folder directly
@@ -1082,7 +1087,51 @@ int PortCharas_Describe(const char *folder, PortCharaDesc *out) {
     if (strchr(folder, '/') != NULL || !pkg_dir(folder, dir, sizeof(dir)) || !PortCharas_Root(root, sizeof(root))) {
         return 0;
     }
-    return describe(root, folder, out);
+    return describe(root, folder, NULL, out);
+}
+
+/* The folders inside package `folder` that are packages themselves (its forms), by name, as load() reads them;
+   how many. */
+int PortCharas_Forms(const char *folder, char (*names)[128], int max) {
+    static char inner[64][128];
+    char dir[400];
+    PortCharaDesc d;
+    int m, k, n = 0;
+
+    if (strchr(folder, '/') != NULL || !pkg_dir(folder, dir, sizeof(dir))) {
+        return 0;
+    }
+    m = folders(dir, inner, 64, 1);
+    for (k = 0; k < m && n < max; k++) {
+        if (PortCharas_DescribeForm(folder, inner[k], &d)) {
+            snprintf(names[n++], 128, "%s", inner[k]);
+        }
+    }
+    return n;
+}
+
+/* A form of package `folder` (a folder inside it), read as load() reads it: with the package as its owner (what
+   the form's own files do not say about its base and name is the package's). */
+int PortCharas_DescribeForm(const char *folder, const char *form, PortCharaDesc *out) {
+    static Chara own;
+    char root[300], dir[400];
+    const Chara *c;
+
+    memset(out, 0, sizeof(*out));
+    out->replaces = -1;
+    if (strchr(folder, '/') != NULL || strchr(form, '/') != NULL || form[0] == '.' || !pkg_dir(folder, dir, sizeof(dir)) ||
+        !PortCharas_Root(root, sizeof(root))) {
+        return 0;
+    }
+    sDryNote[0] = '\0';
+    sDry = 1;
+    c = scan(root, folder, NULL);
+    sDry = 0;
+    if (c == NULL) {
+        return 0;
+    }
+    own = *c; /* (scan keeps its result in one place: the owner is copied before the form is read) */
+    return describe(dir, form, &own, out);
 }
 
 /* The same for a folder anywhere (the Mod Manager's browser, before the folder is added). */
@@ -1101,17 +1150,17 @@ int PortCharas_DescribePath(const char *path, PortCharaDesc *out) {
         return 0;
     }
     snprintf(root, sizeof(root), "%.*s", (int)(slash - path), path);
-    return describe(root, slash + 1, out);
+    return describe(root, slash + 1, NULL, out);
 }
 
-static int describe(const char *root, const char *folder, PortCharaDesc *out) {
+static int describe(const char *root, const char *folder, const Chara *owner, PortCharaDesc *out) {
     const Chara *c;
     struct stat st;
     int k;
 
     sDryNote[0] = '\0';
     sDry = 1;
-    c = scan(root, folder, NULL);
+    c = scan(root, folder, owner);
     sDry = 0;
     snprintf(out->problem, sizeof(out->problem), "%s", sDryNote);
     if (c == NULL) {
