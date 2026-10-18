@@ -1588,7 +1588,9 @@ static int alias(const char *rel, char *out, unsigned n) {
     }
     if (arc == 1 || index < PORT_CHARA_FILE_INDEX) {
         PortCharas_Init();
-        return rlive() > 0 ? alias_replaced(arc, index, out, n) : 0;
+        /* (the Mod Manager's preview too: with no replacement on, an added character's folder on its base was not
+           asked, and the platform showed the disc's base character) */
+        return rlive() > 0 || (sPreviewAs >= 0 && !Port_NetSession()) ? alias_replaced(arc, index, out, n) : 0;
     }
     PortCharas_Init();
     if (index >= PORT_CHARA_LINE_INDEX && index < PORT_CHARA_LINE_INDEX + PORT_CHARA_MAX * 200) {
