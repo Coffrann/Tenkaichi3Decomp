@@ -609,7 +609,7 @@ static int chip_make(int i, int x, int y, int s, int ours, const char *dir, char
     unsigned char tpl[CHIP_BYTES], *body;
     char path[600], keep[620];
     long n, pix, clut, cpix, cclut, got = 0;
-    int w, h, cw, ch, ox, oy, k, clear = 0;
+    int w, h, cw, ch, ox, oy, k, clear = 0, ax, ay, aw, ah, sh, top;
     unsigned char *f;
 
     if ((body = portrait_body(i, &n)) == NULL || !pic_parse(body, n, &w, &h, &pix, &clut)) {
@@ -648,10 +648,24 @@ static int chip_make(int i, int x, int y, int s, int ours, const char *dir, char
             clear = k;
         }
     }
+    /* The disc's chips hold their picture in 48 x 41 of the 64 x 64 (x 8..55, y 11..51: measured on all 161),
+       clear around it: that is what lines up with the select screen's box. The square goes there, its full width and
+       a slice of its height of the same shape (the middle 41/48 of it); the rest is clear. */
+    ax = cw * 8 / 64;
+    ay = ch * 11 / 64;
+    aw = cw * 48 / 64;
+    ah = ch * 41 / 64;
+    sh = s * 41 / 48;
+    top = y + (s - sh) / 2;
     for (oy = 0; oy < ch; oy++) {
         for (ox = 0; ox < cw; ox++) {
-            int x0 = x + ox * s / cw, x1 = x + (ox + 1) * s / cw, y0 = y + oy * s / ch, y1 = y + (oy + 1) * s / ch, xx, yy, best = clear;
+            int x0 = x + (ox - ax) * s / aw, x1 = x + (ox - ax + 1) * s / aw, y0 = top + (oy - ay) * sh / ah, y1 = top + (oy - ay + 1) * sh / ah;
+            int xx, yy, best = clear;
             long r = 0, g = 0, b = 0, a = 0, cnt = 0, bestD = -1;
+            if (ox < ax || ox >= ax + aw || oy < ay || oy >= ay + ah) {
+                tpl[cpix + pic_place(ox, oy, cw)] = (unsigned char)clear;
+                continue;
+            }
             x1 = x1 > x0 ? x1 : x0 + 1;
             y1 = y1 > y0 ? y1 : y0 + 1;
             for (yy = y0; yy < y1; yy++) {
