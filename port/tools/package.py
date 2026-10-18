@@ -112,6 +112,9 @@ Put a character package here, a folder for each (characters/My Fighter/...). A p
 character select, or replaces one of the disc's (a line `replaces=<id>` in its character.txt). The game reads the
 folder when it starts; F1 > Mods lists every package, what it does, and what is wrong with it.
 
+Or let the game put it here: open the Mod Manager (main menu) and drop the package's folder, a folder of several,
+or an archive (zip, 7z, rar) on the game's window. It copies every package it finds into this folder.
+
 character_packages.md, in this folder, is the guide: the files of a package, character.txt, transformations,
 health, limits, and how to test one.
 

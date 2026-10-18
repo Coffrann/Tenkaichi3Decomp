@@ -79,7 +79,7 @@ extern s32 Port_ModImport(char *path);
 extern s32 Port_ModPortrait(s32 i, void *out, s32 max);
 extern void PortMods_PatchSelect(void *names, void *forms, u32 *chips); /* src/menu/port_modmgr2.c */
 extern s32 Port_ModImportAll(char *path); /* every character mod in a folder (or the folder itself); how many */
-extern s32 Port_ModImportInfo(s32 *skipped); /* after an import: the first mod added (-1 none, -2 the library's own folder); how many were in it already */
+extern s32 Port_ModImportInfo(s32 *skipped); /* after an import: the first mod added (-1 none, -2 the library's own folder, -3 an archive not unpacked); how many were in it already */
 extern s32 Port_ModImportStart(char *path, s32 all); /* adds on a thread of its own: 0 one runs already */
 extern s32 Port_ModImportPoll(s32 *progress); /* files done, of how many, what (0 looks 1 unpacks 2 copies); 0 none 1 runs 2 just done */
 extern s32 Port_ModImportResult(void);         /* how many the last import added */

@@ -30,9 +30,18 @@ Contents: [1 Where packages go](#1-where-packages-go) · [2 The files](#2-the-fi
   environment variable `BT3_CHARACTERS` names another folder.
 - Every folder directly inside `characters` is looked at. A folder that holds none of the files below is passed
   over. Folders whose name starts with a dot, or is 64 characters or longer, are not read.
-- Packages are read **in the order of their folder names**, without regard to upper and lower case. The order
-  decides the ids of added characters (section 4) and which of two packages wins a conflict (section 5).
-- The folder is read once, when the game starts. Change a package, start the game again.
+- Packages are read in the order of `characters/load_order.txt` (one folder a line, the Mod Manager's order; a
+  folder can be switched off there), then the folders it does not name **in the order of their names**, without
+  regard to upper and lower case. The order decides the ids of added characters (section 4) and which of two
+  packages wins a conflict (section 5).
+- The folder is read once, when the game starts. Change a package, start the game again. (Changes made in the Mod
+  Manager take effect at once.)
+- **The Mod Manager adds packages too** (main menu > Mod Manager): drop a package's folder, a folder of several, or
+  an archive (zip, 7z, rar, tar) on the game's window, or pick one in its browser and press Square. Every package
+  found is copied into `characters` (the original stays where it was); one already there with the same files is
+  skipped, another of the same name gets " (2)". A folder name with accents is written with plain letters. Archives
+  are unpacked by a program of the system: `tar` on Windows (zip on Windows 10, 7z and rar on Windows 11), on Linux
+  `bsdtar`, `unzip`, `7z` or `unrar`, whichever is installed. Links in a package are not copied.
 - F1 > Mods lists every package the game found, what it does, and anything wrong with it. The same remarks are in
   the game's log, each line starting `bt3: characters:`.
 
@@ -320,8 +329,7 @@ These keys make a character stronger or weaker than the original. That is the pl
   recorded; one made with a replaced character needs that replacement. With anything else it still plays, but as
   a different fight.
 - **Per-opponent lines before a fight** for an added character: it speaks as its base to the base's opponents.
-- **Switching a package off without moving its folder.** Take the folder out of `characters`.
-- **Zip files.** A package is a folder.
+- **A package read from inside an archive.** The game reads folders; the Mod Manager unpacks an archive into one.
 
 ## 11. Online play
 

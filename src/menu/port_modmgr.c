@@ -2286,6 +2286,11 @@ s32 Mm_ShowImport(s32 n) {
         Snd_PlaySe(1, 2);
         return -1;
     }
+    if (first == -3) {
+        Mm_Note("COULD NOT UNPACK THAT FILE");
+        Snd_PlaySe(1, 2);
+        return -1;
+    }
     if (n > 0 && skipped > 0) {
         sprintf(note, "ADDED %d, SKIPPED %d ALREADY IN THE LIBRARY", (int)n, (int)skipped);
     } else if (n > 0) {

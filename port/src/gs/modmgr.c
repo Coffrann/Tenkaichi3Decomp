@@ -2302,46 +2302,618 @@ s32 Port_DirLook(char *path, PortModInfo *out) {
     return 1;
 }
 
-/* ---- adding packages (later: folders, archives) --------------------------------------------------------------- */
+/* ---- adding packages: a folder, a file of one, an archive ---------------------------------------------------- */
 
-static int sImportDone = -1;
+/* A drop on the window and the browser's "add" come here. A package is copied (never moved) into `characters`, first
+   into characters/.import (a dot folder: no package to the reader, and no change the library's watch sees) and then
+   renamed into place, so nothing reads half of one. An archive is unpacked there by a program of the system (tar,
+   which on Windows 10 and on reads zip and on Windows 11 7z and rar too; elsewhere bsdtar, unzip, 7z or unrar) and
+   every package in it moved in. Links are not followed, in the copy as in the clean up. It runs on a thread of its
+   own; the manager touches nothing of the library meanwhile (src/menu/port_modmgr.c, sMm->importing), and the
+   library is read again on the menu's thread when it is done (Port_ModImportPoll). */
 
+static SDL_Thread *sImpThread;
+static SDL_AtomicInt sImpState;   /* 0 none, 1 runs, 2 done (the menu has not taken it yet) */
+static SDL_AtomicInt sImpProg[3]; /* files done, of how many, what (0 looks, 1 unpacks, 2 copies) */
+static char sImpPath[700];
+static int sImpAll;
+static int sImpAdded, sImpSkipped, sImpOwn, sImpUnpackFailed, sImpVisits;
+static char sImpFirst[128]; /* the folder (in `characters`) of the first one added, or found there already */
+static int sImpFirstAt = -1;
+
+/* The names in a folder (not in the folders in it): an array of `*count` (SDL_free it), NULL if it cannot be read. */
+typedef struct {
+    char **names;
+    int n, cap;
+} NameList;
+
+static SDL_EnumerationResult list_one(void *user, const char *dir, const char *name) {
+    NameList *l = user;
+    char **more;
+    (void)dir;
+    if (l->n == l->cap) {
+        l->cap = l->cap > 0 ? l->cap * 2 : 32;
+        if (l->cap > 65536 || (more = SDL_realloc(l->names, (size_t)l->cap * sizeof(char *))) == NULL) {
+            return SDL_ENUM_FAILURE;
+        }
+        l->names = more;
+    }
+    if ((l->names[l->n] = SDL_strdup(name)) == NULL) {
+        return SDL_ENUM_FAILURE;
+    }
+    l->n++;
+    return SDL_ENUM_CONTINUE;
+}
+
+static char **list_dir(const char *dir, int *count) {
+    NameList l = {NULL, 0, 0};
+    *count = 0;
+    if (!SDL_EnumerateDirectory(dir, list_one, &l) && l.n == 0) {
+        SDL_free(l.names);
+        return NULL;
+    }
+    *count = l.n;
+    return l.names;
+}
+
+static void list_free(char **names, int n) {
+    int k;
+    for (k = 0; names != NULL && k < n; k++) {
+        SDL_free(names[k]);
+    }
+    SDL_free(names);
+}
+
+static const char *base_of(const char *path) {
+    const char *b = path, *c;
+    for (c = path; *c != '\0'; c++) {
+        if ((*c == '/' || *c == '\\') && c[1] != '\0') {
+            b = c + 1;
+        }
+    }
+    return b;
+}
+
+/* 0 nothing, 1 a file, 2 a folder; a link (or a junction) is neither */
+static int path_kind(const char *path) {
+    SDL_PathInfo info;
+#ifdef _WIN32
+    wchar_t w[1100];
+    DWORD a;
+    if (MultiByteToWideChar(CP_UTF8, 0, path, -1, w, 1100) == 0 || (a = GetFileAttributesW(w)) == INVALID_FILE_ATTRIBUTES ||
+        (a & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        return 0;
+    }
+#else
+    struct stat st;
+    if (lstat(path, &st) != 0 || S_ISLNK(st.st_mode)) {
+        return 0;
+    }
+#endif
+    if (!SDL_GetPathInfo(path, &info)) {
+        return 0;
+    }
+    return info.type == SDL_PATHTYPE_FILE ? 1 : info.type == SDL_PATHTYPE_DIRECTORY ? 2 : 0;
+}
+
+static int is_link(const char *path) {
+#ifdef _WIN32
+    wchar_t w[1100];
+    DWORD a;
+    return MultiByteToWideChar(CP_UTF8, 0, path, -1, w, 1100) != 0 && (a = GetFileAttributesW(w)) != INVALID_FILE_ATTRIBUTES &&
+           (a & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+#else
+    struct stat st;
+    return lstat(path, &st) == 0 && S_ISLNK(st.st_mode);
+#endif
+}
+
+/* A folder's files and their bytes, all the way down (links left out). */
+static void tree_size(const char *dir, long *files, long long *bytes, int depth) {
+    char **names;
+    char path[1100];
+    int n = 0, k;
+    SDL_PathInfo info;
+    if (depth > 12 || (names = list_dir(dir, &n)) == NULL) {
+        return;
+    }
+    for (k = 0; k < n; k++) {
+        if (strchr(names[k], '/') != NULL || snprintf(path, sizeof(path), "%s/%s", dir, names[k]) >= (int)sizeof(path)) {
+            continue;
+        }
+        switch (path_kind(path)) {
+        case 1:
+            if (SDL_GetPathInfo(path, &info)) {
+                (*files)++;
+                *bytes += (long long)info.size;
+            }
+            break;
+        case 2:
+            tree_size(path, files, bytes, depth + 1);
+            break;
+        }
+    }
+    list_free(names, n);
+}
+
+static int tree_copy(const char *from, const char *to, int depth) {
+    char **names;
+    char a[1100], b[1100];
+    int n = 0, k, ok = 1;
+    if (depth > 12 || !SDL_CreateDirectory(to) || (names = list_dir(from, &n)) == NULL) {
+        return 0;
+    }
+    for (k = 0; k < n && ok; k++) {
+        if (strchr(names[k], '/') != NULL || snprintf(a, sizeof(a), "%s/%s", from, names[k]) >= (int)sizeof(a) ||
+            snprintf(b, sizeof(b), "%s/%s", to, names[k]) >= (int)sizeof(b)) {
+            continue;
+        }
+        switch (path_kind(a)) {
+        case 1:
+            ok = SDL_CopyFile(a, b);
+            SDL_AddAtomicInt(&sImpProg[0], 1);
+            break;
+        case 2:
+            ok = tree_copy(a, b, depth + 1);
+            break;
+        }
+    }
+    list_free(names, n);
+    return ok;
+}
+
+/* Takes a folder away with everything in it; a link in it is taken away itself, never what it points to. */
+static void tree_remove(const char *dir, int depth) {
+    char **names;
+    char path[1100];
+    int n = 0, k;
+    if (is_link(dir) || path_kind(dir) != 2) {
+        SDL_RemovePath(dir);
+        return;
+    }
+    if (depth <= 12 && (names = list_dir(dir, &n)) != NULL) {
+        for (k = 0; k < n; k++) {
+            if (strchr(names[k], '/') == NULL && snprintf(path, sizeof(path), "%s/%s", dir, names[k]) < (int)sizeof(path)) {
+                tree_remove(path, depth + 1);
+            }
+        }
+        list_free(names, n);
+    }
+    SDL_RemovePath(dir);
+}
+
+/* Takes the links out of a folder unpacked from an archive (before it is moved into `characters`). */
+static void links_out(const char *dir, int depth) {
+    char **names;
+    char path[1100];
+    int n = 0, k;
+    if (depth > 12 || (names = list_dir(dir, &n)) == NULL) {
+        return;
+    }
+    for (k = 0; k < n; k++) {
+        if (strchr(names[k], '/') != NULL || snprintf(path, sizeof(path), "%s/%s", dir, names[k]) >= (int)sizeof(path)) {
+            continue;
+        }
+        if (is_link(path)) {
+            SDL_RemovePath(path);
+        } else if (path_kind(path) == 2) {
+            links_out(path, depth + 1);
+        }
+    }
+    list_free(names, n);
+}
+
+/* The name a package gets in `characters`: its folder's, in plain letters (the reader opens files by their bytes,
+   which on Windows are not UTF-8), at most 63 of them. */
+static void plain_name(const char *from, char *out) {
+    int n = 0;
+    const unsigned char *c;
+    /* (UTF-8's Latin letters with accents, C3 80..BF, as the plain letter: "Végéta" is "Vegeta") */
+    static const char kLatin[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo_ouuuuyty";
+    for (c = (const unsigned char *)from; *c != '\0' && n < 63; c++) {
+        if (c[0] == 0xC3 && c[1] >= 0x80 && c[1] <= 0xBF) {
+            out[n++] = kLatin[*++c - 0x80];
+            continue;
+        }
+        if (*c >= 0x80) {
+            while ((c[1] & 0xC0) == 0x80) { /* (any other letter: one '_' for all its bytes) */
+                c++;
+            }
+            out[n++] = '_';
+            continue;
+        }
+        out[n++] = *c < 0x20 || *c == 0x7F || strchr("<>:\"|?*\\/", *c) != NULL ? '_' : (char)*c;
+    }
+    while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '.')) {
+        n--;
+    }
+    out[n] = '\0';
+    if (out[0] == '.' || out[0] == '\0') {
+        snprintf(out, 64, "%s", "Character");
+    }
+}
+
+static int in_folder(const char *path, const char *dir) {
+    char a[1100], b[1100];
+    size_t l;
+#ifdef _WIN32
+    char *c;
+    if (_fullpath(a, path, sizeof(a)) == NULL || _fullpath(b, dir, sizeof(b)) == NULL) {
+        return 0;
+    }
+    for (c = a; *c != '\0'; c++) {
+        *c = *c == '\\' ? '/' : *c;
+    }
+    for (c = b; *c != '\0'; c++) {
+        *c = *c == '\\' ? '/' : *c;
+    }
+    l = strlen(b);
+    return SDL_strncasecmp(a, b, l) == 0 && (a[l] == '\0' || a[l] == '/');
+#else
+    if (realpath(path, a) == NULL || realpath(dir, b) == NULL) {
+        return 0;
+    }
+    l = strlen(b);
+    return strncmp(a, b, l) == 0 && (a[l] == '\0' || a[l] == '/');
+#endif
+}
+
+/* One package (folder `src`) into `characters`. Already there (a folder of that name with the same files): skipped.
+   `own`: src lies in characters/.import (unpacked from an archive), so it is moved, not copied. */
+static void import_one(const char *root, const char *src, int own) {
+    char name[64], dest[420], stage[420], want[64];
+    long fa = 0, fb = 0;
+    long long ba = 0, bb = 0;
+    int n;
+
+    plain_name(base_of(src), want);
+    snprintf(dest, sizeof(dest), "%s/%s", root, want);
+    snprintf(name, sizeof(name), "%s", want);
+    for (n = 2; path_kind(dest) != 0 && n < 100; n++) {
+        tree_size(src, &fa, &ba, 0);
+        tree_size(dest, &fb, &bb, 0);
+        if (fa == fb && ba == bb) { /* (this one is in the library already) */
+            sImpSkipped++;
+            if (sImpFirst[0] == '\0') {
+                snprintf(sImpFirst, sizeof(sImpFirst), "%s", name);
+            }
+            return;
+        }
+        fa = fb = 0;
+        ba = bb = 0;
+        snprintf(name, sizeof(name), "%.56s (%d)", want, n);
+        snprintf(dest, sizeof(dest), "%s/%s", root, name);
+    }
+    if (path_kind(dest) != 0) {
+        return;
+    }
+    if (own) {
+        links_out(src, 0);
+        if (!SDL_RenamePath(src, dest)) {
+            return;
+        }
+    } else {
+        snprintf(stage, sizeof(stage), "%s/.import/%s", root, name);
+        tree_remove(stage, 0);
+        if (!tree_copy(src, stage, 0) || !SDL_RenamePath(stage, dest)) {
+            fprintf(stderr, "bt3: mod manager: could not copy %s: %s\n", src, SDL_GetError());
+            tree_remove(stage, 0);
+            return;
+        }
+    }
+    fprintf(stderr, "bt3: mod manager: added %s\n", name);
+    sImpAdded++;
+    if (sImpFirst[0] == '\0') {
+        snprintf(sImpFirst, sizeof(sImpFirst), "%s", name);
+    }
+}
+
+static int is_package(const char *dir) {
+    PortCharaDesc d;
+    return PortCharas_DescribePath(dir, &d);
+}
+
+/* Every package in folder `dir` (it itself, or folders in it, four deep at most; a package's own folders are its
+   forms, not packages of their own). */
+static void import_search(const char *root, const char *dir, int own, int depth) {
+    char **names;
+    char path[1100];
+    int n = 0, k;
+    if (sImpVisits++ > 4000) {
+        return;
+    }
+    if (is_package(dir)) {
+        import_one(root, dir, own);
+        return;
+    }
+    if (depth >= 4 || (names = list_dir(dir, &n)) == NULL) {
+        return;
+    }
+    for (k = 0; k < n; k++) {
+        if (names[k][0] != '.' && strchr(names[k], '/') == NULL && snprintf(path, sizeof(path), "%s/%s", dir, names[k]) < (int)sizeof(path) &&
+            path_kind(path) == 2) {
+            import_search(root, path, own, depth + 1);
+        }
+    }
+    list_free(names, n);
+}
+
+static int ends_with(const char *s, const char *end) {
+    size_t l = strlen(s), e = strlen(end);
+    return l > e && SDL_strcasecmp(s + l - e, end) == 0;
+}
+
+static int is_archive(const char *path) {
+    static const char *const kEnds[] = {".zip", ".7z", ".rar", ".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", NULL};
+    int k;
+    for (k = 0; kEnds[k] != NULL; k++) {
+        if (ends_with(path, kEnds[k])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Runs a program of the system and waits for it; 1 if it ran and said it went well. No window of its own. */
+static int run_quiet(const char *const *args) {
+#ifdef _WIN32
+    wchar_t line[3000], arg[1100];
+    size_t at = 0;
+    int k, ok = 0;
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    DWORD code = 1;
+    line[0] = L'\0';
+    for (k = 0; args[k] != NULL; k++) {
+        size_t l;
+        if (strchr(args[k], '"') != NULL || MultiByteToWideChar(CP_UTF8, 0, args[k], -1, arg, 1100) == 0) {
+            return 0;
+        }
+        l = wcslen(arg);
+        if (at + l + 4 >= sizeof(line) / sizeof(line[0])) {
+            return 0;
+        }
+        line[at++] = k > 0 ? L' ' : L'"';
+        if (k > 0) {
+            line[at++] = L'"';
+        }
+        memcpy(line + at, arg, l * sizeof(wchar_t));
+        at += l;
+        if (l > 0 && arg[l - 1] == L'\\') {
+            line[at++] = L'\\'; /* (a backslash before the closing quote would escape it) */
+        }
+        line[at++] = L'"';
+        line[at] = L'\0';
+    }
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    if (!CreateProcessW(NULL, line, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        return 0;
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    ok = GetExitCodeProcess(pi.hProcess, &code) && code == 0;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return ok;
+#else
+    SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_Process *p;
+    int code = 1;
+    SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, (void *)args);
+    SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDIN_NUMBER, SDL_PROCESS_STDIO_NULL);
+    SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDOUT_NUMBER, SDL_PROCESS_STDIO_NULL);
+    SDL_SetNumberProperty(props, SDL_PROP_PROCESS_CREATE_STDERR_NUMBER, SDL_PROCESS_STDIO_NULL);
+    p = SDL_CreateProcessWithProperties(props);
+    SDL_DestroyProperties(props);
+    if (p == NULL) {
+        return 0;
+    }
+    SDL_WaitProcess(p, true, &code);
+    SDL_DestroyProcess(p);
+    return code == 0;
+#endif
+}
+
+static int has_entries(const char *dir) {
+    int n = 0;
+    char **names = list_dir(dir, &n);
+    list_free(names, n);
+    return n > 0;
+}
+
+/* Unpacks archive `arc` into folder `out` (made new); 1 if something came out. */
+static int unpack(const char *arc, const char *out) {
+#ifdef _WIN32
+    static const char *const kTries[][8] = {{"tar", "-xf", "@A", "-C", "@O", NULL}};
+#else
+    char seven[1200];
+    static const char *const kTries[][8] = {
+        {"bsdtar", "-xf", "@A", "-C", "@O", NULL},  {"unzip", "-q", "-o", "@A", "-d", "@O", NULL},
+        {"7z", "x", "-y", "@7", "@A", NULL},         {"7zz", "x", "-y", "@7", "@A", NULL},
+        {"unrar", "x", "-o+", "-y", "@A", "@O/", NULL}, {"tar", "-xf", "@A", "-C", "@O", NULL},
+    };
+#endif
+    char slashed[1100];
+    const char *args[8];
+    int t, k;
+
+    snprintf(slashed, sizeof(slashed), "%s/", out);
+#ifndef _WIN32
+    snprintf(seven, sizeof(seven), "-o%s", out);
+#endif
+    for (t = 0; t < (int)(sizeof(kTries) / sizeof(kTries[0])); t++) {
+        tree_remove(out, 0);
+        if (!SDL_CreateDirectory(out)) {
+            return 0;
+        }
+        for (k = 0; kTries[t][k] != NULL; k++) {
+            const char *a = kTries[t][k];
+            args[k] = strcmp(a, "@A") == 0 ? arc : strcmp(a, "@O") == 0 ? out : strcmp(a, "@O/") == 0 ? slashed :
+#ifndef _WIN32
+                      strcmp(a, "@7") == 0 ? seven :
+#endif
+                      a;
+        }
+        args[k] = NULL;
+        if (run_quiet(args) && has_entries(out)) {
+            return 1;
+        }
+    }
+    tree_remove(out, 0);
+    return 0;
+}
+
+static int import_work(void *unused) {
+    char root[300], work[400], unpacked[420], dir[700];
+    char *slash;
+    int kind;
+    (void)unused;
+
+    sImpAdded = sImpSkipped = sImpOwn = sImpUnpackFailed = sImpVisits = 0;
+    sImpFirst[0] = '\0';
+    if (!PortCharas_Root(root, sizeof(root))) {
+        SDL_SetAtomicInt(&sImpState, 2);
+        return 0;
+    }
+    kind = path_kind(sImpPath);
+    if (kind != 0 && in_folder(sImpPath, root)) {
+        sImpOwn = 1;
+    } else if (kind == 1 && is_archive(sImpPath)) {
+        SDL_SetAtomicInt(&sImpProg[2], 1);
+        snprintf(work, sizeof(work), "%s/.import", root);
+        SDL_CreateDirectory(work);
+        snprintf(unpacked, sizeof(unpacked), "%s/.import/unpacked", root);
+        if (unpack(sImpPath, unpacked)) {
+            SDL_SetAtomicInt(&sImpProg[2], 2);
+            import_search(root, unpacked, 1, 0);
+        } else {
+            sImpUnpackFailed = 1;
+            fprintf(stderr, "bt3: mod manager: could not unpack %s (no program for it)\n", sImpPath);
+        }
+        tree_remove(work, 0);
+    } else if (kind != 0) {
+        snprintf(dir, sizeof(dir), "%s", sImpPath);
+        if (kind == 1) { /* (a file: the folder it is in, if that is a package) */
+            slash = strrchr(dir, '/');
+#ifdef _WIN32
+            if (strrchr(dir, '\\') > slash) {
+                slash = strrchr(dir, '\\');
+            }
+#endif
+            if (slash != NULL) {
+                *slash = '\0';
+            }
+        }
+        while (strlen(dir) > 1 && (dir[strlen(dir) - 1] == '/' || dir[strlen(dir) - 1] == '\\')) {
+            dir[strlen(dir) - 1] = '\0';
+        }
+        {
+            long files = 0;
+            long long bytes = 0;
+            if (is_package(dir)) {
+                tree_size(dir, &files, &bytes, 0);
+            }
+            SDL_SetAtomicInt(&sImpProg[1], (int)files);
+        }
+        SDL_SetAtomicInt(&sImpProg[2], 2);
+        snprintf(work, sizeof(work), "%s/.import", root);
+        SDL_CreateDirectory(work);
+        if (!sImpAll || kind == 1) {
+            if (is_package(dir)) {
+                import_one(root, dir, 0);
+            }
+        } else {
+            import_search(root, dir, 0, 0);
+        }
+        tree_remove(work, 0);
+    }
+    SDL_SetAtomicInt(&sImpState, 2);
+    return 0;
+}
+
+/* Starts adding what is at `path` (all: every package in it; else it as one package); 0 if one runs already. */
 s32 Port_ModImportStart(char *path, s32 all) {
-    (void)path;
-    (void)all;
-    sImportDone = 0;
+    if (SDL_GetAtomicInt(&sImpState) != 0 || path == NULL || Port_NetSession()) {
+        return 0;
+    }
+    if (sImpThread != NULL) {
+        SDL_WaitThread(sImpThread, NULL);
+        sImpThread = NULL;
+    }
+    snprintf(sImpPath, sizeof(sImpPath), "%s", path);
+    sImpAll = all;
+    sImpFirstAt = -1;
+    SDL_SetAtomicInt(&sImpProg[0], 0);
+    SDL_SetAtomicInt(&sImpProg[1], 0);
+    SDL_SetAtomicInt(&sImpProg[2], 0);
+    SDL_SetAtomicInt(&sImpState, 1);
+    sImpThread = SDL_CreateThread(import_work, "mod import", NULL);
+    if (sImpThread == NULL) {
+        import_work(NULL);
+    }
     return 1;
 }
 
+/* 0 none runs, 1 one runs, 2 one just ended (once: the library is read again then, here, on the menu's thread). */
 s32 Port_ModImportPoll(s32 *progress) {
+    int i;
     if (progress != NULL) {
-        progress[0] = progress[1] = progress[2] = 0;
+        for (i = 0; i < 3; i++) {
+            progress[i] = SDL_GetAtomicInt(&sImpProg[i]);
+        }
     }
-    if (sImportDone == 0) {
-        sImportDone = -1;
+    switch (SDL_GetAtomicInt(&sImpState)) {
+    case 1:
+        return 1;
+    case 2:
+        if (sImpThread != NULL) {
+            SDL_WaitThread(sImpThread, NULL);
+            sImpThread = NULL;
+        }
+        changed();
+        sImpFirstAt = -1;
+        for (i = 0; sImpFirst[0] != '\0' && i < sLibCount; i++) {
+            if (strcmp(sLib[i].folder, sImpFirst) == 0) {
+                sImpFirstAt = i;
+            }
+        }
+        SDL_SetAtomicInt(&sImpState, 0);
         return 2;
     }
     return 0;
 }
 
 s32 Port_ModImportResult(void) {
-    return 0;
+    return sImpAdded;
 }
 
 s32 Port_ModImportInfo(s32 *skipped) {
     if (skipped != NULL) {
-        *skipped = 0;
+        *skipped = sImpSkipped;
     }
-    return -1;
+    return sImpOwn ? -2 : sImpUnpackFailed ? -3 : sImpFirstAt;
 }
 
+/* The same, waited for (one package; every package in it). */
 s32 Port_ModImport(char *path) {
-    (void)path;
-    return 0;
+    s32 r = 0;
+    if (Port_ModImportStart(path, 0)) {
+        while (Port_ModImportPoll(NULL) == 1) {
+            SDL_Delay(10);
+        }
+        r = sImpAdded;
+    }
+    return r;
 }
 
 s32 Port_ModImportAll(char *path) {
-    (void)path;
-    return 0;
+    s32 r = 0;
+    if (Port_ModImportStart(path, 1)) {
+        while (Port_ModImportPoll(NULL) == 1) {
+            SDL_Delay(10);
+        }
+        r = sImpAdded;
+    }
+    return r;
 }
 

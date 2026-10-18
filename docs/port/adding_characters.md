@@ -437,9 +437,13 @@ user). To do:
   down to 64 x 64 in the portrait's colours, written into the package's chip.bin, its own kept as chip_original.bin
   and put back by "automatic"; else into the base character's chip of the disc. Port_ModSet 3..5 in gs/modmgr.c,
   with its own bounded unpacker; tested under the sanitizers with 600 damaged portraits.)
-- Adding packages: a folder, a dropped folder, zip files (7z / rar through the system's tar on Windows), the
-  community's file names recognised (port/src/plat_modmgr_prefix.inc, kept out of the tree until used); no symlink
-  followed when the unpack folder is cleaned up.
+- (Done: adding packages, Port_ModImport* in gs/modmgr.c. A folder, a file of one or an archive dropped on the window
+  (gs_input.c keeps the path, Port_DropTake) or picked in the browser; a thread copies each package found (the
+  folder itself, else folders in it four deep) into characters/.import and renames it into place, so the library
+  never reads half of one; archives are unpacked there by the system's tar (Windows) or bsdtar / unzip / 7z /
+  unrar, links taken out before the move; links are never followed, in the copy or the clean up. Tested with
+  folders, zip, 7z, tar.gz, a damaged rar and a zip with "../" names, under the address and undefined-behaviour
+  sanitizers. Not done: the community's file names (port/src/plat_modmgr_prefix.inc, kept out of the tree).)
 - Fusions: the scenes' motions (fusionN_scene is kept, not used), with the contribution's motion splicer made safe
   (a heap overflow from a mod's file); the skill list's transformation page written again.
 - A fighter's moves on the library's panel (Port_ModMoves), and the name lists the contribution read from text files
