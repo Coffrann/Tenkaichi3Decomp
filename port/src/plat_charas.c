@@ -1756,6 +1756,117 @@ void Port_CharaParamApply(int chara, void *param) {
     }
 }
 
+/* ---- the skill list's transformation page ----------------------------------------------------------------------
+ * The pause menu's skill list is the text of the model (section 45 + language): a package's model brings the text its
+ * makers wrote, which often has no transformation page for a form made of another character's model (Poder
+ * Controlado, Zombie). For a package's fighter whose text has no transformation page ("$4") and whose table (just
+ * filled by Port_CharaParamApply) has transformations, a copy of the text with such a page is made, in the game's
+ * form: each target's form label (else its name) after its cost, R3 for the plain R3 one, else its direction with
+ * R3 (slots 0..3: left, up, right, down; src/battle/btl_act_j.c). The page takes the next number (the list pages
+ * through 0..pages - 1), its title "Transformation". Never in a session; a text that has the page is left alone. */
+enum { SKILL_BUFS = 12, SKILL_MAX = 12288 };
+static unsigned short sSkill[SKILL_BUFS][SKILL_MAX];
+static int sSkillNext;
+extern const char *Port_DiscCharaName(int chara); /* src/menu/port_tbo.c */
+
+/* UTF-8 into UTF-16 at out[*o] (no more than max) */
+static void skill_put(unsigned short *out, int *o, int max, const char *s) {
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p != 0 && *o < max) {
+        unsigned c = *p++;
+        if (c >= 0xC0 && c < 0xE0 && (*p & 0xC0) == 0x80) {
+            c = (c & 0x1F) << 6 | (*p++ & 0x3F);
+        } else if (c >= 0xE0 && c < 0xF0 && (p[0] & 0xC0) == 0x80 && (p[1] & 0xC0) == 0x80) {
+            c = (c & 0x0F) << 12 | (p[0] & 0x3F) << 6 | (p[1] & 0x3F);
+            p += 2;
+        } else if (c >= 0x80) {
+            c = '?';
+        }
+        out[(*o)++] = (unsigned short)c;
+    }
+}
+
+static void skill_name(int t, char *out, size_t n) {
+    const Chara *c = chara_of(t);
+    if (c != NULL && c->labelSet && c->label[0] != '\0') {
+        snprintf(out, n, "%s", c->label);
+    } else if (c != NULL && c->shown[0] != '\0') {
+        snprintf(out, n, "%s", c->shown);
+    } else {
+        snprintf(out, n, "%s", t >= 0 && t < DISC_CHARAS ? Port_DiscCharaName(t) : "?");
+    }
+}
+
+unsigned short *Port_CharaSkillText(int chara, unsigned short *text, void *param) {
+    static const char *const kArrow[4] = {"\xE2\x86\x90", "\xE2\x86\x91", "\xE2\x86\x92", "\xE2\x86\x93"}; /* (← ↑ → ↓) */
+    const unsigned char *p = param;
+    unsigned short *out;
+    int i, end = -1, pages = 0, o = 0, k, any = 0;
+
+    PortCharas_Init();
+    if (text == NULL || p == NULL || Port_NetSession() || chara_of(chara) == NULL) {
+        return text;
+    }
+    for (k = 0; k < 4; k++) {
+        any |= p[0x98 + k] != 0xFF;
+    }
+    if (!any) {
+        return text;
+    }
+    /* its pages, and where its end ("@") is */
+    for (i = 0; i < SKILL_MAX - 1 && text[i] != 0; i++) {
+        if ((i == 0 || text[i - 1] == '\n' || text[i - 1] == 0xFEFF) && text[i] == '!' && text[i + 1] != 0) {
+            if (text[i + 2] == '$') {
+                if (text[i + 3] == '4') {
+                    return text; /* (it has its own) */
+                }
+                pages++;
+            } else if (text[i + 2] == '@') {
+                end = i;
+                break;
+            }
+        }
+    }
+    if (end < 0 && i < SKILL_MAX - 1 && text[i] == 0) { /* (a text that ends with no "@", at its zero: the game stops
+                                                            there too; its blank lines before it are left out) */
+        for (end = i; end > 1 && text[end - 1] == '\n' && text[end - 2] == '\n'; end--) {
+        }
+        if (end > 0 && text[end - 1] != '\n') {
+            end = -1; /* (the last line is not whole: left as it is) */
+        }
+    }
+    if (end < 0 || pages > 9) {
+        return text;
+    }
+    out = sSkill[sSkillNext];
+    sSkillNext = (sSkillNext + 1) % SKILL_BUFS;
+    memcpy(out, text, (size_t)end * sizeof(unsigned short));
+    o = end;
+    {
+        char line[200], name[100];
+        snprintf(line, sizeof(line), "!F$%dTransformation\n", pages);
+        skill_put(out, &o, SKILL_MAX - 64, line);
+        for (k = 0; k < 4; k++) {
+            int t = p[0x98 + k];
+            if (t == 0xFF) {
+                continue;
+            }
+            skill_name(t, name, sizeof(name));
+            snprintf(line, sizeof(line), "!F*%03d%s\n", p[0x9C + k] <= 9 ? p[0x9C + k] : 0, name);
+            skill_put(out, &o, SKILL_MAX - 64, line);
+            if (p[0xAC] == k) {
+                skill_put(out, &o, SKILL_MAX - 64, "!D#<PAD=\xEF\xBC\xB2\xEF\xBC\x93>\n!2#<PAD=\xE2\x80\xA0\xE2\x91\xA0>\n");
+            } else {
+                snprintf(line, sizeof(line), "!D#<PAD=%s\xEF\xBC\x8B\xEF\xBC\xB2\xEF\xBC\x93>\n!2#<PAD=%s\xEF\xBC\x8B\xE2\x80\xA0\xE2\x91\xA0>\n", kArrow[k], kArrow[k]);
+                skill_put(out, &o, SKILL_MAX - 64, line);
+            }
+        }
+    }
+    skill_put(out, &o, SKILL_MAX - 2, "!F@\n");
+    out[o] = 0;
+    return out;
+}
+
 int Port_CharaFormTarget(int chara, int slot) {
     const Chara *c;
     PortCharas_Init();

@@ -459,7 +459,11 @@ void BtlObj_Setup(BtlObj *obj, s32 type, BtlResSlot *res, s32 id, s32 active) {
         /* PC: a character package's forms (character.txt: the Mod Manager's FORMS) into the parameter block the model
            brought (object + 0x91C; port/src/plat_charas.c; nothing online, nothing for a character without a package) */
         extern void Port_CharaParamApply(s32 chara, void *param);
+        extern u16 *Port_CharaSkillText(s32 chara, u16 *text, void *param);
         Port_CharaParamApply(obj->chara, *(void **)((u8 *)obj + 0x91C));
+        /* and its skill list (object + 0xBC, the model's section 45 + language: what the pause menu shows) with a
+           transformation page made from that table, where the package's text has none */
+        *(u16 **)((u8 *)obj + 0xBC) = Port_CharaSkillText(obj->chara, *(u16 **)((u8 *)obj + 0xBC), *(void **)((u8 *)obj + 0x91C));
     }
 #endif
     BtlObj_InitChains(obj);
