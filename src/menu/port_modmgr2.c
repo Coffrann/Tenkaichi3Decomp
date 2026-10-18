@@ -287,12 +287,19 @@ static void Browser_Start(void) {
     }
     sMm->path[0] = 0;
     home = getenv("USERPROFILE");
+    if (home == NULL) {
+        home = getenv("HOME"); /* (Linux, macOS) */
+    }
     if (home != NULL && Str_Len(home) < 360) {
         sprintf(sMm->path, "%s/Downloads", home);
         for (i = 0; sMm->path[i] != 0; i++) {
             if (sMm->path[i] == '\\') {
                 sMm->path[i] = '/';
             }
+        }
+        Port_DirKind(sMm->browseWhat);
+        if (Port_DirOpen(sMm->path) == 0) { /* (no Downloads folder, or nothing in it: the home folder) */
+            Str_Copy(sMm->path, home, 400);
         }
     }
 }
@@ -332,8 +339,10 @@ static void Browser_Full(s32 i) {
     PortDirEntry e;
 
     Port_DirGet(i, &e);
-    if (sMm->path[0] == 0) {
-        Str_Copy(sFull, e.name, 500);
+    if (sMm->path[0] == 0 && e.name[0] != 0 && e.name[1] == ':') {
+        Str_Copy(sFull, e.name, 500); /* (a drive of Windows: the top lists them) */
+    } else if (sMm->path[0] == 0) {
+        sprintf(sFull, "/%s", e.name); /* (elsewhere the top is "/") */
     } else {
         sprintf(sFull, "%s/%s", sMm->path, e.name);
     }
@@ -467,7 +476,7 @@ static void Browser_Update(s32 live) {
         }
     } else if (sMm->dirCount > 0 && sMm->browseWhat == 0 && ((pad->gamePressed | typed) & PADG_SQUARE)) {
         Browser_Full(sMm->dirCur);
-        if (Str_Len(sFull) <= 3 && sFull[1] == ':') { /* (every folder of a whole drive would be searched and copied) */
+        if (sMm->path[0] == 0) { /* (every folder of a whole drive, or of "/", would be searched and copied) */
             Mm_Note("OPEN A FOLDER FIRST, NOT A WHOLE DRIVE");
             Snd_PlaySe(1, 2);
             return;
