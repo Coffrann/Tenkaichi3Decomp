@@ -2599,6 +2599,17 @@ would have opened 65,201 files for a number that means nothing). The desync chec
 change is the other half: the fingerprint says BEFORE a match that two data sets compute the same, the check
 says DURING one that they did not; a cause the fingerprint does not see (below) is caught there.
 
+**Before a match (2026-10-19).** Each copy sends its fingerprint to the other one in a packet of its own (`T_FPRINT`,
+net.c: `{MAGIC, 12, "1RPF", low half, high half}`) with the lobby's greeting and its answer (room codes, quick
+match, an address) and again while the session connects. When both know theirs and the two differ, there is no
+match: the lobby stops with "Your game data and the other player's are not the same..." (the host answers with its
+own, so both sides say so), and a session that got that far goes back to the menu with the same line. Until then
+two players with different discs (a modified image on one side) were matched, and the desync check ended the
+match a moment into the fight. Two copies with the same modified image have the same fingerprint and are let in.
+A copy that does not send it (0.1.37 and older) is let in as before; `NET_VERSION` stays. `BT3_TEST_FPRINT=<hex>`:
+testing, a copy claims that value. `BT3_LOBBY=direct:<port>` / `direct:<address>:<port>`: the lobby by address
+without its window (tests).
+
 ### Cache and cost
 
 - `<root>/.fingerprint` (binary, 389 KB): per file its path, size and modification time (nanoseconds on Linux)
@@ -3536,3 +3547,38 @@ Sans Bold, Condensed Bold and Condensed ExtraBold, Noto Sans Bold), Fira Sans Co
 proportions and shapes. It is bundled (port/third_party/fonts/fira, SIL Open Font License 1.1, from Mozilla's Fira
 release 4.301) and first in fonts.tsv, so it is the font of those screens while the Menu font setting is on
 "Original". Saved choices are kept by the file's path, so adding it at the top moved no one's setting.
+
+## Online: a desync no longer ends the match; waits and slow frames in the log (2026-10-19)
+
+Players reported matches ending with "The two games no longer agree" (since 0.1.34, when the copies began to compare
+what they compute) and freezes of up to half a second ("waited 500 ms/s" on the meter) while both only walked.
+
+- **A desync is a warning.** When the copies' notes differ (`sync_check`) the player is told once ("your screen and
+  the other player's may now show different fights"), the meter says "desync since frame N", and the match goes on
+  as it did before 0.1.34. The log has the first differing blank and, as the session ends, how many comparisons
+  differed. F1 > "End an online match on a desync" (setting `net_desync_end`, or `BT3_NET_DESYNC_END=1`) ends it
+  instead, as 0.1.34 to 0.1.37 did. A copy of those releases still ends the match and says so to this one.
+- **Waits in the log.** A wait of 100 ms or more for the other player's input (rollback past its limit, or every
+  blank with rollback off) writes a line: how long, the blank, and what came meanwhile: input packets without the
+  blank this copy needs ("their game is behind this one") or nothing for most of the wait ("the line held it
+  back, or their game stood still"); at most 200 lines a session. The meter names the same per second ("the other
+  player's game is behind" / "nothing arrived from the other player").
+- **Slow frames in the log online.** In an online match a frame whose own work (the time waited for the other
+  player left out: `gPortNetWaitNs`) is 100 ms or more is reported without `BT3_GS_VERBOSE`, with the new textures
+  and pipelines it made. With both players' logs of one match, a wait on one side and a slow frame on the other at
+  the same moment say which machine it was; a wait with nothing arriving and no slow frame on the other side is
+  the line.
+- **Windows: bt3_log.txt.** Started from the Explorer or a shortcut (no terminal, no pipe), the program writes what
+  it says to `bt3_log.txt` next to it, the run before kept as `bt3_log_prev.txt`; nothing when that folder cannot
+  be written. From a terminal or the setup's pipe, as before.
+
+Tested (two copies on one machine, 40 ms each way, rollback 8): a desync claimed by one copy at blank 4000
+(`BT3_TEST_APART`): noted once at 3968, the match went on; with `BT3_NET_DESYNC_END=1` it ended on both copies at
+4005. One copy stopped twice for 0.6 s (`kill -STOP`): the other logged "waited 496 ms ... nothing came from them
+for 613 ms" and "waited 478 ms ...", its slow-frame lines giving 497 and 479 ms of it as waiting. The Windows log
+file is compiled (MinGW, syntax), not run.
+
+The online pause (2026-10-13, above), the cases its notes left open: four matches with player 2 opening the pause
+menu every 700 to 1100 blanks for 60 to 200 blanks (cursor moves, the skill list, sometimes Return to Main Menu)
+under random input of player 1, about 33,000 fight blanks: no difference in about 29,000 comparisons. Whether a
+transformation or an Ultimate Blast's cut scene began under an open menu was not checked.

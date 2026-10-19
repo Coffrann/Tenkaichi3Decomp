@@ -1419,6 +1419,13 @@ static void misc_tab(void) {
     }
     ImGui::SetItemTooltip("The page of legal text shown for five seconds before the title screen, every time.");
     ImGui::Spacing();
+    bool desyncEnds = Port_Setting("net_desync_end", 0) != 0;
+    if (ImGui::Checkbox("End an online match on a desync", &desyncEnds)) {
+        Port_SettingSave("net_desync_end", desyncEnds);
+        Port_SettingsWrite();
+    }
+    ImGui::SetItemTooltip("The two games compare what they compute. Off: when they no longer agree you are told, and the match\n"
+                          "goes on (the two screens may then show different fights). On: the match ends there.");
     bool chat = PortChat_Enabled() != 0;
     if (ImGui::Checkbox("Online chat", &chat)) {
         PortChat_EnabledSet(chat);
@@ -2090,7 +2097,7 @@ static void meter_count(void) { // once per frame shown
 }
 
 static void meter_draw(void) {
-    int n[8];
+    int n[10];
     ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.6f);
     if (ImGui::Begin("##meter", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
@@ -2109,7 +2116,15 @@ static void meter_draw(void) {
                 ImGui::TextUnformatted("rollback off");
             }
             ImGui::Text("waited %d ms/s (%d times)", n[4], n[3]);
+            if (n[8] == 1) { // gs/net.c wait_end: input packets came, without the frame this copy needed
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "  the other player's game is behind");
+            } else if (n[8] == 2) { // nothing came for most of the wait
+                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.3f, 1.0f), "  nothing arrived from the other player");
+            }
             ImGui::Text("delay %d%s, rollback up to %d", n[6], n[7] ? " (auto)" : "", n[5]);
+            if (n[9] != 0) { // the desync check found the two games apart (the match goes on)
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "desync since frame %d", n[9]);
+            }
         }
     }
     ImGui::End();
