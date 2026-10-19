@@ -310,6 +310,7 @@ static int sRollMax, sResim, sRollBegun;
 static uint8_t sUsed[RING][PAD]; /* what the other player's pad read in each blank */
 static uint32_t sChecked;        /* blanks below this were given the other player's real input */
 static uint32_t sLive;           /* during a re-run: the blank that was the present when it began */
+static uint32_t sResimFrom;      /* and the first blank it runs again */
 static unsigned sRollbacks, sRollTicks, sStalls;
 /* Keeping the two copies together in time: each says in its packets how many blanks it is beyond the input it
    has from the other (sTheirAhead). On an even line both numbers are the same; the copy whose clock is ahead has
@@ -1176,9 +1177,13 @@ static void roll_tick(unsigned tick) {
     }
     sync_note(tick); /* (the game as this blank finds it, whether the blank is new or run again) */
     if (sResim && tick >= sLive) {
+        extern void PortSe_RunAgainEnds(unsigned first, unsigned live); /* snd_se.c */
         sResim = 0; /* caught up: this blank is the present again */
+        PortSe_RunAgainEnds(sResimFrom, sLive);
     }
     if (!sResim) {
+        extern void PortSe_BlankBegins(unsigned tick); /* snd_se.c: which effects this blank starts */
+        PortSe_BlankBegins(tick);
         Port_TestSlow(2, 0);
         sample_local(tick);
         send_inputs();
@@ -1232,6 +1237,7 @@ static void roll_tick(unsigned tick) {
         sChecked = t;
         if (t < limit) { /* blank t was given something else than what they really pressed */
             sLive = tick;
+            sResimFrom = t;
             sResim = 1;
             sRollbacks++;
             sRollTicks += tick - t;
@@ -1452,6 +1458,11 @@ void Port_NetInput(int player, unsigned char *data) {
 
 int Port_NetResim(void) {
     return sResim;
+}
+
+/* The blank the game is in (run for the first time or again). */
+unsigned Port_NetTick(void) {
+    return sTick;
 }
 
 /* Which player's view this copy shows full screen in a two-player battle: the local player's when online; -1
