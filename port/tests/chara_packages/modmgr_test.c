@@ -5,7 +5,7 @@
  *
  *   gcc -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -Iport/include \
  *       port/tests/chara_packages/modmgr_test.c port/src/plat_charas.c port/src/gs/modmgr.c \
- *       $(pkg-config --cflags --libs sdl3) -o modmgr_test
+ *       $(pkg-config --cflags --libs sdl3) -lm -o modmgr_test
  *   modmgr_test <game data> <a new folder>     ends with "modmgr OK"
  */
 #include <stdint.h>
@@ -32,6 +32,7 @@ int PortExtras_Dir(const char *kind, const char *env, char *out, unsigned size) 
 }
 int Port_Setting(const char *name, int def) { (void)name; return def; }
 void Port_SettingSave(const char *name, int value) { (void)name; (void)value; }
+const char *Port_DiscCharaName(int chara) { (void)chara; return "?"; } /* src/menu/port_tbo.c: a disc character's name */
 void *Heap_Alloc(int size, int align, int fromTail, int heap) { (void)align; (void)fromTail; (void)heap; return malloc((size_t)size); }
 void Heap_Free(void *ptr) { free(ptr); }
 void Res_RelocateOffsets(void *out, void *base, void *hdr) { (void)out; (void)base; (void)hdr; }
