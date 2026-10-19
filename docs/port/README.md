@@ -2599,6 +2599,17 @@ would have opened 65,201 files for a number that means nothing). The desync chec
 change is the other half: the fingerprint says BEFORE a match that two data sets compute the same, the check
 says DURING one that they did not; a cause the fingerprint does not see (below) is caught there.
 
+**Before a match (2026-10-19).** Each copy sends its fingerprint to the other one in a packet of its own (`T_FPRINT`,
+net.c: `{MAGIC, 12, "1RPF", low half, high half}`) with the lobby's greeting and its answer (room codes, quick
+match, an address) and again while the session connects. When both know theirs and the two differ, there is no
+match: the lobby stops with "Your game data and the other player's are not the same..." (the host answers with its
+own, so both sides say so), and a session that got that far goes back to the menu with the same line. Until then
+two players with different discs (a modified image on one side) were matched, and the desync check ended the
+match a moment into the fight. Two copies with the same modified image have the same fingerprint and are let in.
+A copy that does not send it (0.1.37 and older) is let in as before; `NET_VERSION` stays. `BT3_TEST_FPRINT=<hex>`:
+testing, a copy claims that value. `BT3_LOBBY=direct:<port>` / `direct:<address>:<port>`: the lobby by address
+without its window (tests).
+
 ### Cache and cost
 
 - `<root>/.fingerprint` (binary, 389 KB): per file its path, size and modification time (nanoseconds on Linux)

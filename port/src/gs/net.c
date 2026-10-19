@@ -48,7 +48,8 @@ enum { PAD = 18, RING = 4096, REDUNDANT = 16, MAGIC = 0x4E335442 /* "BT3N" */ };
 enum { T_HELLO = 1, T_HELLO_ACK = 2, T_INPUT = 3, T_BYE = 4, T_PING = 5, T_PONG = 6, T_CONFIG = 7, T_CONFIG_ACK = 8,
        T_PUNCH = 9 /* nothing to read: sent so that the sender's router lets the other side's packets in (room codes) */,
        T_CHAT = 10 /* a line of text between the players (net_chat.c): its number, its length, its bytes. Not part of
-                      the game: a copy without the chat ignores it, so NET_VERSION stays */ };
+                      the game: a copy without the chat ignores it, so NET_VERSION stays */,
+       T_FPRINT = 12 /* the sender's gameplay fingerprint (fprint_send, below); a copy without it ignores it */ };
 /* The version of what goes over the line. The greeting and its answer carry it, and two copies that differ do not
    start a match (the input packets changed with version 2: times for the ping were added; a copy that read them
    the old way took them for input). 1 was releases 0.1.8 and 0.1.9, which said no version. */
@@ -352,6 +353,57 @@ static void net_send(const void *buf, int n, const struct sockaddr_in *to) {
     }
 }
 
+/* The gameplay fingerprint (plat_fprint.c: one number for the data a fight is computed from) goes to the other side
+   with the greetings, in a packet of its own: {MAGIC, T_FPRINT, FP_MARK, low half, high half}. Two games whose data
+   differ (a modified disc image on one side, or another one on each) compute two different fights: the match ended
+   as a desync at the fight's first moments. Compared only when both sides know theirs, so a copy that does not send
+   it (0.1.37 and older) is let in as before. BT3_TEST_FPRINT=<hex>: testing, this copy claims that value. */
+enum { FP_MARK = 0x46505231 };
+extern int Port_DataFingerprint(unsigned long long *out); /* plat_fprint.c */
+static const char kDataDiffer[] = "Your game data and the other player's are not the same (a modified disc image or mods on one side): "
+                                  "an online match needs the same on both.";
+static int sDataBad; /* the other side's fingerprint differs from this side's */
+
+static int fprint_mine(unsigned long long *fp) {
+    if (Port_DataFingerprint(fp) != 1) {
+        return 0;
+    }
+    if (getenv("BT3_TEST_FPRINT") != NULL) {
+        *fp = strtoull(getenv("BT3_TEST_FPRINT"), NULL, 16);
+    }
+    return 1;
+}
+
+static void fprint_send(const struct sockaddr_in *to) {
+    unsigned long long fp;
+    uint32_t pkt[5] = {MAGIC, T_FPRINT, FP_MARK, 0, 0};
+    if (fprint_mine(&fp)) {
+        pkt[3] = (uint32_t)fp;
+        pkt[4] = (uint32_t)(fp >> 32);
+        net_send(pkt, (int)sizeof(pkt), to);
+    }
+}
+
+/* 1: this T_FPRINT says that the other side's data are not this side's. */
+static int fprint_differs(const uint8_t *pkt, int n) {
+    static unsigned long long said;
+    unsigned long long mine, theirs;
+    uint32_t v[3];
+    if (n < 20 || !fprint_mine(&mine)) {
+        return 0;
+    }
+    memcpy(v, pkt + 8, 12);
+    theirs = (unsigned long long)v[1] | (unsigned long long)v[2] << 32;
+    if (v[0] != FP_MARK || theirs == mine) {
+        return 0;
+    }
+    if (theirs != said) { /* (once: the packet comes again and again) */
+        said = theirs;
+        fprintf(stderr, "bt3: net: the other player's game data are not this game's (gameplay fingerprint %016llx, this one %016llx)\n", theirs, mine);
+    }
+    return 1;
+}
+
 static int net_recv(uint8_t *pkt, int size, struct sockaddr_in *from) {
     Relay_Tick(sSock);
     net_stat();
@@ -641,6 +693,8 @@ static int receive(void) {
                 sCfgGot = 1;
                 sConnected = 1;
             }
+        } else if (type == T_FPRINT) {
+            sDataBad |= fprint_differs(pkt, n);
         } else if (type == T_ARRIVED && sConnected && n >= 16) {
             uint32_t v[2];
             memcpy(v, pkt + 8, 8);
@@ -790,6 +844,7 @@ static void net_start(int role, const char *host, const char *join) {
     sCfgGot = 0;
     sGone = 0;
     sVersionBad = 0;
+    sDataBad = 0;
     sEchoTs = 0;
     sPingMs = -1;
     sSecRoll = sSecRollTicks = sSecWaits = sSecWaitMs = sSecTicks = 0;
@@ -876,6 +931,7 @@ static void net_start(int role, const char *host, const char *join) {
             memcpy(&hello[3], sMyName, NAME_LEN);
             hello[3 + NAME_LEN / 4] = sOpts[1];
             hello[4 + NAME_LEN / 4] = CAP_MARK | 3;
+            fprint_send(&sPeer);
             net_send(hello, sizeof(hello), &sPeer);
             last = now;
         }
@@ -906,6 +962,7 @@ static void net_start(int role, const char *host, const char *join) {
             if (pings < 12 && now - lastPing >= 25000000ull) {
                 uint32_t ping[3] = {MAGIC, T_PING, now_ms()};
                 send_to_peer(ping, (int)sizeof(ping));
+                fprint_send(&sPeer);
                 lastPing = now;
                 pings++;
             }
@@ -933,8 +990,12 @@ static void net_start(int role, const char *host, const char *join) {
             SDL_Delay(1);
         }
     } else {
-        uint64_t start = SDL_GetTicksNS();
+        uint64_t start = SDL_GetTicksNS(), lastFp = 0;
         while (sCfgGot != 2 && SDL_GetTicksNS() - start < 5000000000ull) {
+            if (SDL_GetTicksNS() - lastFp >= 50000000ull) {
+                fprint_send(&sPeer);
+                lastFp = SDL_GetTicksNS();
+            }
             receive();
             session_hold();
             SDL_Delay(1);
@@ -947,6 +1008,13 @@ static void net_start(int role, const char *host, const char *join) {
         if (getenv("BT3_NET_ROLLBACK") == NULL && sOptRoll < 0 && sCfgRoll >= 0 && sCfgRoll <= 30) {
             sRollMax = Port_RollCan() ? sCfgRoll : 0;
         }
+    }
+    if (sDataBad) {
+        Port_UiNotice(kDataDiffer);
+        if (sSession) {
+            Port_NetLeave();
+        }
+        exit(2);
     }
     /* the blanks before any input can have arrived (0 .. delay) are idle for both players */
     for (i = 0; i <= (uint32_t)sDelay; i++) {
@@ -1668,7 +1736,7 @@ static int sCodeSeenSet, sCodeGen, sCodeRelayGen; /* ... and which of the search
 
 int Port_LobbyRelayed(void) { return sCodeVia; }
 static struct sockaddr_in sCodeAddr[MATCH_ADDRS];
-static char sCodeText[8], sCodeError[96];
+static char sCodeText[8], sCodeError[192];
 static uint64_t sCodeSince;
 
 const char *Port_LobbyCode(void) { return sCodeText; }
@@ -1900,6 +1968,7 @@ int Port_LobbyPoll(void) {
                              nothing else, also while there is no relay address yet) */
             }
             if (sLobbyRole == 2) {
+                fprint_send(&sCodeAddr[i]);
                 net_send(hello, sizeof(hello), &sCodeAddr[i]);
             } else {
                 net_send(punch, sizeof(punch), &sCodeAddr[i]);
@@ -1913,6 +1982,7 @@ int Port_LobbyPoll(void) {
         }
     } else if (!sCodeMode && sLobbyRole == 2 && now - sLobbyLast > 200000000ull) {
         uint32_t hello[3] = {MAGIC, T_HELLO, NET_VERSION};
+        fprint_send(&sPeer);
         net_send(hello, sizeof(hello), &sPeer);
         sLobbyLast = now;
     }
@@ -1923,11 +1993,20 @@ int Port_LobbyPoll(void) {
         if (magic != MAGIC) {
             continue;
         }
-        if (sLobbyRole == 1 && type == T_HELLO && !(n >= 12 && memcmp(pkt + 8, &kVersion, 4) == 0)) {
+        if (type == T_FPRINT && fprint_differs(pkt, n)) {
+            /* not the same game data: no match (the host answers with its own, so that the other side knows too) */
+            if (sLobbyRole == 1) {
+                fprint_send(&from);
+            }
+            snprintf(sCodeError, sizeof(sCodeError), "%s", kDataDiffer);
+            sLobby = -3;
+            return sLobby;
+        } else if (sLobbyRole == 1 && type == T_HELLO && !(n >= 12 && memcmp(pkt + 8, &kVersion, 4) == 0)) {
             sLobbyOther = 1; /* someone with another release is trying: the window says so, and goes on waiting */
         } else if (sLobbyRole == 1 && type == T_HELLO) {
             uint32_t ack[3] = {MAGIC, T_HELLO_ACK, NET_VERSION};
             int k;
+            fprint_send(&from);
             for (k = 0; k < 3; k++) {
                 net_send(ack, sizeof(ack), &from);
             }
@@ -1978,6 +2057,14 @@ void Port_LobbyAuto(void) {
                 Port_NetOptions(Port_RollCan() ? 8 : 0, -2); /* (and a quick match's fixed rollback and delay, as the window sets them) */
             }
             Port_LobbyStartQuick(q);
+        } else if (strncmp(what, "direct:", 7) == 0) { /* BT3_LOBBY=direct:<port> hosts, direct:<address>:<port> joins */
+            char addr[128];
+            int port;
+            if (sscanf(what + 7, "%127[^:]:%d", addr, &port) == 2) {
+                Port_LobbyStart(0, addr, port);
+            } else {
+                Port_LobbyStart(1, NULL, atoi(what + 7));
+            }
         } else {
             Port_LobbyStartCode(strncmp(what, "join:", 5) != 0, strncmp(what, "join:", 5) == 0 ? what + 5 : "");
         }
