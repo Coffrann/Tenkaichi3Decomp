@@ -73,7 +73,7 @@ static int sLobbyOther;
 static uint32_t sEchoTs, sEchoAtMs;     /* the other side's last send time and when it arrived here */
 static int sPingMs = -1;
 static unsigned sSecRoll, sSecRollTicks, sSecWaits, sSecWaitMs, sSecTicks;
-static int sShown[5] = {0, 0, 0, 0, 0}; /* ping, rollbacks, depth x 10, waits, ms waited: of the last second */
+static int sShown[6] = {0, 0, 0, 0, 0, 0}; /* ping, rollbacks, depth x 10, waits, ms waited, why (wait_why): of the last second */
 
 static uint32_t now_ms(void) {
     return (uint32_t)(SDL_GetTicksNS() / 1000000ull) | 1u; /* (never 0: 0 means "no time yet") */
@@ -472,6 +472,21 @@ static uint64_t sSyncOutValue;
 extern unsigned long long Port_NetDigest(void); /* headless.c */
 static void ended(const char *why, unsigned tick);
 
+/* When the two copies' notes differ, the match goes on (as before 0.1.34, when nothing compared them): the player
+   is told once that the two screens may now show different fights, and the log says where it began and, as the
+   session ends, how many comparisons differed. The setting net_desync_end=1 (or BT3_NET_DESYNC_END=1) ends the
+   match instead, as 0.1.34 to 0.1.37 did. A copy of those releases still ends it, and says so to this one. */
+static uint32_t sApartAt;   /* the first blank whose notes differed (0: none in this session) */
+static unsigned sApartCount;
+
+static int desync_ends(void) {
+    extern int Port_Setting(const char *name, int def);
+    if (getenv("BT3_NET_DESYNC_END") != NULL) {
+        return atoi(getenv("BT3_NET_DESYNC_END")) != 0;
+    }
+    return Port_Setting("net_desync_end", 0) != 0;
+}
+
 /* The game is at the start of blank `tick` (run for the first time or again). */
 static void sync_note(uint32_t tick) {
     if (tick % SYNC_EVERY == 0) {
@@ -503,16 +518,75 @@ static void sync_check(uint32_t sure, unsigned tick) {
             o->tick = 0;
             sSyncCompared += m->tick == was;
             if (differ) {
-                fprintf(stderr, "bt3: net: the two games differ at blank %u (this copy %016llx, the other %016llx)\n", (unsigned)was, (unsigned long long)m->value,
-                        (unsigned long long)o->value);
-                sByeWhy = BYE_APART;
-                ended("The two games no longer agree (desync): the match has ended.", tick);
+                sApartCount++;
+                if (sApartAt == 0) {
+                    sApartAt = was;
+                    fprintf(stderr, "bt3: net: the two games differ at blank %u (this copy %016llx, the other %016llx)\n", (unsigned)was,
+                            (unsigned long long)m->value, (unsigned long long)o->value);
+                    if (desync_ends()) {
+                        sByeWhy = BYE_APART;
+                        ended("The two games no longer agree (desync): the match has ended.", tick);
+                    }
+                    Port_UiNotice("The two games no longer agree (desync): your screen and the other player's may now show different fights.");
+                }
             }
         }
     }
 }
 
 static void gone(unsigned tick);
+
+/* A wait for the other player's input (roll_tick, Port_NetBeginTick) that lasted 100 ms or more goes to the log with
+   what came from the other side meanwhile: input packets that did not yet carry the blank this copy needs (the
+   other game is behind this one: its machine is slow or stood still for a moment), or nothing at all for most of
+   the wait (the line held the packets back, or the other game stood still and sent nothing). The other copy's log
+   says which of the two machines it was: its slow frames are in it (gs_core.c). The meter shows the same per second.
+   gPortNetWaitNs: the time waited, for the slow-frame report (a frame that only waited is not a slow machine). */
+enum { WAIT_NOTE_MS = 100, WAIT_NOTES = 200, WHY_BEHIND = 1, WHY_SILENT = 2 };
+static unsigned sInPkts;        /* input packets taken */
+static uint64_t sInLastNs;      /* when the last one came */
+static uint64_t sInGapNs;       /* the longest time without one since the wait began */
+static unsigned sWaitNotes;     /* lines written in this session */
+static uint64_t sSecWaitMaxNs;  /* the longest wait of this second, and why it was */
+static int sSecWaitWhy;
+uint64_t gPortNetWaitNs;
+
+typedef struct { uint64_t t0; unsigned pkts; } WaitMark;
+
+static WaitMark wait_begin(uint64_t t0) {
+    WaitMark w;
+    w.t0 = t0;
+    w.pkts = sInPkts;
+    sInGapNs = sInLastNs != 0 && t0 > sInLastNs ? t0 - sInLastNs : 0;
+    return w;
+}
+
+static void wait_end(WaitMark w, unsigned tick) {
+    uint64_t now = SDL_GetTicksNS(), took = now - w.t0, gap = sInGapNs;
+    unsigned got = sInPkts - w.pkts;
+    int why;
+
+    gPortNetWaitNs += took;
+    if (now > sInLastNs && now - sInLastNs > gap) {
+        gap = now - sInLastNs;
+    }
+    why = gap * 10 >= took * 8 ? WHY_SILENT : WHY_BEHIND;
+    if (took > sSecWaitMaxNs) {
+        sSecWaitMaxNs = took;
+        sSecWaitWhy = why;
+    }
+    if (took < (uint64_t)WAIT_NOTE_MS * 1000000ull || sWaitNotes >= WAIT_NOTES) {
+        return;
+    }
+    sWaitNotes++;
+    if (why == WHY_SILENT) {
+        fprintf(stderr, "bt3: net: waited %u ms at blank %u for the other player's input: nothing came from them for %u ms (the line held it back, "
+                        "or their game stood still); ping %d ms\n", (unsigned)(took / 1000000ull), tick, (unsigned)(gap / 1000000ull), sPingMs);
+    } else {
+        fprintf(stderr, "bt3: net: waited %u ms at blank %u for the other player's input: %u packets came meanwhile without it (their game is "
+                        "behind this one; they say they are %d blanks ahead); ping %d ms\n", (unsigned)(took / 1000000ull), tick, got, (int)sTheirAhead, sPingMs);
+    }
+}
 
 /* The meeting at the end of a session's start-up (warp_tick, meet): the blank at which each copy reached the
    character select. A copy that is waiting sends {MAGIC, T_ARRIVED, blank, 0}; one that has arrived answers each such
@@ -706,6 +780,14 @@ static int receive(void) {
             }
         } else if (type == T_INPUT && n >= IN_HEAD && (sConnected || sMode == 1)) { /* (the joining side: not before the host's answer) */
             uint32_t base, count, i, other = (uint32_t)!sMe;
+            {
+                uint64_t at = SDL_GetTicksNS();
+                if (sInLastNs != 0 && at - sInLastNs > sInGapNs) {
+                    sInGapNs = at - sInLastNs;
+                }
+                sInLastNs = at;
+                sInPkts++;
+            }
             memcpy(&base, pkt + 8, 4);
             memcpy(&count, pkt + 12, 4);
             memcpy(&sTheirAhead, pkt + 16, 4);
@@ -850,6 +932,11 @@ static void net_start(int role, const char *host, const char *join) {
     sPingMs = -1;
     sSecRoll = sSecRollTicks = sSecWaits = sSecWaitMs = sSecTicks = 0;
     memset(sShown, 0, sizeof(sShown));
+    sApartAt = 0;
+    sApartCount = 0;
+    sInPkts = sWaitNotes = 0;
+    sInLastNs = sInGapNs = sSecWaitMaxNs = 0;
+    sSecWaitWhy = 0;
     sLoss = getenv("BT3_NET_LOSS") != NULL ? atoi(getenv("BT3_NET_LOSS")) : 0;
     sLagMs = getenv("BT3_NET_LAG") != NULL ? atoi(getenv("BT3_NET_LAG")) : 0;
     sLatencyMs = getenv("BT3_NET_LATENCY") != NULL ? atoi(getenv("BT3_NET_LATENCY")) : 0;
@@ -1193,24 +1280,26 @@ static void roll_tick(unsigned tick) {
         }
         t0 = last = SDL_GetTicksNS();
         if (tick >= sHave[other] + (uint32_t)sRollMax) {
+            WaitMark w = wait_begin(t0);
             sStalls++;
             sSecWaits++;
-        }
-        while (tick >= sHave[other] + (uint32_t)sRollMax) {
-            uint64_t now = SDL_GetTicksNS();
-            if (now - last > 4000000ull) {
-                send_inputs();
-                last = now;
+            while (tick >= sHave[other] + (uint32_t)sRollMax) {
+                uint64_t now = SDL_GetTicksNS();
+                if (now - last > 4000000ull) {
+                    send_inputs();
+                    last = now;
+                }
+                if (!receive()) {
+                    SDL_DelayNS(200000);
+                }
+                if (sGone) {
+                    gone(tick);
+                }
+                if (now - t0 > QUIET_NS) {
+                    gone_quiet(tick);
+                }
             }
-            if (!receive()) {
-                SDL_DelayNS(200000);
-            }
-            if (sGone) {
-                gone(tick);
-            }
-            if (now - t0 > QUIET_NS) {
-                gone_quiet(tick);
-            }
+            wait_end(w, tick);
         }
         {   /* (see sTheirAhead) */
             int diff = (int)sMyAhead - (int)sTheirAhead; /* (both taken at the same point of a blank: when sending) */
@@ -1229,7 +1318,9 @@ static void roll_tick(unsigned tick) {
             sShown[2] = sSecRoll != 0 ? (int)(sSecRollTicks * 10 / sSecRoll) : 0;
             sShown[3] = (int)sSecWaits;
             sShown[4] = (int)sSecWaitMs;
+            sShown[5] = sSecWaitMaxNs >= 30000000ull ? sSecWaitWhy : 0;
             sSecRoll = sSecRollTicks = sSecWaits = sSecWaitMs = sSecTicks = 0;
+            sSecWaitMaxNs = 0;
         }
         limit = sHave[other] < tick ? sHave[other] : tick;
         for (t = sChecked; t < limit && memcmp(sUsed[t % RING], sIn[other][t % RING], PAD) == 0; t++) {
@@ -1407,21 +1498,25 @@ void Port_NetBeginTick(unsigned tick) {
     send_inputs();
     receive();
     t0 = last = SDL_GetTicksNS();
-    while (sHave[!sMe] <= tick) {
-        uint64_t now = SDL_GetTicksNS();
-        if (now - last > 4000000ull) {
-            send_inputs(); /* the other side may be waiting for a packet that was lost */
-            last = now;
+    if (sHave[!sMe] <= tick) {
+        WaitMark w = wait_begin(t0);
+        while (sHave[!sMe] <= tick) {
+            uint64_t now = SDL_GetTicksNS();
+            if (now - last > 4000000ull) {
+                send_inputs(); /* the other side may be waiting for a packet that was lost */
+                last = now;
+            }
+            if (!receive()) {
+                SDL_DelayNS(200000);
+            }
+            if (sGone) {
+                gone(tick);
+            }
+            if (now - t0 > QUIET_NS) {
+                gone_quiet(tick);
+            }
         }
-        if (!receive()) {
-            SDL_DelayNS(200000);
-        }
-        if (sGone) {
-            gone(tick);
-        }
-        if (now - t0 > QUIET_NS) {
-            gone_quiet(tick);
-        }
+        wait_end(w, tick);
     }
     sWaitNs += SDL_GetTicksNS() - t0;
     sWaits++;
@@ -1436,7 +1531,9 @@ void Port_NetBeginTick(unsigned tick) {
             sShown[1] = sShown[2] = 0;
             sShown[3] = (int)sSecWaits;
             sShown[4] = (int)sSecWaitMs;
+            sShown[5] = sSecWaitMaxNs >= 30000000ull ? sSecWaitWhy : 0;
             sSecWaits = sSecWaitMs = sSecTicks = 0;
+            sSecWaitMaxNs = 0;
         }
     }
     if (tick % 600 == 0 && getenv("BT3_GS_VERBOSE") != NULL) {
@@ -1715,6 +1812,9 @@ void Port_NetArrived(void) {
    normally is. */
 void Port_NetLeave(void) {
     fprintf(stderr, "bt3: net: the session has ended\n");
+    if (sApartAt != 0) {
+        fprintf(stderr, "bt3: net: the two games differed from blank %u on (%u comparisons differed)\n", (unsigned)sApartAt, sApartCount);
+    }
     PortChat_Reset();
     if (sSock >= 0 && sConnected) { /* tell the other side, so that it does not wait for input that will not come */
         uint32_t bye[3] = {MAGIC, T_BYE, sByeWhy};
@@ -2120,7 +2220,8 @@ void Port_LobbyLaunch(void) {
 
 /* For the meter (ui.cpp). 0 when no match is on; else out = ping in ms (-1 not known yet), going back per second,
    blanks per going back x 10, waits per second, ms waited per second, the rollback limit (0: waiting for each
-   other), the input delay. */
+   other), the input delay, whether it is chosen from the ping, why the waits of the last second were (1: the other
+   game behind, 2: nothing came), the blank the two games came apart at (0: they agree). */
 int Port_NetStats(int *out) {
     if (sMode <= 0 || !sConnected) {
         return 0;
@@ -2133,6 +2234,8 @@ int Port_NetStats(int *out) {
     out[5] = sRollMax;
     out[6] = sDelay;
     out[7] = sAutoDelay;
+    out[8] = sShown[5];        /* why this copy waited in the last second (WHY_*), 0 for no wait worth naming */
+    out[9] = (int)sApartAt;    /* the blank at which the two games came apart, 0 for not */
     return 1;
 }
 
