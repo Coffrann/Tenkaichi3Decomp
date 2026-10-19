@@ -906,7 +906,8 @@ static void vk_frame_end(void) {
             fs.texture = sAuxCopy; /* the ids as copied by the game, not the live alpha (later passes overwrite it) */
             fs.sampler = sSamplers[6]; /* nearest, clamped */
             SDL_BindGPUFragmentSamplers(pass, 0, &fs, 1);
-            params[0] = 1.0f / (float)GS_W;
+            extern int Port_PageAspectMilli(void); /* plat_stub.c: the shape of the page shown now */
+            params[0] = 1333.333f / (float)Port_PageAspectMilli() / (float)GS_W; /* one PS2 pixel across, as wide as at 4:3 (outline.frag) */
             params[1] = 1.0f / (float)GS_H;
             params[2] = 100.0f / 255.0f; /* the dark rectangle's 0x64 */
             params[3] = getenv("BT3_FX_DEBUG") != NULL ? 1.0f : 0.0f;

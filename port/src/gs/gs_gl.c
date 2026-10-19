@@ -946,7 +946,8 @@ static void frame_end(void) {
             if (cur != d->target) { bind_target(d->target, 0); cur = d->target; }
             set_native(d->native);
             set_textures(sAuxCopy, 6, 0, 6, 0, 6);
-            params[0] = 1.0f / (float)GS_W;
+            extern int Port_PageAspectMilli(void); /* plat_stub.c: the shape of the page shown now */
+            params[0] = 1333.333f / (float)Port_PageAspectMilli() / (float)GS_W; /* one PS2 pixel across, as wide as at 4:3 (outline.frag) */
             params[1] = 1.0f / (float)GS_H;
             params[2] = 100.0f / 255.0f;
             params[3] = getenv("BT3_FX_DEBUG") != NULL ? 1.0f : 0.0f;
