@@ -73,11 +73,21 @@ static float native_lift(void) {
     return sLift;
 }
 
+/* As the program ends: the engine's device is stopped, which waits for its thread to be out of the decoders. The
+   port leaves with exit() while that thread still runs, and on Windows the C library closes every open file in
+   exit(): the thread would read a song from a closed file in the moment before the process is gone. (Stopped, not
+   freed: the game's thread may still ask after a stream until then.) */
+static void engine_stop(void) {
+    if (sEngineState == 1) {
+        ma_engine_stop(&sEngine);
+    }
+}
 /* The engine, made the first time a native stream starts (so a run without one never touches a device here). */
 static int engine(void) {
     if (sEngineState == 0) {
         if (ma_engine_init(NULL, &sEngine) == MA_SUCCESS) {
             sEngineState = 1;
+            atexit(engine_stop);
             fprintf(stderr, "bt3: sound: miniaudio %s (%u Hz), gain x%.2f\n", ma_version_string(), ma_engine_get_sample_rate(&sEngine), native_lift());
         }
         else {
