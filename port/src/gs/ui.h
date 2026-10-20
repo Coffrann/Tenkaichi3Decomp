@@ -11,7 +11,8 @@ typedef struct PortVideo {
     int aspectMilli; /* width / height of the picture * 1000 */
     int fullscreen;
     int fxOff;       /* bits: 1 outline, 2 see-through tint, 4 depth tint, 8 glare and glow, 16 distance blur, 32 movement blur */
-    int glow;        /* percent */
+    int glow;        /* percent: the glow of characters and objects */
+    int glare;       /* percent: the sky's glare */
     int music, effects, voices, stage; /* volumes, percent */
     int display;     /* 0 = the desktop chooses, n = the n-th display; used at the next start */
     int texPack;     /* 1 = the texture pack's replacements are used */

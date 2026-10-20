@@ -111,6 +111,8 @@ int gsTargetCount;
 int gsTexCount;
 unsigned gsFxOff;
 int gsGlowPercent = GLOW_DEFAULT;
+int gsGlarePercent = GLOW_DEFAULT;
+static int sGlowIsGlare; /* the glow chain under way is the sky's glare (gfxm_a.c GfxPost_DrawGlow: see below) */
 static int sTexPackOn = 1; /* the setting: use the texture pack (if one was found) */
 int gsAnchor;
 /* A fight's HUD in a picture wider than 4:3 (setting hud_layout, BT3_HUD=<n> for a test):
@@ -1294,13 +1296,20 @@ void GsGpu_Draw(int type, int ctx, const GsVertex *v) {
             gsVerts[k].s -= ds;
             gsVerts[k].t -= dt;
         }
+        /* Which of the two the chain is. The sky's glare and the glow of characters and objects are the same chain
+           (GfxPost_DrawGlow), run once each; it tints its way back up from 64 x 64 into the 128 x 128 page (0x170)
+           with its last argument: the glare's level as a grey with alpha 0, the object glow 0x80808080. The page's
+           last sprite before the pass that adds the chain to the picture is that one. */
+        if ((uint32_t)(gGs.frame[ctx] & 0x1FF) == 0x170) {
+            sGlowIsGlare = v[1].a == 0;
+        }
         /* the user's strength for the glare and the glow: the pass that adds the blurred buffer to the picture */
-        if (gsGlowPercent != 100 && (uint32_t)(gGs.frame[ctx] & 0x1FF) == (uint32_t)gGsMainFbp && ((gGs.prim >> 6) & 1) &&
-            (gGs.alpha[ctx] & 0xFF) == 0x68) {
-            for (k = d.first; k < gsVertCount; k++) {
-                gsVerts[k].r = (uint8_t)(gsVerts[k].r * gsGlowPercent / 100 > 255 ? 255 : gsVerts[k].r * gsGlowPercent / 100);
-                gsVerts[k].g = (uint8_t)(gsVerts[k].g * gsGlowPercent / 100 > 255 ? 255 : gsVerts[k].g * gsGlowPercent / 100);
-                gsVerts[k].b = (uint8_t)(gsVerts[k].b * gsGlowPercent / 100 > 255 ? 255 : gsVerts[k].b * gsGlowPercent / 100);
+        if ((uint32_t)(gGs.frame[ctx] & 0x1FF) == (uint32_t)gGsMainFbp && ((gGs.prim >> 6) & 1) && (gGs.alpha[ctx] & 0xFF) == 0x68) {
+            int pc = sGlowIsGlare ? gsGlarePercent : gsGlowPercent;
+            for (k = d.first; pc != 100 && k < gsVertCount; k++) {
+                gsVerts[k].r = (uint8_t)(gsVerts[k].r * pc / 100 > 255 ? 255 : gsVerts[k].r * pc / 100);
+                gsVerts[k].g = (uint8_t)(gsVerts[k].g * pc / 100 > 255 ? 255 : gsVerts[k].g * pc / 100);
+                gsVerts[k].b = (uint8_t)(gsVerts[k].b * pc / 100 > 255 ? 255 : gsVerts[k].b * pc / 100);
             }
         }
     }
@@ -1782,6 +1791,7 @@ void GsGpu_GetSettings(PortVideo *v) {
     v->fullscreen = sFullscreen;
     v->fxOff = (int)gsFxOff;
     v->glow = gsGlowPercent;
+    v->glare = gsGlarePercent;
     v->music = gPortMusicPercent;
     v->effects = gPortSePercent;
     v->voices = gPortVoicePercent;
@@ -1814,6 +1824,7 @@ void GsGpu_SetSettings(const PortVideo *v) {
     }
     gsFxOff = (unsigned)v->fxOff & 63;
     gsGlowPercent = v->glow;
+    gsGlarePercent = v->glare;
     if (v->music != now.music || v->effects != now.effects || v->voices != now.voices || v->stage != now.stage) { /* (the streams that are playing follow at once) */
         gPortMusicPercent = v->music;
         gPortSePercent = v->effects;
@@ -1848,6 +1859,7 @@ void GsGpu_SetSettings(const PortVideo *v) {
     Port_SettingSave("fullscreen", sFullscreen);
     Port_SettingSave("fx_off", (int)gsFxOff);
     Port_SettingSave("glow", gsGlowPercent);
+    Port_SettingSave("glare", gsGlarePercent);
     Port_SettingSave("music", gPortMusicPercent);
     Port_SettingSave("effects", gPortSePercent);
     Port_SettingSave("voices", gPortVoicePercent);
@@ -1904,6 +1916,8 @@ int GsGpu_Init(void) {
     gsWhite = sb->whiteTex();
     gsFxOff = (unsigned)(getenv("BT3_FX_OFF") != NULL ? atoi(getenv("BT3_FX_OFF")) : Port_Setting("fx_off", 0)) & 63;
     gsGlowPercent = getenv("BT3_GLOW") != NULL ? atoi(getenv("BT3_GLOW")) : Port_Setting("glow", GLOW_DEFAULT);
+    /* (one strength for both until 2026-10-21: a saved "glow" is the glare's too until it has its own) */
+    gsGlarePercent = getenv("BT3_GLARE") != NULL ? atoi(getenv("BT3_GLARE")) : Port_Setting("glare", gsGlowPercent);
     MenuText_SetFontId(Port_Setting("menu_font_id", 0));
     MenuText_SetBattleFontId(Port_Setting("battle_font_id", 0));
     MenuText_SetSharedFontId(Port_Setting("text_font_id", 0));

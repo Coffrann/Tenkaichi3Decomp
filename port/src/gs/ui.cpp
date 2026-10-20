@@ -1397,7 +1397,11 @@ static void effects_tab(PortVideo &v) {
     }
     ImGui::Spacing();
     ImGui::SliderInt("Glow strength", &v.glow, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
-    ImGui::SetItemTooltip("100%% is what the PlayStation 2 draws; the default here is 60%%.");
+    ImGui::SetItemTooltip("The glow around characters and things (a Super Saiyan's hair, auras).\n"
+                          "100%% is what the PlayStation 2 draws; the default here is 60%%.");
+    ImGui::SliderInt("Glare strength", &v.glare, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SetItemTooltip("The glare of the sky and the stage's light.\n"
+                          "100%% is what the PlayStation 2 draws; the default here is 60%%.");
 }
 
 // ---- "an update is available" ----
