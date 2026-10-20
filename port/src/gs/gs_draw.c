@@ -1723,7 +1723,7 @@ SDL_Window *GsDraw_WindowCreate(int opengl) {
     SDL_DestroyProperties(props);
     SDL_free(displays);
     if (sWindow != NULL && !sFullscreen) {
-        SDL_SetWindowSize(sWindow, (int)((float)896 * want + 0.5f), 896);
+        SDL_SetWindowSize(sWindow, (int)((float)h * want + 0.5f), h); /* (the height BT3_WINDOW asked for, at the picture's shape) */
     }
     fprintf(stderr, "bt3: internal resolution %dx (%d x %d)\n", gsScale, 512 * gsScale, 448 * gsScale);
     return sWindow;
