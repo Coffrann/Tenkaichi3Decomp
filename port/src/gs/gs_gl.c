@@ -359,7 +359,7 @@ static GLuint make_present_program(void) {
 /* ---- state -------------------------------------------------------------------------------------- */
 static SDL_Window *sWindow;
 static SDL_GLContext sCtx;
-static GLuint sMainProg[8]; /* gs.vert / vu0 / vu4 / vu6 + gs.frag; 4..7: the same with gsnz.frag (key bit 23) */
+static GLuint sMainProg[9]; /* gs.vert / vu0 / vu4 / vu6 + gs.frag; 4..7: the same with gsnz.frag (key bit 23); 8: gs.vert + gswb.frag (bit 25) */
 static GLuint sOutlineProg, sKeyProg, sDclutProg, sPresentProg;
 static GLuint sVaoGs, sVaoVu, sVboGs, sVboVu, sIboVu;
 static GLuint sSamplers[16];
@@ -374,7 +374,7 @@ static const char *sGsSamplers[2] = {"tex", "dateTex"};
 static const char *sOneSampler[1] = {"aux"};
 static const char *sDclutSamplers[3] = {"depthTex", "auxTex", "clutTex"};
 
-typedef struct Pipe { uint32_t key, bkey, wmask; int ztst, zwrite, topo, vu, fx, nz, shadow; } Pipe;
+typedef struct Pipe { uint32_t key, bkey, wmask; int ztst, zwrite, topo, vu, fx, nz, wb, shadow; } Pipe;
 static Pipe sPipes[1024];
 static int sPipeCount;
 
@@ -482,6 +482,7 @@ static void pipe_decode(Pipe *p, uint32_t key) {
     p->topo = (int)((key >> 13) & 3);
     p->vu = (int)((key >> 20) & 3);
     p->nz = (int)((key >> 23) & 1);
+    p->wb = (int)((key >> 25) & 1);
     p->shadow = (int)((key >> 24) & 1);
     p->fx = (int)((key >> 22) & 1);
     p->wmask = (key >> 16) & 15;
@@ -554,7 +555,7 @@ static void set_pipe(int pipe) {
     sCurPipe = pipe;
     p = &sPipes[pipe];
     {
-        GLuint prog = p->fx ? sDclutProg : sMainProg[p->vu + (p->nz ? 4 : 0)];
+        GLuint prog = p->fx ? sDclutProg : p->wb ? sMainProg[8] : sMainProg[p->vu + (p->nz ? 4 : 0)];
         if (sCurProgram != prog) { sCurProgram = prog; glUseProgram(prog); }
     }
     apply_blend(p->bkey);
@@ -704,6 +705,7 @@ static int gl_init(void) {
     sMainProg[5] = make_program(kVu0VertGlsl, kGsnzFragGlsl, "vu0 nz", sGsSamplers, 2);
     sMainProg[6] = make_program(kVu4VertGlsl, kGsnzFragGlsl, "vu4 nz", sGsSamplers, 2);
     sMainProg[7] = make_program(kVu6VertGlsl, kGsnzFragGlsl, "vu6 nz", sGsSamplers, 2);
+    sMainProg[8] = make_program(kGsVertGlsl, kGswbFragGlsl, "gs wb", sGsSamplers, 2);
     sOutlineProg = make_program(kFxVertGlsl, kOutlineFragGlsl, "outline", sOneSampler, 1);
     sKeyProg = make_program(kFxVertGlsl, kAlphakeyFragGlsl, "alphakey", sOneSampler, 1);
     sDclutProg = make_program(kFxVertGlsl, kDclutFragGlsl, "dclut", sDclutSamplers, 3);

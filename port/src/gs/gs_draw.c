@@ -113,6 +113,7 @@ unsigned gsFxOff;
 int gsGlowPercent = GLOW_DEFAULT;
 int gsGlarePercent = GLOW_DEFAULT;
 static int sGlowIsGlare; /* the glow chain under way is the sky's glare (gfxm_a.c GfxPost_DrawGlow: see below) */
+static int sBlockSample; /* the draw being set up reads a work buffer at the GS's 1x (orig.x): pipeline_get, key bit 25 */
 static int sTexPackOn = 1; /* the setting: use the texture pack (if one was found) */
 int gsAnchor;
 /* A fight's HUD in a picture wider than 4:3 (setting hud_layout, BT3_HUD=<n> for a test):
@@ -644,7 +645,8 @@ static uint32_t blend_key(uint64_t alpha, int abe) {
    one pipeline per key, so this is pure GS state -> an index):
    bits 0..9 blend, 10..11 depth test, 12 depth write, 13..14 topology, 16..19 colour write mask,
    20..21 vertices: 0 GS vertices, 1 program 0, 2 program 4, 3 program 6, 22 full-screen table pass,
-   23 the fragment shader without its own depth output, 24 flat-shadow stencil mask. */
+   23 the fragment shader without its own depth output, 24 flat-shadow stencil mask, 25 that shader with the GS's
+   1x sampling of a work buffer (gswb.frag). */
 static int pipeline_get(int ctx, int topo, int vu, int shadow) {
     uint64_t test = gGs.test[ctx], zb = gGs.zbuf[ctx];
     int zte = (test >> 16) & 1, ztst = (test >> 17) & 3, zwrite = !((zb >> 32) & 1);
@@ -672,6 +674,11 @@ static int pipeline_get(int ctx, int topo, int vu, int shadow) {
         if (nz < 0) { nz = getenv("BT3_NZ") != NULL ? atoi(getenv("BT3_NZ")) : 1; }
         if (nz && !zwrite && ztst != 3 && vu != 4) {
             key |= 1u << 23;
+            /* Bit 25: gswb.frag, which is gsnz.frag with the glow chain's sampling. Those draws (sprites between
+               work buffers) write no depth and test "always", so they always qualify for 23. */
+            if (sBlockSample && vu == 0) {
+                key |= 1u << 25;
+            }
         }
     }
     if (vu == 4) { /* asked for by depth_clut: the table pass, which only depends on blending and the write mask */
@@ -905,9 +912,17 @@ static int draw_state(int ctx, int topo, int sprite, int vu, GsDraw *d, float *u
                (nearly the same colour), and each step just moved the picture: the glow came out as a sharp copy of
                the character beside it (Super Saiyan hair, reported). orig.x = SCALE: gs.frag samples it as the GS
                would at 1x, each GS texel the average of its block. (The picture's own copies, the cross-fade, stay
-               sharp: their source is the picture.) */
-            if (SCALE > 1 && gsTargets[src].fbp != (uint32_t)gGsMainFbp && ((gGs.tex1[ctx] >> 5) & 1)) {
+               sharp: their source is the picture.) Only between work buffers: the passes that lay one over the whole
+               picture (the glow added back, the distance blur) read a buffer that is already smooth, and sixteen
+               reads for every pixel of the picture took a fight at 2x on an integrated chip from 124 pictures a
+               second to 90. */
+            static int block = -1; /* BT3_GLOW_BLOCK=0: read as any texture (to compare) */
+            if (block < 0) { block = getenv("BT3_GLOW_BLOCK") != NULL ? atoi(getenv("BT3_GLOW_BLOCK")) : 1; }
+            if (block && SCALE > 1 && gsTargets[src].fbp != (uint32_t)gGsMainFbp && (uint32_t)(gGs.frame[ctx] & 0x1FF) != (uint32_t)gGsMainFbp &&
+                ((gGs.tex1[ctx] >> 5) & 1)) {
                 d->orig[0] = (float)SCALE;
+                sBlockSample = 1;
+
             }
             {
                 /* The buffer is a corner of a larger texture here, so the GS's own edge handling has to be done
@@ -937,6 +952,7 @@ static int draw_state(int ctx, int topo, int sprite, int vu, GsDraw *d, float *u
         d->sampler |= 1 | 8; /* (GsGpu_Draw takes the 8 off again for 2D art) */
     }
     d->pipeline = pipeline_get(ctx, topo, vu, 0);
+    sBlockSample = 0;
     d->mode[0] = !tme ? 0 : d->tex_is_target ? 2 : 1; /* 2: a frame buffer as texture, its alpha is already rescaled */
     /* (BT3_TEX_ALPHA=0 switches the replacement's alpha treatment off, for telling which one a fault comes from) */
     if (d->mode[0] == 1 && sLast != NULL && sLast->tex == d->tex && sLast->replaced == 1 &&
