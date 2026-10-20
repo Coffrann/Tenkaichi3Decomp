@@ -3563,3 +3563,11 @@ An added song in mp3, wav or flac is now decoded and mixed by **miniaudio** (`po
 
 Checked: `snd_ma.c` compiles clean with miniaudio 0.11.25 and the port's flags; `snd_adx.c` and `plat_songs.c`
 pass the front end. Not yet run: a native song heard, the mixing of the two devices, and the release build.
+
+Merged (2026-10-21) with one addition: the `.adx` an earlier release's converter wrote next to an MP3 (its header
+has the mark `BT3:MP3` 1 at 0x30) is left out of the list while that MP3 is there, since the MP3 itself is now
+played: a player who had added MP3s saw every one twice. A `songs.txt` line that names such a copy plays the MP3.
+A copy whose MP3 is gone stays a song, and an ADX without the mark (made by hand, ffmpeg, add_song.py) is never
+left out. The files are not touched. Counted at start, four folders: MP3 + its copy + WAV + FLAC gave 3 songs
+(4 before); the copy alone 1; a hand-made ADX beside an MP3 of the same name 2; the list naming the copy 3. Heard
+(Linux): WAV and FLAC songs in a fight, and the MP3 beside its old ADX copy.

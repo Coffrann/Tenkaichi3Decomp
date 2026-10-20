@@ -90,8 +90,9 @@ Put a song as an .mp3, .wav, .flac or .adx file (ADX is the game's own music for
 to the music choice of the stage select, before "Random", named after the file. Up to 40 songs. An .mp3, .wav or
 .flac is played as it is (miniaudio decodes it; there is no conversion pass and no .adx written next to it), so a
 new song is in the list from the next start. An .adx is played by the game's own decoder. A file that cannot be
-read is left out, with a notice. Anything else (ogg, m4a...) has to be converted first (ffmpeg can write the
-formats above, or ADX: ffmpeg -i song.ogg -ar 24000 -ac 2 -c:a adpcm_adx song.adx).
+read stays in the list and is silent (the log says why). An .adx that an earlier version wrote next to an .mp3 is
+not listed while the .mp3 is there (it can be deleted). Anything else (ogg, m4a...) has to be converted first
+(ffmpeg can write the formats above, or ADX: ffmpeg -i song.ogg -ar 24000 -ac 2 -c:a adpcm_adx song.adx).
 
 Optional: a file songs.txt here, one line per song, "file|Name In The Menu", gives other names and an order.
 

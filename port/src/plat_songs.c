@@ -88,6 +88,43 @@ static void add_song(const char *file, const char *name) {
     gPortSongCount++;
 }
 
+/* The ADX that earlier releases wrote next to an MP3 they converted (the mark "BT3:MP3" 1 at 0x30 of its header):
+   the MP3 beside it is now played as it is, and the copy would be the same song in the list a second time. 1 when
+   `file` is such a copy and its MP3 is still there (`mp3` gets the MP3's name, any case of ".mp3", as the converter
+   took it); a copy without its MP3 is a song like any other ADX, and an ADX made by hand or by ffmpeg has no mark.
+   The file is left where it is. */
+static int converted_copy(const char *file, char *mp3, unsigned size) {
+    static const char kMark[8] = {'B', 'T', '3', ':', 'M', 'P', '3', 1};
+    char path[512];
+    unsigned char h[0x38];
+    size_t l = strlen(file);
+    FILE *fp;
+    int c, got;
+
+    if (l <= 4 || l + 1 > size || file[l - 4] != '.' || tolower((unsigned char)file[l - 3]) != 'a' || tolower((unsigned char)file[l - 2]) != 'd' ||
+        tolower((unsigned char)file[l - 1]) != 'x') {
+        return 0;
+    }
+    snprintf(path, sizeof(path), "%s/%s", sDir, file);
+    if ((fp = fopen(path, "rb")) == NULL) {
+        return 0;
+    }
+    got = fread(h, 1, sizeof(h), fp) == sizeof(h);
+    fclose(fp);
+    if (!got || h[0] != 0x80 || h[1] != 0 || memcmp(h + 0x30, kMark, sizeof(kMark)) != 0) {
+        return 0;
+    }
+    for (c = 0; c < 4; c++) { /* (.mp3 .mP3 .Mp3 .MP3: on Linux the disk tells them apart) */
+        snprintf(mp3, size, "%.*s.%c%c3", (int)(l - 4), file, c & 2 ? 'M' : 'm', c & 1 ? 'P' : 'p');
+        snprintf(path, sizeof(path), "%s/%s", sDir, mp3);
+        if ((fp = fopen(path, "rb")) != NULL) {
+            fclose(fp);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Reads the folder and adds the songs that are not in the list yet, at its end: a song keeps its place (the game
    holds the place's number while a fight with that music is set up and runs). */
 static void collect(void) {
@@ -109,8 +146,11 @@ static void collect(void) {
         }
         *bar = '\0';
         /* The line may name an ADX, an mp3, a wav or a flac: the file it names is the one played (gs/snd_ma.c for
-           the last three). */
-        add_song(trim(line), trim(bar + 1));
+           the last three), the MP3 for a converted copy of one (a list written for the converter's ADX). */
+        {
+            char *file = trim(line), mp3[128];
+            add_song(converted_copy(file, mp3, sizeof(mp3)) ? mp3 : file, trim(bar + 1));
+        }
     }
     if (fp != NULL) {
         fclose(fp);
@@ -131,7 +171,10 @@ static void collect(void) {
         }
         qsort(found, (size_t)n, 128, song_cmp);
         for (k = 0; k < n; k++) {
-            char name[64];
+            char name[64], mp3[128];
+            if (converted_copy(found[k], mp3, sizeof(mp3))) {
+                continue; /* (its MP3 is in the list instead) */
+            }
             PortExtras_NameFromFile(found[k], name, sizeof(name));
             add_song(found[k], name);
         }
