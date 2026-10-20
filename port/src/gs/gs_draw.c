@@ -703,6 +703,21 @@ static int pipeline_get(int ctx, int topo, int vu, int shadow) {
     }
 }
 
+/* The glow's work buffers at the PS2's own resolution (gfxm_a.c GfxPost_DrawGlow: the 256 x 256 page 0x150, 128 x 128
+   0x170 and the two 64 x 64 pages 0x1F6 and 0x1F8, which the sky's glare, the object glow and the blur of distant
+   things go through). The chain shrinks the picture into them, blurs it by sampling half a texel to the side and
+   adds it back: at the internal resolution half a GS texel is several texels, the filter blended only the two
+   nearest and each step just moved the picture (the glow as a sharp copy of the character beside it). Drawn one
+   texel per GS pixel, in the top left corner of the target's texture (positions and scissor not scaled up,
+   texture coordinates scaled down), the filter is the GS's own, and those passes have SCALE x SCALE fewer pixels
+   than at the internal resolution. The picture they come from and go back to stays at it. BT3_GLOW_NATIVE=0: at
+   the internal resolution, as before (the glow's sampling in gswb.frag then). */
+static int target_lowres(uint32_t fbp) {
+    static int on = -1;
+    if (on < 0) { on = getenv("BT3_GLOW_NATIVE") != NULL ? atoi(getenv("BT3_GLOW_NATIVE")) : 1; }
+    return on && SCALE > 1 && (fbp == 0x150 || fbp == 0x170 || fbp == 0x1F6 || fbp == 0x1F8);
+}
+
 /* The shared target table's entry for a frame-buffer address. The attachments are the back end's: a new
    slot asks it to make them (GsBackend.targetEnsure), an evicted one to release them (targetDrop). */
 int GsDraw_TargetGet(uint32_t fbp, int create) {
@@ -739,6 +754,7 @@ int GsDraw_TargetGet(uint32_t fbp, int create) {
     gsTargets[slot].stale = 0;
     gsTargets[slot].gen = 0;
     gsTargets[slot].last = gGsFrame;
+    gsTargets[slot].lowres = target_lowres(fbp);
     if (slot == gsTargetCount) {
         gsTargetCount++;
     }
@@ -940,6 +956,16 @@ static int draw_state(int ctx, int topo, int sprite, int vu, GsDraw *d, float *u
             }
             *us = tw / (float)GS_W;
             *vs = th / (float)GS_H;
+            if (gsTargets[src].lowres) { /* (its picture is in the corner: one texel per GS pixel) */
+                int k;
+                for (k = 0; k < 4; k++) {
+                    d->rect[k] /= (float)SCALE;
+                }
+                *us /= (float)SCALE;
+                *vs /= (float)SCALE;
+                d->orig[0] = 0.0f;
+                sBlockSample = 0;
+            }
         } else {
             d->tex = texture_get(ctx);
         }
@@ -967,10 +993,13 @@ static int draw_state(int ctx, int topo, int sprite, int vu, GsDraw *d, float *u
     d->misc[1] = ((test >> 14) & 1) ? (float)(1 + (int)((test >> 15) & 1)) : 0.0f; /* DATE, DATM */
     d->misc[2] = (float)(gGs.fba[ctx] & 1);
     d->blendc = (float)((gGs.alpha[ctx] >> 32) & 0xFF) / 128.0f;
-    d->scissor[0] = (int)(sc & 0x7FF) * SCALE;
-    d->scissor[1] = (int)((sc >> 32) & 0x7FF) * SCALE;
-    d->scissor[2] = ((int)((sc >> 16) & 0x7FF) + 1) * SCALE - d->scissor[0];
-    d->scissor[3] = ((int)((sc >> 48) & 0x7FF) + 1) * SCALE - d->scissor[1];
+    {
+        int ts = gsTargets[d->target].lowres ? 1 : SCALE; /* (a work buffer at the PS2's resolution: target_lowres) */
+        d->scissor[0] = (int)(sc & 0x7FF) * ts;
+        d->scissor[1] = (int)((sc >> 32) & 0x7FF) * ts;
+        d->scissor[2] = ((int)((sc >> 16) & 0x7FF) + 1) * ts - d->scissor[0];
+        d->scissor[3] = ((int)((sc >> 48) & 0x7FF) + 1) * ts - d->scissor[1];
+    }
     return 1;
 }
 
@@ -1402,6 +1431,16 @@ void GsGpu_Draw(int type, int ctx, const GsVertex *v) {
         }
     }
     d.count = gsVertCount - d.first;
+    if (gsTargets[d.target].lowres) { /* into a work buffer at the PS2's resolution: its corner (target_lowres) */
+        uint32_t k;
+        for (k = d.first; k < gsVertCount; k++) {
+            gsVerts[k].x /= (float)SCALE;
+            gsVerts[k].y /= (float)SCALE;
+        }
+        if (d.misc[3] > 0.0f) {
+            d.misc[3] = 1.0f; /* (one output pixel per GS pixel there) */
+        }
+    }
     gsTargets[d.target].draws++;
     gsTargets[d.target].gen = gGsPageGen[gsTargets[d.target].fbp & 511];
     last = gsDrawCount ? &gsDraws[gsDrawCount - 1] : NULL;
@@ -1466,6 +1505,7 @@ void GsGpu_DrawVu6(int ctx, const float *vertices, uint32_t count, const float *
     }
     gsTargets[d.target].draws++;
     gsTargets[d.target].gen = gGsPageGen[gsTargets[d.target].fbp & 511];
+    u.target[0] = gsTargets[d.target].lowres ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
     last = gsDrawCount ? &gsDraws[gsDrawCount - 1] : NULL;
     if (last != NULL && same_state(last, &d) && memcmp(&gsVuUni[last->uniform], &u, sizeof(u)) == 0) {
         last->count += d.count;
@@ -1513,6 +1553,7 @@ void GsGpu_DrawVu4(int ctx, const float *vertices, uint32_t count, const float *
     gsVuVertCount += count;
     gsTargets[d.target].draws++;
     gsTargets[d.target].gen = gGsPageGen[gsTargets[d.target].fbp & 511];
+    u.target[0] = gsTargets[d.target].lowres ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
     last = gsDrawCount ? &gsDraws[gsDrawCount - 1] : NULL;
     if (last != NULL && same_state(last, &d) && memcmp(&gsVuUni[last->uniform], &u, sizeof(u)) == 0) {
         last->count += d.count;
@@ -1580,6 +1621,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     gsVuVertCount += count;
     gsTargets[d.target].draws++;
     gsTargets[d.target].gen = gGsPageGen[gsTargets[d.target].fbp & 511];
+    u.target[0] = gsTargets[d.target].lowres ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
     last = gsDrawCount ? &gsDraws[gsDrawCount - 1] : NULL;
     if (last != NULL && same_state(last, &d) && memcmp(&gsVuUni[last->uniform], &u, sizeof(u)) == 0) {
         last->count += d.count;

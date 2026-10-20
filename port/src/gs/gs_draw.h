@@ -45,6 +45,7 @@ typedef uintptr_t GsTex;
 typedef struct Vu0Uniform {
     float boneA[16], boneB[16], pivotA[4], pivotB[4], screen[16], light[4], color0[4], color1[4], misc[4];
     float light2[4]; /* program 1: the y components of 10..13 (the second texture coordinate of its layer 1) */
+    float target[4]; /* x: GS pixels per texel of the target (SCALE for a work buffer at the PS2's resolution, target_lowres; 0 = 1) */
 } Vu0Uniform;
 
 /* The shared side of a render target: everything that is GS state (which frame-buffer address it is,
@@ -57,6 +58,8 @@ typedef struct GsTarget {
     uint32_t gen;   /* upload generation of its first page when it was last drawn to */
     int stale;      /* a pass that should have filled it was dropped: its contents are not what the game expects */
     unsigned last;  /* frame it was last asked for */
+    int lowres;     /* drawn at the PS2's own resolution, one texel per GS pixel in the corner of its texture (the glow's
+                       work buffers: gs_draw.c target_lowres) */
 } GsTarget;
 
 /* One recorded primitive. Everything inside is GS state or a handle a back end made (`tex`, `pipeline`); a
