@@ -2422,6 +2422,9 @@ least a few rows (in a small window the tab scrolls as a whole).
   SDL then delivers to that controller's motors.
 - `BT3_RUMBLE_TEST=1` lifts the game's rule "no vibration in a replay" (one line in `BtlChar_UpdateVibration`,
   under `#ifdef PORT`), so that a recorded fight can be used: the regression replay is a replay.
+- `BT3_RUMBLE_SLOW=<ms>` makes the test controller keep each vibration command waiting that long, as some real
+  ones do (a report: a friend's controller froze the game for seconds whenever it vibrated). While the test
+  controller is attached, the real ones are left out, so a test is never felt on one.
 
 **Verified, by numbers:**
 - replay01 with `BT3_RUMBLE_TEST=1 BT3_RUMBLE_LOG=1`: the first hit, at vertical blank 1250, gives large motor
@@ -2430,6 +2433,10 @@ least a few rows (in a small window the tab scrolls as a whole).
   `(58310, 65535)`, `(39217, 0)`, `(0, 0, 0)`, and the test controller received the same. With strength 50:
   `(24511, 32767)`, `(32251, 0)`, ... With vibration off, and with the settings window open: no call at all.
   Without `BT3_RUMBLE_TEST`: no command (the game's rule). 393 commands up to tick 500, all for player 1.
+- A slow controller, replay01 to tick 500 (393 commands): 37.0 s of running with the test controller answering at
+  once, 8 ms late (199 commands sent: one per 125 ms at most) and 60 ms late (3 sent, then vibration off for it,
+  with the notice); the line `tick 500 ... hp 36430 24070` the same in all three. Sent every one, 60 ms each would
+  have been 23.6 s of standing still.
 - The regression line (`tick 2111 ... hp 23050 0`) is the same with and without `BT3_RUMBLE_TEST`, headless and in
   a window with the commands going to the test controller.
 - Sticks, twelve runs (the port's computed value equalled the game's own record in every one). Original:
