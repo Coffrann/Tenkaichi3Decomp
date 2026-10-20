@@ -231,8 +231,9 @@ void McFlow_CallModeRemoved(void) {
 #ifdef PORT
 /*
  * Quick saving (setting save_quick, on unless 0; never in online play, where both games have to run the same
- * frames): the saves (flows 0 and 4) and the load at start (flow 2) run without their window, and the load from the
- * options (flow 1) asks its question and then runs without the waits. The save's question
+ * frames): the saves (flows 0 and 4), the load at start (flow 2) and a new game's first save (flow 3) run without their
+ * window; the load from the options (flow 1), and a new game after a save was loaded, ask their questions and then
+ * run without the waits. The save's question
  * is answered yes, no step waits its minimum display time (the card answers at once on PC), and the window's
  * opening and closing are skipped; a save shows a small icon instead (gs/ui.cpp). A question or an error the player
  * has to see (no card, a damaged or missing save at start, a full or unformatted card, a failed write, "continue
@@ -263,27 +264,38 @@ static void McFlow_QuickTimer(s32 polls, s32 keep) {
     }
 }
 
-/* Flow 1 (Options > Load): the window and its question as the game has them; after yes, the checking and loading
-   pages go as soon as the card answers and "loaded" stays half a second. An error page is the game's own. */
-static void McFlow_QuickLoad(void) {
+/* Flow 1 (Options > Load), and flow 3 (New Game) after a save was loaded: the window and its questions as the game
+   has them; after yes, the checking, loading and saving pages go as soon as the card answers and "loaded" or
+   "saved" stays half a second. An error page is the game's own. */
+static void McFlow_QuickWindow(void) {
     switch (gMcFlow->state) {
     case 0x23:
     case 0x25:
     case 0x26:
         break;
     case 2: /* "load?" */
+    case 1:
+    case 0xA:
+    case 0xD:
+    case 0x21: /* (flow 3) "new game?", "create a save file?", "overwrite?" */
         if (gMcFlow->choice > 0) {
             McFlow_QuickTimer(0, 0);
         }
         break;
     case 4:
     case 0x13:
+    case 3:
+    case 0xB:
+    case 0xF:
+    case 0x22: /* (flow 3) */
         McFlow_QuickTimer(1, 0);
         break;
     case 6:
+    case 0x1F:
         McFlow_QuickTimer(0, 1);
         break;
     case 0x14: /* (loaded) */
+    case 0x10: /* (flow 3: saved) */
         McFlow_QuickTimer(0, 30);
         break;
     default:
@@ -295,22 +307,25 @@ static void McFlow_QuickLoad(void) {
 /* Before the flow's own frame. Returns 1 when that frame is done here. */
 static s32 McFlow_QuickStep(void) {
     s32 boot = gMcFlow->mode == MCFLOW_MODE_BOOT_LOAD;
+    s32 fresh = gMcFlow->mode == MCFLOW_MODE_NEW_SAVE; /* (no save was loaded) */
     s32 polls = 0; /* the step asks the card for its state first (MCF_POLL) */
 
-    if (gMcFlow->mode == MCFLOW_MODE_LOAD) {
-        McFlow_QuickLoad();
+    if (sMcQuick == 2) {
+        McFlow_QuickWindow();
         return 0;
     }
     switch (gMcFlow->state) {
     case 0x23: /* (no window) */
-        gMcFlow->state = boot ? 5 : gMcFlow->next;
+        gMcFlow->state = boot ? 5 : fresh ? 0xA : gMcFlow->next;
         gMcFlow->choice = 0;
         return 1;
+    case 0xA:
     case 0xC:
     case 0x20:
     case 0xD:
-    case 0x21: /* "save?", "overwrite?": yes */
-        if (boot) {
+    case 0x21: /* "save?", "create a save file?", "overwrite?": yes; a new game's "overwrite?" is shown (the save on
+                  the card would be lost) */
+        if (boot || (fresh && gMcFlow->state == 0xD) || (!fresh && gMcFlow->state == 0xA)) {
             goto shown;
         }
         gMcFlow->choice = 1;
@@ -1720,6 +1735,11 @@ void McFlow_UpdateNewSave(void) {
         break;
     }
     Dialog_SetMsg(gMcFlow->msg);
+#ifdef PORT
+    if (sMcQuick == 1) {
+        return;
+    }
+#endif
     Dialog_Draw(1);
 }
 
@@ -2821,11 +2841,15 @@ void McFlow_Term(void) {
 void McFlow_Start(s32 mode) {
     gMcFlow->mode = mode;
 #ifdef PORT
+    /* 1: without the window, 2: the window with its questions, without the waits */
     sMcQuick = (mode == MCFLOW_MODE_SAVE || mode == MCFLOW_MODE_SAVE_ALT || mode == MCFLOW_MODE_LOAD ||
-                mode == MCFLOW_MODE_BOOT_LOAD) && !Port_NetActive() &&
+                mode == MCFLOW_MODE_BOOT_LOAD || mode == MCFLOW_MODE_NEW_SAVE) && !Port_NetActive() &&
                Port_Setting("save_quick", 1) != 0;
+    if (sMcQuick && (mode == MCFLOW_MODE_LOAD || (mode == MCFLOW_MODE_NEW_SAVE && (gProgress->flags & 8)))) {
+        sMcQuick = 2;
+    }
     sMcQuickState = -1;
-    if (sMcQuick && mode != MCFLOW_MODE_BOOT_LOAD && mode != MCFLOW_MODE_LOAD) {
+    if (sMcQuick == 1 && mode != MCFLOW_MODE_BOOT_LOAD) {
         Port_UiSaving(1);
     }
 #endif
