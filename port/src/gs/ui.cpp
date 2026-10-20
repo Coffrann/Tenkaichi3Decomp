@@ -1425,9 +1425,9 @@ static void misc_tab(void) {
         Port_SettingsWrite();
     }
     ImGui::SetItemTooltip("Save and load without the memory card pages: no question, no waiting, a small card in the\n"
-                          "corner while it saves, and the save loaded at start without a page. A missing card, a full\n"
-                          "card or a failed save is still shown. Online the game's own pages always run. Off: the\n"
-                          "game's own pages.");
+                          "corner while it saves, and the save loaded at start without a page. Load in the options\n"
+                          "still asks first, then loads at once. A missing card, a full card or a failed save is\n"
+                          "still shown. Online the game's own pages always run. Off: the game's own pages.");
     ImGui::Spacing();
     bool desyncEnds = Port_Setting("net_desync_end", 0) != 0;
     if (ImGui::Checkbox("End an online match on a desync", &desyncEnds)) {

@@ -231,7 +231,8 @@ void McFlow_CallModeRemoved(void) {
 #ifdef PORT
 /*
  * Quick saving (setting save_quick, on unless 0; never in online play, where both games have to run the same
- * frames): the saves (flows 0 and 4) and the load at start (flow 2) run without their window. The save's question
+ * frames): the saves (flows 0 and 4) and the load at start (flow 2) run without their window, and the load from the
+ * options (flow 1) asks its question and then runs without the waits. The save's question
  * is answered yes, no step waits its minimum display time (the card answers at once on PC), and the window's
  * opening and closing are skipped; a save shows a small icon instead (gs/ui.cpp). A question or an error the player
  * has to see (no card, a damaged or missing save at start, a full or unformatted card, a failed write, "continue
@@ -245,11 +246,61 @@ extern void Port_UiSaving(int state);               /* gs/ui.cpp: the save icon 
 static s32 sMcQuick;
 static s32 sMcQuickState, sMcQuickPolled; /* the state of the frame before; its card check has answered */
 
+/* The step's minimum time: a step that asks the card for its state first (MCF_POLL) is over once the card has
+   answered (McCard_GetInfo at its last step), and goes on with its own card operation; another is cut to `keep`. */
+static void McFlow_QuickTimer(s32 polls, s32 keep) {
+    if (gMcFlow->state != sMcQuickState) {
+        sMcQuickState = gMcFlow->state;
+        sMcQuickPolled = 0;
+    }
+    if (polls) {
+        if (gMcCardCmd == MCCARD_CMD_INFO && gMcCardStep >= 2) {
+            sMcQuickPolled = 1;
+        }
+        gMcFlow->timer = sMcQuickPolled ? 0 : 1;
+    } else if (gMcFlow->timer > keep) {
+        gMcFlow->timer = keep;
+    }
+}
+
+/* Flow 1 (Options > Load): the window and its question as the game has them; after yes, the checking and loading
+   pages go as soon as the card answers and "loaded" stays half a second. An error page is the game's own. */
+static void McFlow_QuickLoad(void) {
+    switch (gMcFlow->state) {
+    case 0x23:
+    case 0x25:
+    case 0x26:
+        break;
+    case 2: /* "load?" */
+        if (gMcFlow->choice > 0) {
+            McFlow_QuickTimer(0, 0);
+        }
+        break;
+    case 4:
+    case 0x13:
+        McFlow_QuickTimer(1, 0);
+        break;
+    case 6:
+        McFlow_QuickTimer(0, 1);
+        break;
+    case 0x14: /* (loaded) */
+        McFlow_QuickTimer(0, 30);
+        break;
+    default:
+        sMcQuick = 0;
+        break;
+    }
+}
+
 /* Before the flow's own frame. Returns 1 when that frame is done here. */
 static s32 McFlow_QuickStep(void) {
     s32 boot = gMcFlow->mode == MCFLOW_MODE_BOOT_LOAD;
     s32 polls = 0; /* the step asks the card for its state first (MCF_POLL) */
 
+    if (gMcFlow->mode == MCFLOW_MODE_LOAD) {
+        McFlow_QuickLoad();
+        return 0;
+    }
     switch (gMcFlow->state) {
     case 0x23: /* (no window) */
         gMcFlow->state = boot ? 5 : gMcFlow->next;
@@ -312,19 +363,7 @@ static s32 McFlow_QuickStep(void) {
         gMcFlow->choice = 0;
         return 0;
     }
-    if (gMcFlow->state != sMcQuickState) {
-        sMcQuickState = gMcFlow->state;
-        sMcQuickPolled = 0;
-    }
-    if (polls) { /* the step's time is over once the card has answered (McCard_GetInfo at its last step); after
-                    that the step goes on with its own card operation */
-        if (gMcCardCmd == MCCARD_CMD_INFO && gMcCardStep >= 2) {
-            sMcQuickPolled = 1;
-        }
-        gMcFlow->timer = sMcQuickPolled ? 0 : 1;
-    } else if (gMcFlow->timer > 1) {
-        gMcFlow->timer = 1;
-    }
+    McFlow_QuickTimer(polls, 1);
     return 0;
 }
 #endif
@@ -2782,10 +2821,11 @@ void McFlow_Term(void) {
 void McFlow_Start(s32 mode) {
     gMcFlow->mode = mode;
 #ifdef PORT
-    sMcQuick = (mode == MCFLOW_MODE_SAVE || mode == MCFLOW_MODE_SAVE_ALT || mode == MCFLOW_MODE_BOOT_LOAD) && !Port_NetActive() &&
+    sMcQuick = (mode == MCFLOW_MODE_SAVE || mode == MCFLOW_MODE_SAVE_ALT || mode == MCFLOW_MODE_LOAD ||
+                mode == MCFLOW_MODE_BOOT_LOAD) && !Port_NetActive() &&
                Port_Setting("save_quick", 1) != 0;
     sMcQuickState = -1;
-    if (sMcQuick && mode != MCFLOW_MODE_BOOT_LOAD) {
+    if (sMcQuick && mode != MCFLOW_MODE_BOOT_LOAD && mode != MCFLOW_MODE_LOAD) {
         Port_UiSaving(1);
     }
 #endif
