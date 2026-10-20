@@ -2,6 +2,7 @@
 // of a controller, or the key and button of its Controls list (gs_input.c: PortInput_Hotkey).
 // Everything it shows lives elsewhere (ui.h): the renderer's settings in gs_gpu.c, the bindings in gs_input.c.
 // It runs on the render thread, which owns the window and its events.
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1418,6 +1419,15 @@ static void misc_tab(void) {
         Port_SettingsWrite();
     }
     ImGui::SetItemTooltip("The page of legal text shown for five seconds before the title screen, every time.");
+    bool quickSave = Port_Setting("save_quick", 1) != 0;
+    if (ImGui::Checkbox("Quick saving", &quickSave)) {
+        Port_SettingSave("save_quick", quickSave);
+        Port_SettingsWrite();
+    }
+    ImGui::SetItemTooltip("Save and load without the memory card pages: no question, no waiting, a small card in the\n"
+                          "corner while it saves, and the save loaded at start without a page. A missing card, a full\n"
+                          "card or a failed save is still shown. Online the game's own pages always run. Off: the\n"
+                          "game's own pages.");
     ImGui::Spacing();
     bool desyncEnds = Port_Setting("net_desync_end", 0) != 0;
     if (ImGui::Checkbox("End an online match on a desync", &desyncEnds)) {
@@ -1993,6 +2003,52 @@ extern "C" void Port_UiBanner(const char *text, int ms) {
     sBannerUntil = ms > 0 ? SDL_GetTicks() + (Uint64)ms : 0;
 }
 
+// The save icon (quick saving, src/sys/mcflow_a.c): a small memory card in the bottom right corner of the picture
+// while the game saves, at least a second, then it fades. Set from the game's thread: 1 saving, 0 saved, -1 the
+// game's own window took over (an error: the icon goes at once).
+static volatile int sSaving;
+static Uint64 sSaveFrom, sSaveEnd; // (0: not shown; the end, 0 while it saves)
+extern "C" void Port_UiSaving(int state) {
+    sSaving = state;
+}
+
+static bool save_icon_on(Uint64 now) {
+    int state = sSaving;
+    if (state > 0 && (sSaveFrom == 0 || sSaveEnd != 0)) {
+        sSaveFrom = now;
+        sSaveEnd = 0;
+    }
+    if (sSaveFrom != 0 && sSaveEnd == 0 && (state <= 0 || now - sSaveFrom > 15000)) { // (or a flow left half-way)
+        sSaveEnd = state < 0 || now > sSaveFrom + 1000 ? now : sSaveFrom + 1000;
+        if (state == 0) {
+            PortA11y_Say(PortA11y_Label("Saved"), 0);
+        }
+    }
+    if (sSaveEnd != 0 && now >= sSaveEnd + 400) {
+        sSaveFrom = 0;
+    }
+    return sSaveFrom != 0;
+}
+
+static void save_icon_draw(Uint64 now) {
+    ImDrawList *dl = ImGui::GetForegroundDrawList();
+    float h = (float)gUiPresentH * 0.055f, w = h * 0.78f;
+    float x1 = (float)(gUiPresentX + gUiPresentW) - h * 0.6f, y1 = (float)(gUiPresentY + gUiPresentH) - h * 0.6f;
+    float x0 = x1 - w, y0 = y1 - h;
+    float a = sSaveEnd != 0 && now > sSaveEnd ? 1.0f - (float)(now - sSaveEnd) / 400.0f // fading
+                                               : 0.7f + 0.3f * cosf((float)(now - sSaveFrom) * 0.006f); // saving: it pulses
+    a = a < 0.0f ? 0.0f : a;
+    auto col = [a](int r, int g, int b, int alpha) { return IM_COL32(r, g, b, (int)((float)alpha * a)); };
+    ImVec2 card[5] = {ImVec2(x0, y0), ImVec2(x1 - w * 0.28f, y0), ImVec2(x1, y0 + w * 0.28f), ImVec2(x1, y1), ImVec2(x0, y1)};
+    dl->AddConvexPolyFilled(card, 5, col(20, 24, 40, 210));
+    dl->AddPolyline(card, 5, col(255, 255, 255, 235), ImDrawFlags_Closed, h * 0.06f > 1.5f ? h * 0.06f : 1.5f);
+    for (int i = 0; i < 3; i++) { // the contacts
+        float cx = x0 + w * (0.17f + 0.19f * (float)i);
+        dl->AddRectFilled(ImVec2(cx, y0 + h * 0.1f), ImVec2(cx + w * 0.1f, y0 + h * 0.3f), col(255, 255, 255, 220));
+    }
+    dl->AddRectFilled(ImVec2(x0 + w * 0.18f, y0 + h * 0.48f), ImVec2(x1 - w * 0.18f, y1 - h * 0.14f), col(245, 140, 35, 235), h * 0.05f);
+}
+
 // The meter: frames shown and the game's speed, and in an online match the connection. A setting (Video tab).
 static bool meter_on(void) {
     if (sMeter < 0) {
@@ -2367,9 +2423,11 @@ static bool frame_build(void) {
         sBanner[0] = '\0';
     }
     bool banner = sReady && sBanner[0] != '\0';
+    Uint64 now = SDL_GetTicks();
+    bool saving = save_icon_on(now) && sReady && gUiPresentW > 0 && gUiPresentH > 0;
     meter_count();
     sBuilt = false;
-    if (!sReady || (!sOpen && !sQuit && !notice && !overlay && !meter && !names && !bars && !chat && !banner)) {
+    if (!sReady || (!sOpen && !sQuit && !notice && !overlay && !meter && !names && !bars && !chat && !banner && !saving)) {
         return false;
     }
     if (sPadHold && sCapKind != 2) { // a binding was taken: the controller works the window again once nothing is held
@@ -2471,6 +2529,9 @@ static bool frame_build(void) {
             }
         }
         dl->AddText(font, size, ImVec2(x, y), IM_COL32(255, 236, 120, 255), sBanner, NULL, wrap);
+    }
+    if (saving) {
+        save_icon_draw(now);
     }
     if (notice) { // a line over the picture for a few seconds (the end of an online match)
         ImGuiIO &io = ImGui::GetIO();
