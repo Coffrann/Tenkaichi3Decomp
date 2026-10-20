@@ -1466,6 +1466,13 @@ static void misc_tab(void) {
         Port_SettingsWrite();
     }
     ImGui::SetItemTooltip("The page of legal text shown for five seconds before the title screen, every time.");
+    bool hidePointer = Port_Setting("hide_pointer", 1) != 0;
+    if (ImGui::Checkbox("Hide the mouse pointer during play", &hidePointer)) {
+        Port_SettingSave("hide_pointer", hidePointer);
+        Port_SettingsWrite();
+    }
+    ImGui::SetItemTooltip("The pointer is hidden over the game and shown in this window, the online windows, the\n"
+                          "question before the game closes and while a chat line is typed.");
     bool quickSave = Port_Setting("save_quick", 1) != 0;
     if (ImGui::Checkbox("Quick saving", &quickSave)) {
         Port_SettingSave("save_quick", quickSave);
@@ -2511,6 +2518,12 @@ static bool frame_build(void) {
     ui_scale_apply(); // (the window's size is known from here)
     fonts_apply(); // (a face chosen for the fight panels, between two frames)
     ImGui::NewFrame();
+    // The mouse pointer is hidden over the game's picture and shown with a window of this file that takes the mouse:
+    // the settings, the online windows, the question before the game closes, a chat line being typed (setting
+    // hide_pointer, on unless 0). The SDL back end hides it for this cursor at the next frame.
+    if (!sOpen && !sQuit && !sChat && Port_Setting("hide_pointer", 1) != 0) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    }
     if (bars) {
         bars_draw();
     }
