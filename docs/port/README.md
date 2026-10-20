@@ -3521,3 +3521,45 @@ The online pause (2026-10-13, above), the cases its notes left open: four matche
 menu every 700 to 1100 blanks for 60 to 200 blanks (cursor moves, the skill list, sometimes Return to Main Menu)
 under random input of player 1, about 33,000 fight blanks: no difference in about 29,000 comparisons. Whether a
 transformation or an Ultimate Blast's cut scene began under an open menu was not checked.
+
+## Songs in mp3, wav and flac played as they are: miniaudio (2026-10-19)
+
+The conversion of dropped MP3s to ADX at start-up is gone (`port/src/gs/song_mp3.c`, and `port/third_party/dr_libs`
+with it).
+An added song in mp3, wav or flac is now decoded and mixed by **miniaudio** (`port/third_party/miniaudio`, 0.11.25;
+`port/src/gs/snd_ma.c`) beside the SDL output the ADX streams use; the game's own files are untouched.
+
+- Where it is intercepted: `port/src/gs/snd_adx.c` `start()`, the one place every BGM / map / voice / movie stream
+  is opened. A file whose first two bytes are not 0x8000 (the ADX mark) and that `PortMa_Format` accepts is handed
+  to `PortMa_Start`; everything else is decoded as before. No `Bgm_Play` call site changed, and an ADX (or a mod's
+  `.bin` that is really ADX) keeps the old path exactly.
+- Format: `PortMa_Format` accepts a name ending in `.mp3` / `.wav` / `.flac` (any case) or a file whose first bytes
+  say RIFF, fLaC, ID3 or a bare MP3 frame, so a mod file under another name (a `.bin` in `mods/`) is recognized too.
+- The player state is mirrored: volume (the same gain `snd_adx.c` computes for SDL, a11y percent and all), pan (one
+  figure from the two channel pans), pause / resume, and "has it ended" (`ADXT_GetStat` polls `ma_sound_at_end`; a
+  native stream loops when it is an added song or is on one of the two music players (0 BGM, 1 MAP), as the disc's
+  own track did; a native voice line or streaming effect (players 2..5) reports `PLAYEND`, so the game goes on).
+  `ADXT_SetOutputMono` is taken over at the next start (miniaudio cannot change a sounding stream's channel count
+  in place).
+- Volume (2026-10-19, reported: dropped-in songs sounded lighter than the game's own): both paths are given the same
+  figure (`player_gain`, from `ADXT_SetOutVol`) and miniaudio passes it through unchanged — measured in the offline
+  engine, a tone of 0.8000 in comes back 0.8000 out with pan 0 and spatialization off, a mono file too, and 1.5 gives
+  1.1999 and 2 gives 1.5999 (exactly the multiplier). So the difference is the file: the game's ADX music is mastered
+  loud and a file made outside the port usually is not. A native stream is lifted by `native_lift` (1.5 = +3.5 dB by
+  default); `BT3_MA_GAIN=<multiplier>` sets it, and above about 2 a file already near full scale clips, as the engine
+  does not compress.
+- Build options (the manual, section 2.7), set in `snd_ma.c` before the include: `MA_NO_ENCODING`,
+  `MA_NO_GENERATION`, `MA_NO_RESOURCE_MANAGER`. The last means a stream is decoded by the `ma_decoder` the port
+  owns, created into the engine with `ma_sound_init_from_data_source`; the resource manager and its job thread are
+  not built. The WAV, FLAC and MP3 decoders are kept. No extra link libraries (miniaudio loads its Windows and
+  macOS backends at run time; on Linux it needs only `-lpthread -ldl -lm`, already linked).
+- Song list: `plat_songs.c` scans the songs folder for `.adx`, `.mp3`, `.wav` and `.flac`, puts the four scans
+  together and sorts once by name; `songs.txt` may name any of the four. `PortSongs_Refresh` is kept (`menu_c_e.c`,
+  `menu_e_b.c` call it) but does nothing: nothing is converted in the background any more, so the list does not
+  change while the program runs.
+- The engine is made lazily, the first time a native stream starts, so a run with no native songs never opens a
+  second device; without a device every native start fails, as the ADX path without SDL's device reports a stopped
+  player.
+
+Checked: `snd_ma.c` compiles clean with miniaudio 0.11.25 and the port's flags; `snd_adx.c` and `plat_songs.c`
+pass the front end. Not yet run: a native song heard, the mixing of the two devices, and the release build.
