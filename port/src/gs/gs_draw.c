@@ -112,6 +112,7 @@ int gsTexCount;
 unsigned gsFxOff;
 int gsGlowPercent = GLOW_DEFAULT;
 int gsGlarePercent = GLOW_DEFAULT;
+int gsSharpBlur = 1; /* the setting "Sharp stage blur" (sharp_blur): see draw_state */
 static int sGlowIsGlare; /* the glow chain under way is the sky's glare (gfxm_a.c GfxPost_DrawGlow: see below) */
 static int sBlockSample; /* the draw being set up reads a work buffer at the GS's 1x (orig.x): pipeline_get, key bit 25 */
 static int sTexPackOn = 1; /* the setting: use the texture pack (if one was found) */
@@ -717,6 +718,15 @@ static int target_lowres(uint32_t fbp) {
     if (on < 0) { on = getenv("BT3_GLOW_NATIVE") != NULL ? atoi(getenv("BT3_GLOW_NATIVE")) : 1; }
     return on && SCALE > 1 && (fbp == 0x150 || fbp == 0x170 || fbp == 0x1F6 || fbp == 0x1F8);
 }
+/* Only while the glow chain runs: GfxPost_DrawGlow marks its start and end in the display list (markers 0x20 and
+   0x21, GsGpu_Native). The same pages hold other things between two glows, at the internal resolution as ever:
+   the fighters' shadow picture (0x150, drawn by vertex program 0 and laid on the stage), the screen as the lens
+   flare, the heat haze and the water wobble take it, the stage's blur. (All four pages at 1x for the whole frame
+   took those down to the PS2's resolution as well.) */
+static int sInGlowChain;
+static int lowres_now(int t) {
+    return sInGlowChain && t >= 0 && target_lowres(gsTargets[t].fbp);
+}
 
 /* The shared target table's entry for a frame-buffer address. The attachments are the back end's: a new
    slot asks it to make them (GsBackend.targetEnsure), an evicted one to release them (targetDrop). */
@@ -754,7 +764,6 @@ int GsDraw_TargetGet(uint32_t fbp, int create) {
     gsTargets[slot].stale = 0;
     gsTargets[slot].gen = 0;
     gsTargets[slot].last = gGsFrame;
-    gsTargets[slot].lowres = target_lowres(fbp);
     if (slot == gsTargetCount) {
         gsTargetCount++;
     }
@@ -934,7 +943,11 @@ static int draw_state(int ctx, int topo, int sprite, int vu, GsDraw *d, float *u
                second to 90. */
             static int block = -1; /* BT3_GLOW_BLOCK=0: read as any texture (to compare) */
             if (block < 0) { block = getenv("BT3_GLOW_BLOCK") != NULL ? atoi(getenv("BT3_GLOW_BLOCK")) : 1; }
-            if (block && SCALE > 1 && gsTargets[src].fbp != (uint32_t)gGsMainFbp && (uint32_t)(gGs.frame[ctx] & 0x1FF) != (uint32_t)gGsMainFbp &&
+            /* Outside the glow chain (whose pages are at 1x then: target_lowres) only with "Sharp stage blur" off:
+               the stage's blur and the passes like it between work buffers, as the PS2 samples them. On (the
+               default), they are sampled at the internal resolution as before 0.1.38: crisper than the console,
+               the look of other emulators' upscaling, which players know and preferred (reported). */
+            if (block && !(gsSharpBlur && !sInGlowChain) && SCALE > 1 && gsTargets[src].fbp != (uint32_t)gGsMainFbp && (uint32_t)(gGs.frame[ctx] & 0x1FF) != (uint32_t)gGsMainFbp &&
                 ((gGs.tex1[ctx] >> 5) & 1)) {
                 d->orig[0] = (float)SCALE;
                 sBlockSample = 1;
@@ -956,7 +969,7 @@ static int draw_state(int ctx, int topo, int sprite, int vu, GsDraw *d, float *u
             }
             *us = tw / (float)GS_W;
             *vs = th / (float)GS_H;
-            if (gsTargets[src].lowres) { /* (its picture is in the corner: one texel per GS pixel) */
+            if (lowres_now(src)) { /* (its picture is in the corner: one texel per GS pixel) */
                 int k;
                 for (k = 0; k < 4; k++) {
                     d->rect[k] /= (float)SCALE;
@@ -994,7 +1007,7 @@ static int draw_state(int ctx, int topo, int sprite, int vu, GsDraw *d, float *u
     d->misc[2] = (float)(gGs.fba[ctx] & 1);
     d->blendc = (float)((gGs.alpha[ctx] >> 32) & 0xFF) / 128.0f;
     {
-        int ts = gsTargets[d->target].lowres ? 1 : SCALE; /* (a work buffer at the PS2's resolution: target_lowres) */
+        int ts = lowres_now(d->target) ? 1 : SCALE; /* (a work buffer at the PS2's resolution: target_lowres) */
         d->scissor[0] = (int)(sc & 0x7FF) * ts;
         d->scissor[1] = (int)((sc >> 32) & 0x7FF) * ts;
         d->scissor[2] = ((int)((sc >> 16) & 0x7FF) + 1) * ts - d->scissor[0];
@@ -1431,7 +1444,7 @@ void GsGpu_Draw(int type, int ctx, const GsVertex *v) {
         }
     }
     d.count = gsVertCount - d.first;
-    if (gsTargets[d.target].lowres) { /* into a work buffer at the PS2's resolution: its corner (target_lowres) */
+    if (lowres_now(d.target)) { /* into a work buffer at the PS2's resolution: its corner (target_lowres) */
         uint32_t k;
         for (k = d.first; k < gsVertCount; k++) {
             gsVerts[k].x /= (float)SCALE;
@@ -1505,7 +1518,7 @@ void GsGpu_DrawVu6(int ctx, const float *vertices, uint32_t count, const float *
     }
     gsTargets[d.target].draws++;
     gsTargets[d.target].gen = gGsPageGen[gsTargets[d.target].fbp & 511];
-    u.target[0] = gsTargets[d.target].lowres ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
+    u.target[0] = lowres_now(d.target) ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
     last = gsDrawCount ? &gsDraws[gsDrawCount - 1] : NULL;
     if (last != NULL && same_state(last, &d) && memcmp(&gsVuUni[last->uniform], &u, sizeof(u)) == 0) {
         last->count += d.count;
@@ -1553,7 +1566,7 @@ void GsGpu_DrawVu4(int ctx, const float *vertices, uint32_t count, const float *
     gsVuVertCount += count;
     gsTargets[d.target].draws++;
     gsTargets[d.target].gen = gGsPageGen[gsTargets[d.target].fbp & 511];
-    u.target[0] = gsTargets[d.target].lowres ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
+    u.target[0] = lowres_now(d.target) ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
     last = gsDrawCount ? &gsDraws[gsDrawCount - 1] : NULL;
     if (last != NULL && same_state(last, &d) && memcmp(&gsVuUni[last->uniform], &u, sizeof(u)) == 0) {
         last->count += d.count;
@@ -1621,7 +1634,7 @@ void GsGpu_DrawVu0(int layer, int ctx, const float *vertices, uint32_t count, co
     gsVuVertCount += count;
     gsTargets[d.target].draws++;
     gsTargets[d.target].gen = gGsPageGen[gsTargets[d.target].fbp & 511];
-    u.target[0] = gsTargets[d.target].lowres ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
+    u.target[0] = lowres_now(d.target) ? (float)SCALE : 1.0f; /* (a work buffer at the PS2's resolution: target_lowres) */
     last = gsDrawCount ? &gsDraws[gsDrawCount - 1] : NULL;
     if (last != NULL && same_state(last, &d) && memcmp(&gsVuUni[last->uniform], &u, sizeof(u)) == 0) {
         last->count += d.count;
@@ -1705,6 +1718,10 @@ void GsGpu_Native(int effect) {
     }
     if (effect >= 0x10 && effect <= 0x14) {
         gsAnchor = effect == 0x13 ? 0 : effect == 0x14 ? 4 : effect - 0x0F; /* 1 left, 2 right, 3 centre, 4 by position */
+        return;
+    }
+    if (effect == 0x20 || effect == 0x21) { /* the glow chain begins / ends (target_lowres) */
+        sInGlowChain = effect == 0x20;
         return;
     }
     if (effect != 1 || gsDrawCount == MAX_DRAWS || (gsFxOff & 1)) {
@@ -1850,6 +1867,7 @@ void GsGpu_GetSettings(PortVideo *v) {
     v->fxOff = (int)gsFxOff;
     v->glow = gsGlowPercent;
     v->glare = gsGlarePercent;
+    v->sharpBlur = gsSharpBlur;
     v->music = gPortMusicPercent;
     v->effects = gPortSePercent;
     v->voices = gPortVoicePercent;
@@ -1883,6 +1901,7 @@ void GsGpu_SetSettings(const PortVideo *v) {
     gsFxOff = (unsigned)v->fxOff & 63;
     gsGlowPercent = v->glow;
     gsGlarePercent = v->glare;
+    gsSharpBlur = v->sharpBlur;
     if (v->music != now.music || v->effects != now.effects || v->voices != now.voices || v->stage != now.stage) { /* (the streams that are playing follow at once) */
         gPortMusicPercent = v->music;
         gPortSePercent = v->effects;
@@ -1918,6 +1937,7 @@ void GsGpu_SetSettings(const PortVideo *v) {
     Port_SettingSave("fx_off", (int)gsFxOff);
     Port_SettingSave("glow", gsGlowPercent);
     Port_SettingSave("glare", gsGlarePercent);
+    Port_SettingSave("sharp_blur", gsSharpBlur);
     Port_SettingSave("music", gPortMusicPercent);
     Port_SettingSave("effects", gPortSePercent);
     Port_SettingSave("voices", gPortVoicePercent);
@@ -1976,6 +1996,7 @@ int GsGpu_Init(void) {
     gsGlowPercent = getenv("BT3_GLOW") != NULL ? atoi(getenv("BT3_GLOW")) : Port_Setting("glow", GLOW_DEFAULT);
     /* (one strength for both until 2026-10-21: a saved "glow" is the glare's too until it has its own) */
     gsGlarePercent = getenv("BT3_GLARE") != NULL ? atoi(getenv("BT3_GLARE")) : Port_Setting("glare", gsGlowPercent);
+    gsSharpBlur = (getenv("BT3_SHARP_BLUR") != NULL ? atoi(getenv("BT3_SHARP_BLUR")) : Port_Setting("sharp_blur", 1)) != 0;
     MenuText_SetFontId(Port_Setting("menu_font_id", 0));
     MenuText_SetBattleFontId(Port_Setting("battle_font_id", 0));
     MenuText_SetSharedFontId(Port_Setting("text_font_id", 0));
@@ -4389,6 +4410,7 @@ static void skip_decide(void) {
 }
 
 void GsGpu_FrameEnd(void) {
+    sInGlowChain = 0; /* (a chain is always within one frame) */
     if (gPortResim) { /* a frame that is only being re-run: nothing was recorded, nothing is shown */
         return;
     }

@@ -1402,6 +1402,10 @@ static void effects_tab(PortVideo &v) {
     ImGui::SliderInt("Glare strength", &v.glare, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
     ImGui::SetItemTooltip("The glare of the sky and the stage's light.\n"
                           "100%% is what the PlayStation 2 draws; the default here is 60%%.");
+    bool sharp = v.sharpBlur != 0;
+    if (ImGui::Checkbox("Sharp stage blur", &sharp)) { v.sharpBlur = sharp; }
+    ImGui::SetItemTooltip("On: the stage's blur keeps the detail of the internal resolution (crisper, as other\n"
+                          "emulators show it upscaled). Off: as soft as the PlayStation 2 draws it. No difference at 1x.");
 }
 
 // ---- "an update is available" ----

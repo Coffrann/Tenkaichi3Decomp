@@ -115,7 +115,7 @@ extern int gsTexCount;          /* textures in the shared decode cache */
 extern GsTex gsWhite;           /* the back end's 1x1 white texture */
 extern int gsPendingScale;      /* the user asked for a new SCALE: applied between two frames */
 extern unsigned gsFxOff;        /* effects the user can switch off (BT3_FX_OFF, or F1..F5 while running) */
-extern int gsGlowPercent, gsGlarePercent;
+extern int gsGlowPercent, gsGlarePercent, gsSharpBlur;
 extern int gsAnchor;            /* widescreen: which part of the screen the 2D pieces being drawn belong to */
 extern int gsDepthByteIsFog;    /* the top byte of the depth page as the game last left it */
 extern unsigned gsNative;       /* native effect markers seen this frame */
