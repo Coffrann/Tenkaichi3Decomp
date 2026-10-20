@@ -897,6 +897,16 @@ static int draw_state(int ctx, int topo, int sprite, int vu, GsDraw *d, float *u
             }
             d->tex = sBackend->targetColor(src);
             d->tex_is_target = 1;
+            /* A work buffer (not the picture itself) read with the bilinear filter: the steps of the glow chain
+               shrink, blur and add it back by sampling half a texel to the side, which averages two texels. At a
+               higher internal resolution half a GS texel is several texels, the filter blends only the two nearest
+               (nearly the same colour), and each step just moved the picture: the glow came out as a sharp copy of
+               the character beside it (Super Saiyan hair, reported). orig.x = SCALE: gs.frag samples it as the GS
+               would at 1x, each GS texel the average of its block. (The picture's own copies, the cross-fade, stay
+               sharp: their source is the picture.) */
+            if (SCALE > 1 && gsTargets[src].fbp != (uint32_t)gGsMainFbp && ((gGs.tex1[ctx] >> 5) & 1)) {
+                d->orig[0] = (float)SCALE;
+            }
             {
                 /* The buffer is a corner of a larger texture here, so the GS's own edge handling has to be done
                    by hand: CLAMP gives the texel range per axis (0 repeat and 1 clamp: the texture's size; 2 and
