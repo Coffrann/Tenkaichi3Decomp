@@ -494,7 +494,9 @@ static int bank_parts(const uint8_t *b, long size, uint32_t *hd, uint32_t *hdSiz
    voice set, the slot plays that set's bank. */
 static void voice_own_bank(int slot) {
     extern int Port_NetVoiceAlt(void); /* net.c */
-    static uint8_t (*sig)[64]; /* the first 64 bytes of each default bank's header table */
+    /* each default bank's header table, whole: the first 64 bytes alone are the same for two fighters' banks (3 and
+       122: Goku (End) and Turles Great Ape), and the first of them was taken for both until 0.1.38 */
+    static struct { uint8_t *hd; uint32_t size; } *sig;
     static int tried;
     Bank *bk = &sBanks[slot];
     int c, found = -1;
@@ -512,15 +514,18 @@ static void voice_own_bank(int slot) {
         sig = calloc(VOICE_BANKS, sizeof(*sig));
         for (c = 0; sig != NULL && c < VOICE_BANKS; c++) {
             if ((b = bank_file(VOICE_BANK_DEFAULT + c, &size)) != NULL) {
-                if (bank_parts(b, size, &hd, &hdSize, &sq, &sqSize, &smp, &smpSize) && hdSize >= 64) {
-                    memcpy(sig[c], b + hd, 64);
+                if (bank_parts(b, size, &hd, &hdSize, &sq, &sqSize, &smp, &smpSize) && hdSize >= 64 &&
+                    (sig[c].hd = malloc(hdSize)) != NULL) {
+                    memcpy(sig[c].hd, b + hd, hdSize);
+                    sig[c].size = hdSize;
                 }
                 free(b);
             }
         }
     }
     for (c = 0; sig != NULL && c < VOICE_BANKS && found < 0; c++) {
-        if (sig[c][0] != 0 && memcmp(sig[c], bk->hd, 64) == 0) {
+        /* (the first 64 bytes first: the game's table may be a shorter one, of another bank) */
+        if (sig[c].hd != NULL && memcmp(sig[c].hd, bk->hd, 64) == 0 && memcmp(sig[c].hd, bk->hd, sig[c].size) == 0) {
             found = c;
         }
     }

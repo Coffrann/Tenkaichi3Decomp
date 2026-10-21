@@ -458,10 +458,13 @@ static void stop(Player *p) {
    it all the same: the stream that is PLAYED is the other set's file of the same line, while what the game is told
    about it (how long it lasts: view_start) stays the default file's, so the two copies agree. Ids of partition 2
    (file number + 0xD48), default set -> second set:
-       menu guides      0x87F2..0x8D4D  - 0x55C     (VOICE_LANG2_OFFSET)
+       menu guides      0x87D4..0x8D2F  - 0x55C     (VOICE_LANG2_OFFSET)
        fighters' lines  0xCC32..0x10B15 - 0x3EE4    (161 fighters, 100 lines each)
        announcer        0x10B6C..0x10BA3 - 0x38
-   Checked against the disc: every id of these ranges and its partner are streams. */
+   Checked against the disc: every id of these ranges and its partner are streams. The guides' two sets end in ten
+   near-silent files each (0x87CA..0x87D3, 0x8D26..0x8D2F); 0x8D30 and on are the fight's streamed effects (the
+   clash, a transformation's, the moves', a stage's), played the same for both voice sets: until 0.1.38 the range
+   ran on to 0x8D4D, and online a player with the second set heard a guide's line in the place of those effects. */
 static const char *voice_own_path(const char *path, char *buf, size_t size) {
     extern int Port_NetVoiceAlt(void); /* net.c */
     const char *dir = strstr(path, "pzs3us2/"), *num;
@@ -475,7 +478,7 @@ static const char *voice_own_path(const char *path, char *buf, size_t size) {
         return path;
     }
     id = fid + 0xD48;
-    if (id >= 0x87F2 && id < 0x8D4E) {
+    if (id >= 0x87D4 && id < 0x8D30) {
         other = id - 0x55C;
     } else if (id >= 0xCC32 && id < 0x10B16) {
         other = id - 0x3EE4;
