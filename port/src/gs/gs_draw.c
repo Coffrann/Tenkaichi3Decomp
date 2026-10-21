@@ -1124,8 +1124,9 @@ static void date_snapshot(const GsDraw *d) {
    of alpha-testing draws that follows it, in the buffer's own pixels, a little wider. A back end copies only that.
    (The whole buffer was copied each time: nine times a frame for a fight's HUD, whose pieces are small. On an
    integrated graphics chip at 3x those copies were a quarter of the frame's time: 45 pictures a second with them,
-   62 without. Measured 2026-10-12.) A run with a draw whose place is worked out by a vertex program is not known
-   here: then the whole buffer, as before. Returns 0 when there is nothing to copy. */
+   62 without. Measured 2026-10-12.) A draw whose place is worked out by a vertex program is not known here: it
+   counts as its scissor. (Until 0.1.38 it meant the whole buffer, 2048 x 2048 at 2x, four times in a fight frame:
+   on an integrated chip at 2x 128 pictures a second, 138 with the scissor.) Returns 0 when there is nothing to copy. */
 int GsDraw_DateRegion(uint32_t k, int *rx, int *ry, int *rw, int *rh) {
     const GsDraw *c = &gsDraws[k];
     float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
@@ -1139,8 +1140,17 @@ int GsDraw_DateRegion(uint32_t k, int *rx, int *ry, int *rw, int *rh) {
         }
         any = 1;
         if (d->vu || d->wall) {
-            whole = 1;
-            break;
+            /* placed by a vertex program (or drawn anew between pictures): where is not known here, but nothing of
+               it lands outside its scissor, which is the screen's rectangle for a fight's layers */
+            float s = (float)SCALE;
+            if (d->scissor[2] <= 0 || d->scissor[3] <= 0) {
+                continue; /* (draws nothing) */
+            }
+            if ((float)d->scissor[0] / s < x0) { x0 = (float)d->scissor[0] / s; }
+            if ((float)d->scissor[1] / s < y0) { y0 = (float)d->scissor[1] / s; }
+            if ((float)(d->scissor[0] + d->scissor[2]) / s > x1) { x1 = (float)(d->scissor[0] + d->scissor[2]) / s; }
+            if ((float)(d->scissor[1] + d->scissor[3]) / s > y1) { y1 = (float)(d->scissor[1] + d->scissor[3]) / s; }
+            continue;
         }
         for (j = 0; j < d->count; j++) {
             const Vtx *v = &gsVerts[d->first + j];
