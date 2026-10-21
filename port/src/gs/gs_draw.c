@@ -154,6 +154,8 @@ typedef struct Tex {
     int battleText; /* the source texture has Battle font artwork, even with Original selected */
     uint32_t ow, oh, rw, rh; /* then: the original's size and the replacement's */
     uint32_t amax;           /* and the largest alpha byte of the original */
+    int pack;                /* a texture pack's replacement still being read (gs_texpack.c), or -1 */
+    uint32_t packAlpha;      /* and the amax it will have */
 } Tex;
 static Tex sTex[MAX_TEX];
 static uint16_t sTexBucket[TEX_BUCKETS]; /* index + 1 of a cache entry, 0 = empty (open addressing) */
@@ -380,6 +382,55 @@ static GsTex tbo_texture(uint32_t id) {
     return tex;
 }
 
+/* A pack's levels into a new texture (the back end takes a copy of each). */
+static GsTex pack_texture(const TexPackImage *pack) {
+    GsTex tex = sBackend->texCreate(pack->w, pack->h, pack->format & 3, pack->levels);
+    int level;
+    for (level = 0; tex != 0 && level < pack->levels; level++) {
+        uint32_t lw = pack->w >> level ? pack->w >> level : 1, lh = pack->h >> level ? pack->h >> level : 1;
+        void *buf = malloc(pack->bytes[level]);
+        memcpy(buf, pack->data[level], pack->bytes[level]);
+        sBackend->texUpload(tex, level, lw, lh, pack->format & 3, buf, pack->bytes[level]);
+    }
+    return tex;
+}
+
+/* A texture made from the original while its replacement was still being read: once the file is in, it is made
+   again from that, at its first use in a frame. The one it replaces may still be in the lists of the frames before
+   (Smooth motion draws the last one again while the game makes the next): it is released a few frames later. */
+static void pack_arrived(Tex *c) {
+    static struct { GsTex tex; unsigned frame; } old[256];
+    static unsigned oldHead, oldTail;
+    TexPackImage pack;
+    GsTex tex;
+    int got;
+
+    while (oldTail != oldHead && old[oldTail & 255].frame + 4 <= gGsFrame) {
+        sBackend->texDestroy(old[oldTail++ & 255].tex);
+    }
+    got = TexPack_Get(c->pack, &pack);
+    if (got < 0 || !sTexPackOn) {
+        c->pack = -1;
+        return;
+    }
+    if (got == 0 || oldHead - oldTail == 256 || sBackend->texSlotsLeft() < pack.levels) {
+        return; /* (not yet: asked again at the next frame's first use) */
+    }
+    tex = pack_texture(&pack);
+    if (tex == 0) {
+        return;
+    }
+    old[oldHead & 255].tex = c->tex;
+    old[oldHead++ & 255].frame = gGsFrame;
+    c->tex = tex;
+    c->replaced = 1;
+    c->rw = pack.w;
+    c->rh = pack.h;
+    c->amax = c->packAlpha;
+    c->pack = -1;
+    gGpuTexReplaced++;
+}
+
 /* GS memory -> an RGBA texture for the current TEX0 (alpha as stored: 0x80 is opaque). The back end makes
    the texture and takes the decoded pixels (freed after it has uploaded them). */
 static GsTex texture_get(int ctx) {
@@ -391,7 +442,7 @@ static GsTex texture_get(int ctx) {
     uint64_t tex_t0;
     TexPackImage pack;
     uint32_t packMaxAlpha = 255, rw = tw, rh = th;
-    int packFormat = GS_TEXFMT_RGBA8, replaced = 0, menuText = 0, sharedText = 0, battleText = 0;
+    int replaced = 0, menuText = 0, sharedText = 0, battleText = 0, packWait = -1;
 
     if (tw > 1024) { tw = 1024; }
     if (th > 1024) { th = 1024; }
@@ -412,6 +463,9 @@ static GsTex texture_get(int ctx) {
         gen ^= 0x5BD1E995u; /* with the pack and without it are different textures: switching it takes effect at once */
     }
     if (sLast != NULL && sLast->tex0 == t0 && sLast->texa == texa && sLast->gen == gen) {
+        if (sLast->pack >= 0 && sLast->last != gGsFrame) {
+            pack_arrived(sLast);
+        }
         sLast->last = gGsFrame;
         return sLast->tex; /* the common case: the same texture as the previous primitive */
     }
@@ -420,6 +474,9 @@ static GsTex texture_get(int ctx) {
         while (sTexBucket[h] != 0) {
             Tex *c = &sTex[sTexBucket[h] - 1];
             if (c->tex0 == t0 && c->texa == texa && c->gen == gen) {
+                if (c->pack >= 0 && c->last != gGsFrame) {
+                    pack_arrived(c);
+                }
                 c->last = gGsFrame;
                 sLast = c;
                 return c->tex;
@@ -460,17 +517,15 @@ static GsTex texture_get(int ctx) {
     tex_t0 = gpu_now();
     /* a texture pack's replacement for this texture, if there is one (gs_texpack.c) */
     if (sTexPackOn && TexPack_Count() != 0) {
-        const char *path = TexPack_Lookup(tbp, tbw, psm, tw, th, (uint32_t)((t0 >> 34) & 1), cbp, cpsm, &packMaxAlpha);
-        if (path != NULL && TexPack_Load(path, &pack)) {
-            packFormat = pack.format & 3;
-            if (sBackend->texSlotsLeft() >= pack.levels) {
-                replaced = 1;
-                gGpuTexReplaced++;
-                rw = pack.w;
-                rh = pack.h;
-            } else {
-                TexPack_Free(&pack);
-            }
+        int id = TexPack_Lookup(tbp, tbw, psm, tw, th, (uint32_t)((t0 >> 34) & 1), cbp, cpsm, &packMaxAlpha);
+        int got = id >= 0 ? TexPack_Get(id, &pack) : -1;
+        if (got > 0 && sBackend->texSlotsLeft() >= pack.levels) {
+            replaced = 1;
+            gGpuTexReplaced++;
+            rw = pack.w;
+            rh = pack.h;
+        } else if (got == 0) {
+            packWait = id; /* still being read: the original until it is in (pack_arrived) */
         }
     }
     /* A texture pack still uses the game's source pixels to identify Battle text for widescreen geometry. */
@@ -523,24 +578,12 @@ static GsTex texture_get(int ctx) {
     }
     gGpuTexNs += gpu_now() - tex_t0;
     t = &sTex[gsTexCount];
-    t->tex = replaced ? sBackend->texCreate(rw, rh, packFormat, pack.levels) : sBackend->texCreate(rw, rh, GS_TEXFMT_RGBA8, 1);
+    t->tex = replaced ? pack_texture(&pack) : sBackend->texCreate(rw, rh, GS_TEXFMT_RGBA8, 1);
     if (t->tex == 0) {
         free(px);
-        if (replaced) {
-            TexPack_Free(&pack);
-        }
         return gsWhite;
     }
-    if (replaced) {
-        int level;
-        for (level = 0; level < pack.levels; level++) {
-            uint32_t lw = pack.w >> level ? pack.w >> level : 1, lh = pack.h >> level ? pack.h >> level : 1;
-            void *buf = malloc(pack.bytes[level]);
-            memcpy(buf, pack.data[level], pack.bytes[level]);
-            sBackend->texUpload(t->tex, level, lw, lh, packFormat, buf, pack.bytes[level]);
-        }
-        TexPack_Free(&pack);
-    } else {
+    if (!replaced) {
         if (getenv("BT3_TEX_DUMP") != NULL) { /* every texture as it is decoded, raw RGBA with a small header (looking at the game's art) */
             static unsigned n;
             char name[600];
@@ -576,6 +619,8 @@ static GsTex texture_get(int ctx) {
     t->rw = rw;
     t->rh = rh;
     t->amax = replaced ? packMaxAlpha : 255u;
+    t->pack = packWait;
+    t->packAlpha = packMaxAlpha;
     return t->tex;
 }
 
