@@ -722,7 +722,10 @@ static int target_lowres(uint32_t fbp) {
    0x21, GsGpu_Native). The same pages hold other things between two glows, at the internal resolution as ever:
    the fighters' shadow picture (0x150, drawn by vertex program 0 and laid on the stage), the screen as the lens
    flare, the heat haze and the water wobble take it, the stage's blur. (All four pages at 1x for the whole frame
-   took those down to the PS2's resolution as well.) */
+   took those down to the PS2's resolution as well.) The blur of distant things (stg_b.c StgFog_Draw) has the same
+   markers: it is the picture copied at half size into 0x150 and stretched back over it, and with the copy at the
+   internal resolution nothing was blurred (at 6x a twelfth of the detail taken out of distant scenery, at 1x more
+   than half; reported 2026-10-21). */
 static int sInGlowChain;
 static int lowres_now(int t) {
     return sInGlowChain && t >= 0 && target_lowres(gsTargets[t].fbp);
@@ -947,8 +950,14 @@ static int draw_state(int ctx, int topo, int sprite, int vu, GsDraw *d, float *u
                the stage's blur and the passes like it between work buffers, as the PS2 samples them. On (the
                default), they are sampled at the internal resolution as before 0.1.38: crisper than the console,
                the look of other emulators' upscaling, which players know and preferred (reported). */
-            if (block && !(gsSharpBlur && !sInGlowChain) && SCALE > 1 && gsTargets[src].fbp != (uint32_t)gGsMainFbp && (uint32_t)(gGs.frame[ctx] & 0x1FF) != (uint32_t)gGsMainFbp &&
-                ((gGs.tex1[ctx] >> 5) & 1)) {
+            /* And the picture shrunk into such a page while it is at the PS2's resolution (the blur of distant
+               things: stg_b.c StgFog_Draw): a filtered read between two of the picture's own texels took a sixth of a
+               GS pixel's worth of it at 6x, the leaves' detail came through as hard dots and the copy stretched back
+               showed them as squares. Read as the GS reads it at 1x, each GS texel the average of its block. */
+            int shrink = lowres_now(d->target) && gsTargets[src].fbp == (uint32_t)gGsMainFbp;
+            if (block && SCALE > 1 && ((gGs.tex1[ctx] >> 5) & 1) &&
+                (shrink || (!(gsSharpBlur && !sInGlowChain) && gsTargets[src].fbp != (uint32_t)gGsMainFbp &&
+                            (uint32_t)(gGs.frame[ctx] & 0x1FF) != (uint32_t)gGsMainFbp))) {
                 d->orig[0] = (float)SCALE;
                 sBlockSample = 1;
 
