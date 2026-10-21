@@ -18,6 +18,7 @@
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include "gs_internal.h"
 #include "gs_draw.h"
@@ -546,6 +547,71 @@ static int vk_init(void) {
 
 /* --- the frame ---------------------------------------------------------------------------------- */
 
+/* The frame's clear, as the game draws it: an untextured, unblended black rectangle over the whole of its scissor,
+   written whatever the depth test, at one depth (the first draw of a fight's picture: two triangles at the depth
+   just above the farthest). Drawn, it is a pass of colour, alpha byte and depth over the whole picture through the
+   shader that writes its own depth (8% of a fight frame on an integrated chip at 2x); the same values cleared by the
+   render pass cost next to nothing. `depth`: what gs.frag would have written (its rounding to the depth buffer's
+   whole numbers, worked out the same way). The whole texture is cleared, not only the scissor: nothing of a
+   picture lies outside it (every draw on it is held inside), and outside it only the depth differs, which nothing
+   reads. BT3_FAST_CLEAR=0: drawn as before. */
+static int clear_draw(const GsDraw *d, float *depth) {
+    static int on = -1;
+    uint32_t key, j;
+    const Vtx *v;
+    float x0, y0, x1, y1, z;
+
+    if (on < 0) { on = getenv("BT3_FAST_CLEAR") != NULL ? atoi(getenv("BT3_FAST_CLEAR")) : 1; }
+    if (!on || d->native || d->vu || d->wall || d->mode[0] != 0 || d->mode[3] != 0 || d->misc[1] != 0.0f || d->misc[2] != 0.0f ||
+        d->count != 6 || d->scissor[0] != 0 || d->scissor[1] != 0) {
+        return 0;
+    }
+    key = sPipes[d->pipeline].key;
+    /* no blending, depth test "always" (1), depth written, all four channels, GS vertices, no stencil */
+    if ((key & 0x3FFu) != 0 || ((key >> 10) & 3) != 1 || !((key >> 12) & 1) || ((key >> 16) & 0xF) != 0xF || ((key >> 20) & 3) != 0 ||
+        (key & (1u << 24)) != 0) {
+        return 0;
+    }
+    v = &gsVerts[d->first];
+    z = v[0].z;
+    x0 = y0 = 1e9f;
+    x1 = y1 = -1e9f;
+    for (j = 0; j < 6; j++) {
+        if (v[j].r != 0 || v[j].g != 0 || v[j].b != 0 || v[j].a != 0 || v[j].z != z) {
+            return 0;
+        }
+        if (v[j].x < x0) { x0 = v[j].x; }
+        if (v[j].x > x1) { x1 = v[j].x; }
+        if (v[j].y < y0) { y0 = v[j].y; }
+        if (v[j].y > y1) { y1 = v[j].y; }
+    }
+    /* the two triangles of the rectangle (0,0)..(x1,y1), and that rectangle is the scissor and the whole screen at
+       least (a view of the split screen clears its half: a clear of the texture would take the other half too) */
+    if (x0 != 0.0f || y0 != 0.0f || x1 < 512.0f || y1 < 448.0f ||
+        x1 * (float)SCALE != (float)d->scissor[2] || y1 * (float)SCALE != (float)d->scissor[3] ||
+        !(v[0].x != v[1].x || v[0].y != v[1].y) || (v[0].x == v[1].x && v[1].x == v[2].x) || (v[3].x == v[4].x && v[4].x == v[5].x)) {
+        return 0;
+    }
+    {   /* the area of the two triangles together is the rectangle's: they do not overlap and leave nothing out */
+        float a = 0.0f;
+        int t;
+        for (t = 0; t < 2; t++) {
+            const Vtx *p = &v[t * 3];
+            a += fabsf((p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[2].x - p[0].x) * (p[1].y - p[0].y)) * 0.5f;
+        }
+        if (a != x1 * y1) {
+            return 0;
+        }
+    }
+    if (gsZMax > 0.0f && gsZMax < 2.0e7f) { /* (gs.frag, its end) */
+        float zn = floorf(z * gsZMax), zq = zn / gsZMax;
+        *depth = zq > z ? (zn - 1.0f) / gsZMax : zq;
+    } else {
+        *depth = z;
+    }
+    return 1;
+}
+
 static void vk_frame_end(void) {
     SDL_GPUCommandBuffer *cmd;
     SDL_GPUCopyPass *copy;
@@ -919,6 +985,39 @@ static void vk_frame_end(void) {
             SDL_EndGPURenderPass(pass);
             pass = NULL;
             continue;
+        }
+        {
+            float clearDepth;
+            if (clear_draw(d, &clearDepth)) { /* the frame's clear: the render pass clears instead (clear_draw) */
+                SDL_GPUColorTargetInfo cts[2];
+                SDL_GPUDepthStencilTargetInfo dt;
+                if (pass != NULL) {
+                    SDL_EndGPURenderPass(pass);
+                }
+                SDL_zero(cts);
+                SDL_zero(dt);
+                cts[0].texture = sTgCol[d->target];
+                cts[0].load_op = SDL_GPU_LOADOP_CLEAR;
+                cts[0].store_op = SDL_GPU_STOREOP_STORE;
+                cts[1] = cts[0];
+                cts[1].texture = sTgAux[d->target];
+                dt.texture = sTgDep[d->target];
+                dt.load_op = SDL_GPU_LOADOP_CLEAR;
+                dt.store_op = SDL_GPU_STOREOP_STORE;
+                dt.clear_depth = clearDepth;
+                dt.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+                dt.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+                gsTargets[d->target].cleared = 1;
+                pass = SDL_BeginGPURenderPass(cmd, cts, 2, &dt);
+                if (sShadowStencil) { SDL_SetGPUStencilReference(pass, 0); }
+                cur = d->target;
+                bound = -1;
+                lastPipe = lastUni = lastSampler = -1;
+                lastTex = NULL;
+                haveFu = haveScissor = 0;
+                lastBlend = -1.0f;
+                continue;
+            }
         }
         shadowStart = (sPipes[d->pipeline].key & (1u << 24)) != 0 &&
             (n == 0 || gsDraws[n - 1].native || gsDraws[n - 1].target != d->target ||
