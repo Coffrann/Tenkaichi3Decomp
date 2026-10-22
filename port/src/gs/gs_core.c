@@ -1087,6 +1087,7 @@ static int sJob;            /* 0 none, 1 start the GPU back end, 2 run a list */
 static uint32_t sJobTadr;
 static int sJobTte, sInitResult;
 static int sStopping; /* the program is ending: the render thread leaves its loop (render_stop) */
+static int sListDone; /* the list being run has been drawn and its first picture shown (Smooth motion's others may follow) */
 static void run_chain(uint32_t tadr, int tte);
 static void run_frozen(void);
 static void walk_chain(uint32_t tadr, int tte, void (*block)(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte));
@@ -1186,6 +1187,10 @@ static void *render_thread(void *arg) {
                 GsGpu_InterpHurry(0);
             }
             run_frozen();
+            pthread_mutex_lock(&sLock);
+            sListDone = 1;
+            pthread_cond_broadcast(&sDone);
+            pthread_mutex_unlock(&sLock);
             {
                 extern void GsGpu_InterpRun(void); /* gs_draw.c: Smooth motion's pictures after the first, each when due */
                 if (sGpu) {
@@ -1228,6 +1233,22 @@ static void render_stop(void) {
     pthread_join(sThread, NULL);
 }
 
+/* For the pad read (plat_stub.c), when the game has time to spare: returns once the list handed over last has been
+   drawn and its first picture shown. Without the thread that drawing comes before the pads are read, at the start of
+   the next tick; with it the game read the pads at once and the drawing went on beside it, which made what was read
+   older by the drawing's time when its picture came (2.4 ms measured at 2x). A game that is behind does not wait
+   here: then the drawing beside the game's work is what the thread is for. */
+void Gs_RenderListWait(void) {
+    if (!sThreaded || pthread_equal(pthread_self(), sThread)) {
+        return;
+    }
+    pthread_mutex_lock(&sLock);
+    while (sJob == 2 && !sListDone) {
+        pthread_cond_wait(&sDone, &sLock);
+    }
+    pthread_mutex_unlock(&sLock);
+}
+
 int Gs_RenderThreaded(void) {
     return sThreaded;
 }
@@ -1247,6 +1268,7 @@ void Gs_RenderIdle(void) {
 static void render_post(int job, uint32_t tadr, int tte) {
     pthread_mutex_lock(&sLock);
     sJob = job;
+    sListDone = 0;
     sJobTadr = tadr;
     sJobTte = tte;
     pthread_cond_signal(&sWake);

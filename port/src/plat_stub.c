@@ -156,6 +156,10 @@ int Port_LateInput(void);
 #define BLANK_NS (16683350ull * 1000ull / (unsigned long long)Port_SpeedMilli())
 unsigned long long Port_BlankNs(void) { return BLANK_NS; }
 
+/* The last vertical blank was waited for (the game had time to spare), not reached late: then the pad read waits
+   for the render thread to have drawn the last list (Gs_RenderListWait), as the game without the thread does. */
+PORT_HOST static int sPaceSlack;
+
 #ifdef _WIN32
 /* Windows 11 throttles a process it takes for background work (its "EcoQoS"): on a processor with performance and
    efficiency cores (Intel's 12th generation on) its threads may be put on the efficiency cores, and its timer requests
@@ -196,6 +200,7 @@ static void vblank_wait(void) {
         after = t;
         next += BLANK_NS;
         sPaceLate++;
+        sPaceSlack = 0;
     } else if (next > t && next - t < 100000000ull) {
 #ifdef _WIN32
         /* Windows 10 (1803) and later have a timer good to a fraction of a millisecond: waited on to within 0.4 ms of
@@ -237,6 +242,7 @@ static void vblank_wait(void) {
         after = now_ns();
         gPortSleptNs += after - t; /* the time really spent waiting (a sleep can return early or late) */
         next += BLANK_NS;
+        sPaceSlack = 1;
     } else {
         after = t;
         next = t + BLANK_NS; /* the first one, or more than a tenth of a second behind: a new grid from now */
@@ -453,6 +459,10 @@ int scePad2Read(int socket, unsigned char *data) {
 
     if (socket == 0) {
         late_wait();
+        if (sPaceSlack) {
+            extern void Gs_RenderListWait(void); /* gs/gs_core.c: the render thread's drawing of the last list */
+            Gs_RenderListWait();
+        }
         Port_LagMark('R');
     }
     if (Port_NetActive()) {
