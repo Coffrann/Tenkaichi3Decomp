@@ -1299,6 +1299,7 @@ static void video_tab(PortVideo &v) {
             bool thr = Port_Setting("render_thread", 0) != 0;
             if (ImGui::Checkbox("Render on a second processor core (experimental, after a restart)", &thr)) {
                 Port_SettingSave("render_thread", thr ? 1 : 0);
+                Port_SettingsWrite(); /* (kept outside the window's own values: written here, or it was lost at the end) */
             }
             ImGui::SetItemTooltip("The picture is prepared and shown on a core of its own while the game computes the next\n"
                                   "moment: faster where the processor is the slow part (older or low-power machines).\n"
