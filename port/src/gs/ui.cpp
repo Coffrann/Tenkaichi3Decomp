@@ -1290,7 +1290,8 @@ static void video_tab(PortVideo &v) {
             ImGui::SetItemTooltip("The game reads the controller, computes, and then waits before the picture is shown:\n"
                                   "about 33 ms in a fight. With this on the wait comes first, so the picture follows\n"
                                   "your press by the few milliseconds the machine needs. The game itself is unchanged.\n"
-                                  "Not used online or with in-between pictures. Off by default: on a machine that\n"
+                                  "With Smooth motion as well: its in-between picture then follows your press at once and\n"
+                                  "the full one a refresh later. Not used online. Off by default: on a machine that\n"
                                   "cannot keep up it may stutter where the original order would not.");
         }
         {
