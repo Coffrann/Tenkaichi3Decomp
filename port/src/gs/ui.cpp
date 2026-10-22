@@ -1293,6 +1293,18 @@ static void video_tab(PortVideo &v) {
                                   "Not used online or with in-between pictures. Off by default: on a machine that\n"
                                   "cannot keep up it may stutter where the original order would not.");
         }
+        {
+            extern int Port_Setting(const char *name, int def);
+            extern void Port_SettingSave(const char *name, int value);
+            bool thr = Port_Setting("render_thread", 0) != 0;
+            if (ImGui::Checkbox("Render on a second processor core (experimental, after a restart)", &thr)) {
+                Port_SettingSave("render_thread", thr ? 1 : 0);
+            }
+            ImGui::SetItemTooltip("The picture is prepared and shown on a core of its own while the game computes the next\n"
+                                  "moment: faster where the processor is the slow part (older or low-power machines).\n"
+                                  "The same picture and the same game. Takes effect when the game is started again.\n"
+                                  "Not with the OpenGL renderer, and not on machines with two cores or fewer.");
+        }
     }
     SDL_DisplayID *displays = SDL_GetDisplays(&count);
     if (v.display > count) { v.display = 0; }

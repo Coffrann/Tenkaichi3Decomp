@@ -1151,11 +1151,24 @@ static void race_compare(void) {
 }
 
 static void *render_thread(void *arg) {
+    extern void PortInput_Pump(void); /* gs_input.c */
     (void)arg;
     pthread_mutex_lock(&sLock);
     for (;;) {
         while (sJob == 0) {
-            pthread_cond_wait(&sWake, &sLock);
+            /* waiting for the game's next list: the window's events every millisecond (the window is this thread's) */
+            struct timespec until;
+            clock_gettime(CLOCK_REALTIME, &until);
+            until.tv_nsec += 1000000;
+            if (until.tv_nsec >= 1000000000) {
+                until.tv_nsec -= 1000000000;
+                until.tv_sec++;
+            }
+            if (pthread_cond_timedwait(&sWake, &sLock, &until) != 0 && sJob == 0 && sGpu) {
+                pthread_mutex_unlock(&sLock);
+                PortInput_Pump();
+                pthread_mutex_lock(&sLock);
+            }
         }
         if (sJob == 1) {
             sInitResult = GsGpu_Init();
@@ -1268,6 +1281,20 @@ static const char *gs_mode(void) {
     return strcmp(m, "none") == 0 || strcmp(m, "off") == 0 || strcmp(m, "0") == 0 ? NULL : m;
 }
 
+static int render_thread_wanted(void) {
+    extern int Port_Setting(const char *name, int def);
+    extern int SDL_GetNumLogicalCPUCores(void);
+    const char *e = getenv("BT3_GS_THREAD");
+    int want = e != NULL ? atoi(e) != 0 : Port_Setting("render_thread", 0) != 0;
+#ifdef __APPLE__
+    want = 0;
+#endif
+    if (want && e == NULL && (Port_Setting("gpu_api", 0) == 1 || SDL_GetNumLogicalCPUCores() <= 2)) {
+        want = 0;
+    }
+    return want;
+}
+
 static int gs_on(void) {
     static int on = -1;
 
@@ -1281,14 +1308,19 @@ static int gs_on(void) {
             sscanf(getenv("BT3_GS_PROBE"), "%d,%d", &sProbeX, &sProbeY);
         }
         if (on && strcmp(gs_mode(), "gpu") == 0) {
-            /* BT3_GS_THREAD=1: the back end and the list run on the render thread (experimental: the game was seen
-               to change data a list still refers to, which shows as a jumping camera). Default: this thread. */
-            sThreaded = getenv("BT3_GS_THREAD") != NULL;
+            /* The render thread (setting "render_thread", F1 > Video; BT3_GS_THREAD=0/1 over it): the back end, the
+               window and the list run on a thread of their own while the game computes the next tick. Not with
+               OpenGL (its context is one thread's, and the game's thread asks the back end for a few things), not
+               on macOS (a window there is the main thread's), not with two logical processors or fewer. */
+            sThreaded = render_thread_wanted();
             if (sThreaded) {
                 pthread_create(&sThread, NULL, render_thread, NULL);
                 render_post(1, 0, 0);
                 render_wait();
                 sGpu = sInitResult;
+                if (sGpu && GsGpu_BackendIsGl()) {
+                    fprintf(stderr, "bt3: render thread: the Vulkan renderer did not start; OpenGL on the thread (the game's own reads of the picture are left out)\n");
+                }
             } else {
                 sGpu = GsGpu_Init();
             }
@@ -1561,6 +1593,9 @@ void Gs_StoreImage(unsigned bp, unsigned w, unsigned h, unsigned char *rgb) {
         fprintf(stderr, "gs: frame %u: the game reads %ux%u back from buffer %#x, row %u\n", sFrame, w, h, fbp, y0);
     }
     if (sGpu) {
+        if (Gs_RenderThreaded() && GsGpu_BackendIsGl()) {
+            return; /* (OpenGL on the render thread: its context is that thread's; the game gets black, as before) */
+        }
         Gs_RenderIdle(); /* (the back end is the render thread's while it runs a list) */
         {
             /* First choice: the frame stays on the card as it was drawn and the cross-fade draws from that (the

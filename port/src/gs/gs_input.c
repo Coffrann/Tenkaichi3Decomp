@@ -929,6 +929,15 @@ void PortInput_VibrationTest(int player) {
 /* The controllers' and the keyboard's state as it is at this moment (plat_stub.c, "Low input lag": the pads are
    read long after the window's events were last taken). The events themselves stay queued for the window. */
 void PortInput_Fresh(void) {
+    if (Gs_RenderThreaded() && !Gs_OnRenderThread()) {
+        return; /* (the window is the render thread's: it takes the events, every millisecond it waits: PortInput_Pump) */
+    }
+    SDL_PumpEvents();
+}
+
+/* The render thread (BT3_GS_THREAD): the window's events, taken while it waits for work or for a picture's time.
+   The controllers' and the keys' state the game's thread reads is then never more than a millisecond old. */
+void PortInput_Pump(void) {
     SDL_PumpEvents();
 }
 

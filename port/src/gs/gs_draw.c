@@ -66,6 +66,9 @@ void Gs_HoldFrame(void) {
         return;
     }
     last = now;
+    if (Gs_RenderThreaded() && !Gs_OnRenderThread() && GsGpu_BackendIsGl()) {
+        return; /* (OpenGL on the render thread: its context is that thread's) */
+    }
     Gs_RenderIdle(); /* (from the game's thread: the list and the back end are the render thread's while it runs one) */
     gsDrawCount = gsVertCount = gsVuVertCount = gsVuIdxCount = gsVuUniCount = 0;
     sBackend->frameEnd();
@@ -4420,11 +4423,13 @@ void GsGpu_InterpHurry(int on) { /* (1 from the game's thread; 0 by the render t
     __atomic_store_n(&sInterpHurry, on, __ATOMIC_RELEASE);
 }
 void GsGpu_InterpRun(void) {
+    extern void PortInput_Pump(void); /* gs_input.c: the window's events (the window is this thread's) */
     while (sInterpNext != 0 && sBackend != NULL) {
         uint64_t due = interp_due(), now;
         if (getenv("BT3_UNCAPPED") == NULL) {
             while ((now = gpu_now()) < due && !__atomic_load_n(&sInterpHurry, __ATOMIC_ACQUIRE)) {
                 SDL_DelayPrecise(due - now < 1000000ull ? due - now : 1000000ull); /* (a millisecond at a time: a hurry is seen) */
+                PortInput_Pump();
             }
         }
         if (__atomic_load_n(&sInterpHurry, __ATOMIC_ACQUIRE)) {
@@ -4476,6 +4481,10 @@ void GsGpu_InterpPump(int ahead_ms, int all) {
             return;
         }
     }
+}
+
+int GsGpu_BackendIsGl(void) {
+    return sBackend == &sGlBackend;
 }
 
 void GsGpu_InterpFlush(void) { /* (the name Port_VBlank knew it by) */
