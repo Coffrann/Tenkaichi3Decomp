@@ -2207,6 +2207,11 @@ static unsigned sFontNext;
 
 static const FontName *font_name(int style, const char *text) {
     int choice = MenuText_GetFont();
+    if (choice == 0) {
+        for (int i = 1; i < MenuText_FontCount(); i++) {
+            if (MenuText_FontAvailable(i, MENU_TEXT_MENU)) { choice = i; break; }
+        }
+    }
     int resolution = choice ? 4 : 1; // (a font's strip: 4 times the disc's, for a window larger than the game's picture)
     if (text == NULL || text[0] == '\0' || (choice == 0 && !NameFont_Ready())) { // (not ready: asked again next frame)
         return NULL;
@@ -2621,11 +2626,11 @@ static bool frame_build(void) {
            window (the letterbox gs_gpu.c just blitted into). */
         float sx = (float)gUiPresentW / 512.0f;
         float sy = (float)gUiPresentH / 448.0f;
-        // With a menu font every name is drawn here, so the names belong to the game picture, behind the settings
-        // and other windows. With "Original" only an added stage or song is, in front of everything as before.
-        ImDrawList *dl = MenuText_GetFont() != 0 ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+        // Stage/song names belong to the game picture, behind settings and other windows,
+        // including added names rendered while Menu font is Original.
+        ImDrawList *dl = ImGui::GetBackgroundDrawList();
 
-        if (nameOn && MenuText_GetFont() != 0) {
+        if (nameOn) {
             const FontName *fn = font_name(NF_STAGE, PortStages_Name(gUiNameIdx));
             float x = (float)gUiPresentX + (float)gUiNameX * sx, y = (float)gUiPresentY + (float)gUiNameY * sy;
             if (fn != NULL) {
@@ -2634,30 +2639,8 @@ static bool frame_build(void) {
             } else {
                 name_text(dl, PortStages_Name(gUiNameIdx), x, y, (float)gUiNameW * sx, (float)gUiNameH * sy, true);
             }
-        } else if (nameOn && gUiNameIdx >= (int)sNameCount) { // no pre-rendered name for this one
-            /* In the game's lettering if the disc's names have all its characters, else as plain text. The menu's
-               rectangle is the strip image's (384x48, set 64 right and 14 down in the 512x64 row of the disc's own
-               name picture); the lettering goes where that row is. The menu's movie draws the row a little below
-               the clip's position: kNameDy, measured by drawing a disc name both ways (the same for the songs). */
-            static const float kNameDy = 1.5f;
-            const FontName *fn = font_name(NF_STAGE, PortStages_Name(gUiNameIdx));
-            if (fn != NULL) {
-                float kx = (float)gUiNameW * sx / 384.0f, ky = (float)gUiNameH * sy / 48.0f;
-                font_draw(dl, fn, (float)gUiPresentX + (float)gUiNameX * sx - 64.0f * kx, (float)gUiPresentY + (float)gUiNameY * sy + (kNameDy - 14.0f) * ky, kx, ky, true);
-            } else {
-                name_text(dl, PortStages_Name(gUiNameIdx), (float)gUiPresentX + (float)gUiNameX * sx, (float)gUiPresentY + (float)gUiNameY * sy,
-                          (float)gUiNameW * sx, (float)gUiNameH * sy, true);
-            }
-        } else if (nameOn) {
-            float x = (float)gUiPresentX + (float)gUiNameX * sx;
-            float y = (float)gUiPresentY + (float)gUiNameY * sy;
-            float w = (float)gUiNameW * sx;
-            float h = (float)gUiNameH * sy;
-            dl->AddImage(ImTextureRef((ImTextureID)(intptr_t)sNameTex), ImVec2(x, y), ImVec2(x + w, y + h),
-                         ImVec2(0.0f, (float)gUiNameIdx / (float)sNameCount),
-                         ImVec2(1.0f, (float)(gUiNameIdx + 1) / (float)sNameCount));
         }
-        if (songOn && MenuText_GetFont() != 0) {
+        if (songOn) {
             const FontName *fn = font_name(gUiSongLit ? NF_SONG_LIT : NF_SONG, PortSongs_Name(gUiSongIdx));
             float x = (float)gUiPresentX + (float)gUiSongX * sx, y = (float)gUiPresentY + (float)gUiSongY * sy;
             if (fn != NULL) {
@@ -2665,25 +2648,6 @@ static bool frame_build(void) {
             } else {
                 name_text(dl, PortSongs_Name(gUiSongIdx), x, y, (float)gUiSongW * sx, (float)gUiSongH * sy, false);
             }
-        } else if (songOn && gUiSongIdx >= (int)sSongCount) {
-            // (the rectangle is the 512x32 row of the disc's song-name picture itself)
-            const FontName *fn = font_name(gUiSongLit ? NF_SONG_LIT : NF_SONG, PortSongs_Name(gUiSongIdx));
-            if (fn != NULL) {
-                static const float kSongDx = -0.2f, kSongDy = 2.35f;
-                float kx = (float)gUiSongW * sx / 512.0f, ky = (float)gUiSongH * sy / 32.0f;
-                font_draw(dl, fn, (float)gUiPresentX + (float)gUiSongX * sx + kSongDx * kx, (float)gUiPresentY + (float)gUiSongY * sy + kSongDy * ky, kx, ky, false);
-            } else {
-                name_text(dl, PortSongs_Name(gUiSongIdx), (float)gUiPresentX + (float)gUiSongX * sx, (float)gUiPresentY + (float)gUiSongY * sy,
-                          (float)gUiSongW * sx, (float)gUiSongH * sy, false);
-            }
-        } else if (songOn) {
-            float x = (float)gUiPresentX + (float)gUiSongX * sx;
-            float y = (float)gUiPresentY + (float)gUiSongY * sy;
-            float w = (float)gUiSongW * sx;
-            float h = (float)gUiSongH * sy;
-            dl->AddImage(ImTextureRef((ImTextureID)(intptr_t)sSongTex), ImVec2(x, y), ImVec2(x + w, y + h),
-                         ImVec2(0.0f, (float)gUiSongIdx / (float)sSongCount),
-                         ImVec2(1.0f, (float)(gUiSongIdx + 1) / (float)sSongCount));
         }
     }
     ImGui::Render();
