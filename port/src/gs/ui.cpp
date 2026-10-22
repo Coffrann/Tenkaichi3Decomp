@@ -1389,9 +1389,10 @@ static void effects_tab(PortVideo &v) {
         {"Glare and glow", "The bloom around bright things and the sky's glare."},
         {"Distance blur", "The soft focus on distant scenery."},
         {"Movement blur", "The blur of the scenery while the view turns or moves fast."},
-        {"Weather", "The dust, snow and clouds that drift over some stages (Desert and Rocky Area at noon, Rocky Area\n"
-                    "in the evening, Kami's Lookout, Glacier, Muscle Tower, the Time Chamber). Big soft sprites over\n"
-                    "much of the picture: off, those stages run as fast as the others (a fifth faster at 3x)."},
+        {"Weather", "The haze of dust or mist that drifts over some stages (Desert and Rocky Area at noon, Rocky Area\n"
+                    "in the evening, Kami's Lookout; Glacier, Muscle Tower and the Time Chamber have a little of it too).\n"
+                    "A faint tint, made of big soft sprites over the whole picture: off, those stages run as fast as the\n"
+                    "others (a fifth faster at 3x)."},
     };
     for (int i = 0; i < 7; i++) {
         bool on = !((v.fxOff >> i) & 1);
