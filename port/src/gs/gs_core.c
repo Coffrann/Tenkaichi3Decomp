@@ -1086,6 +1086,7 @@ static int sThreaded;
 static int sJob;            /* 0 none, 1 start the GPU back end, 2 run a list */
 static uint32_t sJobTadr;
 static int sJobTte, sInitResult;
+static int sStopping; /* the program is ending: the render thread leaves its loop (render_stop) */
 static void run_chain(uint32_t tadr, int tte);
 static void run_frozen(void);
 static void walk_chain(uint32_t tadr, int tte, void (*block)(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte));
@@ -1155,7 +1156,7 @@ static void *render_thread(void *arg) {
     (void)arg;
     pthread_mutex_lock(&sLock);
     for (;;) {
-        while (sJob == 0) {
+        while (sJob == 0 && !sStopping) {
             /* waiting for the game's next list: the window's events every millisecond (the window is this thread's) */
             struct timespec until;
             clock_gettime(CLOCK_REALTIME, &until);
@@ -1164,11 +1165,15 @@ static void *render_thread(void *arg) {
                 until.tv_nsec -= 1000000000;
                 until.tv_sec++;
             }
-            if (pthread_cond_timedwait(&sWake, &sLock, &until) != 0 && sJob == 0 && sGpu) {
+            if (pthread_cond_timedwait(&sWake, &sLock, &until) != 0 && sJob == 0 && !sStopping && sGpu) {
                 pthread_mutex_unlock(&sLock);
                 PortInput_Pump();
                 pthread_mutex_lock(&sLock);
             }
+        }
+        if (sStopping && sJob == 0) {
+            pthread_mutex_unlock(&sLock);
+            return NULL;
         }
         if (sJob == 1) {
             sInitResult = GsGpu_Init();
@@ -1206,6 +1211,21 @@ static void render_wait(void) {
         pthread_cond_wait(&sDone, &sLock);
     }
     pthread_mutex_unlock(&sLock);
+}
+
+/* At the program's end (atexit), from the game's thread: the list being drawn is finished, then the thread leaves
+   its loop and is waited for, so that nothing it uses (the window, the device) is taken down under it. From the
+   render thread itself (Esc in the window, the settings window's Quit) there is nothing to wait for. */
+static void render_stop(void) {
+    if (!sThreaded || pthread_equal(pthread_self(), sThread)) {
+        return;
+    }
+    render_wait();
+    pthread_mutex_lock(&sLock);
+    sStopping = 1;
+    pthread_cond_broadcast(&sWake);
+    pthread_mutex_unlock(&sLock);
+    pthread_join(sThread, NULL);
 }
 
 int Gs_RenderThreaded(void) {
@@ -1318,6 +1338,7 @@ static int gs_on(void) {
                 render_post(1, 0, 0);
                 render_wait();
                 sGpu = sInitResult;
+                atexit(render_stop);
                 if (sGpu && GsGpu_BackendIsGl()) {
                     fprintf(stderr, "bt3: render thread: the Vulkan renderer did not start; OpenGL on the thread (the game's own reads of the picture are left out)\n");
                 }
