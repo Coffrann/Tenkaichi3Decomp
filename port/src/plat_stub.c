@@ -156,6 +156,26 @@ int Port_LateInput(void);
 #define BLANK_NS (16683350ull * 1000ull / (unsigned long long)Port_SpeedMilli())
 unsigned long long Port_BlankNs(void) { return BLANK_NS; }
 
+#ifdef _WIN32
+/* Windows 11 throttles a process it takes for background work (its "EcoQoS"): on a processor with performance and
+   efficiency cores (Intel's 12th generation on) its threads may be put on the efficiency cores, and its timer requests
+   are ignored while its window is covered. Reported: the efficiency cores at 100% while the game stuttered. The
+   process asks for neither (as emulators do). Looked up at run time: Windows 8 and later have the call, Windows 10
+   1709 and later the throttling; older ones simply go on as before. */
+static void win_no_throttling(void) {
+    typedef BOOL (WINAPI *SetInfo)(HANDLE, int, void *, DWORD);
+    struct { ULONG version, controlMask, stateMask; } state = {
+        1,         /* PROCESS_POWER_THROTTLING_CURRENT_VERSION */
+        0x1 | 0x4, /* EXECUTION_SPEED | IGNORE_TIMER_RESOLUTION: both decided here, */
+        0,         /* both off: full speed, timer requests honoured */
+    };
+    SetInfo set = (SetInfo)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetProcessInformation");
+    if (set != NULL) {
+        set(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &state, sizeof(state));
+    }
+}
+#endif
+
 static void vblank_wait(void) {
     struct timespec ts;
     unsigned long long t = now_ns(), after;
@@ -178,18 +198,36 @@ static void vblank_wait(void) {
         sPaceLate++;
     } else if (next > t && next - t < 100000000ull) {
 #ifdef _WIN32
-        /* Windows' sleep is only good to about a millisecond, and only once the timer resolution has been asked
-           for: sleep to within a millisecond and a half of the moment, then give the rest away in small slices. */
+        /* Windows 10 (1803) and later have a timer good to a fraction of a millisecond: waited on to within 0.4 ms of
+           the moment, then the rest is spent spinning (the processor's pause between looks). Before, Sleep went to
+           within 1.5 ms and Sleep(0) gave the rest away in slices: a core kept busy for a tenth of every blank, which
+           Windows can take for background work. Without that timer (older Windows), as before. */
         static int asked;
+        static HANDLE timer;
         if (!asked) {
             asked = 1;
             timeBeginPeriod(1);
+            win_no_throttling();
+            timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
         }
-        if (next - t > 1500000ull) {
-            Sleep((DWORD)((next - t - 1500000ull) / 1000000ull));
-        }
-        while (now_ns() < next) {
-            Sleep(0);
+        if (timer != NULL) {
+            if (next - t > 400000ull) {
+                LARGE_INTEGER due;
+                due.QuadPart = -(LONGLONG)((next - t - 400000ull) / 100ull); /* relative, in 100 ns */
+                if (SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+                    WaitForSingleObject(timer, INFINITE);
+                }
+            }
+            while (now_ns() < next) {
+                YieldProcessor();
+            }
+        } else {
+            if (next - t > 1500000ull) {
+                Sleep((DWORD)((next - t - 1500000ull) / 1000000ull));
+            }
+            while (now_ns() < next) {
+                Sleep(0);
+            }
         }
 #else
         ts.tv_sec = 0;
