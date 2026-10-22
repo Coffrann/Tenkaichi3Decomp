@@ -2119,6 +2119,7 @@ static Vu0Uniform *sInterpPrev, *sInterpBlend;
 static uint32_t *sInterpPrevSig, *sInterpSig;
 static uint32_t sInterpPrevCount;
 static int sInterpNext;  /* the tick's next picture still to be shown (2..sInterpSteps), 0 = none */
+static int sInterpRepeat; /* the tick could not be blended (a camera cut): its pictures are its own, shown again */
 static int sInterpSteps = 2;
 static unsigned sInterpLastBlank;
 static uint64_t sInterpTickNs = 33366700ull; /* how long the tick being shown lasts */
@@ -4340,6 +4341,20 @@ static void interp_cost(uint64_t ns) {
 /* Shows picture `step` of the tick's sInterpSteps: the list replayed `step / steps` of the way from the previous
    tick; the last one is the tick itself. The recorded list has to be in place (interp_counts_restore). */
 static void interp_show(int step) {
+    if (sInterpRepeat) {
+        /* A tick the in-between pictures could not be made for (a camera cut, a new scene): its own picture again, at
+           the moments they would have been shown. The same picture as before (the eye sees the cut either way), but
+           pictures keep coming at the same rate: a frame counter's lows, and a display that follows the pictures'
+           rate (G-Sync, FreeSync), no longer see a tick's worth of nothing at every cut. */
+        uint64_t t0 = gpu_now();
+        sBackend->frameEnd();
+        interp_cost(gpu_now() - t0);
+        interp_present_log(step < sInterpSteps ? 'D' : 'R');
+        if (step >= sInterpSteps) {
+            sInterpRepeat = 0;
+        }
+        return;
+    }
     if (step < sInterpSteps) {
         Vu0Uniform *real = gsVuUni;
         Vtx *realVerts = gsVerts;
@@ -4394,6 +4409,7 @@ static void interp_show(int step) {
 static int interp_show_next(void) {
     if (sInterpNext == sInterpSteps && getenv("BT3_INTERP_ONLY") != NULL) {
         sInterpNext = 0; /* testing: only in-between pictures are shown (so a screenshot holds one) */
+        sInterpRepeat = 0;
         interp_counts_restore();
         interp_remember();
         gsVertCount = gsVuVertCount = gsVuIdxCount = gsVuUniCount = gsDrawCount = 0;
@@ -4610,6 +4626,7 @@ void GsGpu_FrameEnd(void) {
                 sInterpSaved.tdraws[i] = gsTargets[i].draws;
             }
             before = gpu_now();
+            sInterpRepeat = 0; /* (a blendable tick: its pictures are blends) */
             interp_show(1); /* the first in-between picture; the others and the real one follow (GsGpu_InterpPump) */
             sInterpBlendShown = gpu_now();
             sInterpBlendTook = sInterpBlendShown - before;
@@ -4631,9 +4648,27 @@ void GsGpu_FrameEnd(void) {
             }
         } else {
             uint64_t t1;
+            /* Smooth motion on and the tick due more than one picture, but not blendable (a cut): its picture is shown
+               now and again at the in-between pictures' moments (sInterpRepeat), from the same list, kept as an
+               in-between tick keeps it. Not where nothing is shown (BT3_INTERP_REALONLY, a run without pictures). */
+            int repeat = gsInterp > 0 && sInterpSteps > 1 && !GS_NO_PICTURE && gsDrawCount != 0 && getenv("BT3_INTERP_REALONLY") == NULL &&
+                         getenv("BT3_INTERP_NOREPEAT") == NULL;
             if (gsInterp > 0) {
                 interp_remember();
                 gInterpSkipped++;
+            }
+            if (repeat) {
+                sInterpSaved.verts = gsVertCount;
+                sInterpSaved.vuVerts = gsVuVertCount;
+                sInterpSaved.vuIdx = gsVuIdxCount;
+                sInterpSaved.vuUni = gsVuUniCount;
+                sInterpSaved.draws = gsDrawCount;
+                sInterpSaved.anchor = gsAnchor;
+                sInterpSaved.skipped = gsSkipped;
+                sInterpSaved.native = gsNative;
+                for (i = 0; i < gsTargetCount && i < MAX_TARGETS; i++) {
+                    sInterpSaved.tdraws[i] = gsTargets[i].draws;
+                }
             }
             t1 = gpu_now();
             sBackend->frameEnd();
@@ -4641,6 +4676,12 @@ void GsGpu_FrameEnd(void) {
             interp_present_log('S');
             scale_apply();
             menu_labels_apply();
+            if (repeat) {
+                sInterpBlendShown = gpu_now();
+                sInterpBlendTook = sInterpBlendShown - t1 < 4000000ull ? sInterpBlendShown - t1 : 4000000ull;
+                sInterpRepeat = 1;
+                sInterpNext = 2;
+            }
         }
     }
     gGpuEndNs += gpu_now() - t0;
