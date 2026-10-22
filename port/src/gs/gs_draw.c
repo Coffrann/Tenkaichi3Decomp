@@ -15,6 +15,7 @@
  * Not handled yet: a target sampled while it is being drawn to, region clamp / repeat, destination-alpha tests,
  * frame-buffer masks, 16-bit targets' precision.
  */
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +66,7 @@ void Gs_HoldFrame(void) {
         return;
     }
     last = now;
+    Gs_RenderIdle(); /* (from the game's thread: the list and the back end are the render thread's while it runs one) */
     gsDrawCount = gsVertCount = gsVuVertCount = gsVuIdxCount = gsVuUniCount = 0;
     sBackend->frameEnd();
     gsDrawCount = draws;
@@ -1112,6 +1114,9 @@ typedef struct WallMesh {
 #define WALL_RING 32
 static WallMesh sWallRing[WALL_RING];
 static uint32_t sWallSeq; /* patches handed over so far */
+/* With the render thread (BT3_GS_THREAD) the game hands patches over while the thread may be reading them for the
+   tick before's in-between pictures: one patch is written, and the ring read, under this lock. */
+static pthread_mutex_t sWallLock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t sWallTex0; /* TEX0 of the wall's texture: the triangles drawn with it are the wall's */
 static float sWallUs = 1.0f, sWallVs = 1.0f;
 extern int gsInterp;
@@ -1130,6 +1135,7 @@ void Port_WallMesh(const void *key, int second, int culled, const float *screen,
         extern unsigned gPortVBlanks;
         fprintf(stderr, "wall: hook at frame %u blank %u: key %p second %d culled %d m0 %.4f (have %d)\n", gGsFrame, gPortVBlanks, key, second, culled, screen[0], (int)sWallSeq);
     }
+    pthread_mutex_lock(&sWallLock);
     sWallTex0 = tex0;
     m = &sWallRing[sWallSeq++ % WALL_RING];
     m->key = key;
@@ -1142,6 +1148,7 @@ void Port_WallMesh(const void *key, int second, int culled, const float *screen,
     for (i = 0; i < quadCount; i++) {
         memcpy(m->idx[i], (const uint8_t *)quads + i * 0x20, sizeof(m->idx[i])); /* EftBoundQuad: four vertex numbers, a normal */
     }
+    pthread_mutex_unlock(&sWallLock);
 }
 
 /* Two draws can be merged into one call when everything they need is the same. `scissor` is compared as
@@ -3759,7 +3766,13 @@ static void interp_wall_real(void) {
     }
 }
 
+static void interp_wall_into_locked(float t, Vtx *buf, int test);
 static void interp_wall_into(float t, Vtx *buf, int test) {
+    pthread_mutex_lock(&sWallLock);
+    interp_wall_into_locked(t, buf, test);
+    pthread_mutex_unlock(&sWallLock);
+}
+static void interp_wall_into_locked(float t, Vtx *buf, int test) {
     static const float kSame[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     /* BT3_INTERP_WALLTEST=1 (with BT3_INTERP_ONLY): the patch as it is at the tick itself, seen by the tick's own
        camera. The picture must then be the game's own picture of the tick: the test that what is drawn here is
@@ -4247,6 +4260,9 @@ static void interp_present_log(char kind) {
     if (!tried) {
         tried = 1;
         fp = getenv("BT3_PRESENT_LOG") != NULL ? fopen(getenv("BT3_PRESENT_LOG"), "w") : NULL;
+        if (fp != NULL) {
+            setvbuf(fp, NULL, _IOLBF, 0); /* (whole lines: a run that is ended from outside keeps what it had) */
+        }
     }
     if (fp != NULL) {
         fprintf(fp, "%llu %c %u\n", (unsigned long long)(gpu_now() / 1000ull), kind, gPortVBlanks);
@@ -4371,9 +4387,59 @@ static void interp_show(int step) {
    18 ms to the next). Called from Port_VBlank before it waits for the blank (`ahead` = what may be waited for here:
    the pictures that fall before the blank) and after (those at it).
    all = 1: the game is back with a new tick: what is left is dropped, except the tick's real picture. */
+/* The next of the tick's pictures (the in-between ones, then the real one). 0: BT3_INTERP_ONLY ended them there. */
+static int interp_show_next(void) {
+    if (sInterpNext == sInterpSteps && getenv("BT3_INTERP_ONLY") != NULL) {
+        sInterpNext = 0; /* testing: only in-between pictures are shown (so a screenshot holds one) */
+        interp_counts_restore();
+        interp_remember();
+        gsVertCount = gsVuVertCount = gsVuIdxCount = gsVuUniCount = gsDrawCount = 0;
+        return 0;
+    }
+    interp_counts_restore();
+    {
+        int step = sInterpNext;
+        sInterpNext = step == sInterpSteps ? 0 : step + 1;
+        interp_show(step);
+    }
+    return 1;
+}
+
+/* When the tick's next picture is due. */
+static uint64_t interp_due(void) {
+    uint64_t due = sInterpBlendShown + (uint64_t)(sInterpNext - 1) * (sInterpTickNs / (uint64_t)sInterpSteps);
+    return due > sInterpBlendTook ? due - sInterpBlendTook : 0; /* (replaying the list takes that long again) */
+}
+
+/* With the render thread (BT3_GS_THREAD) the tick's pictures after the first are its: it shows each when it is due,
+   right after the list, while the game computes the next tick (the game's thread does not call the pump then).
+   When the game hands its next list over early, GsGpu_InterpHurry: the real picture at once, as the pump's `all`. */
+static volatile int sInterpHurry;
+void GsGpu_InterpHurry(int on) { /* (1 from the game's thread; 0 by the render thread as it starts a list: a hurry is for
+                                    the list it is running, not one that comes after it) */
+    __atomic_store_n(&sInterpHurry, on, __ATOMIC_RELEASE);
+}
+void GsGpu_InterpRun(void) {
+    while (sInterpNext != 0 && sBackend != NULL) {
+        uint64_t due = interp_due(), now;
+        if (getenv("BT3_UNCAPPED") == NULL) {
+            while ((now = gpu_now()) < due && !__atomic_load_n(&sInterpHurry, __ATOMIC_ACQUIRE)) {
+                SDL_DelayPrecise(due - now < 1000000ull ? due - now : 1000000ull); /* (a millisecond at a time: a hurry is seen) */
+            }
+        }
+        if (__atomic_load_n(&sInterpHurry, __ATOMIC_ACQUIRE)) {
+            sInterpNext = sInterpSteps; /* the game is back with its next tick: what is left is dropped, but the real picture */
+        }
+        if (!interp_show_next()) {
+            break;
+        }
+    }
+    __atomic_store_n(&sInterpHurry, 0, __ATOMIC_RELEASE);
+}
+
 void GsGpu_InterpPump(int ahead_ms, int all) {
-    if (sInterpNext == 0 || sBackend == NULL) {
-        return;
+    if (sInterpNext == 0 || sBackend == NULL || (Gs_RenderThreaded() && !Gs_OnRenderThread())) {
+        return; /* (with the render thread the pictures are its: GsGpu_InterpRun) */
     }
     if (gsDrawCount != 0 || gsVertCount != 0 || gsVuUniCount != 0) {
         /* the game drew before the tick's pictures were shown: its new draws would be mixed into the kept list */
@@ -4386,9 +4452,8 @@ void GsGpu_InterpPump(int ahead_ms, int all) {
         return;
     }
     while (sInterpNext != 0) {
-        uint64_t due = sInterpBlendShown + (uint64_t)(sInterpNext - 1) * (sInterpTickNs / (uint64_t)sInterpSteps), now = gpu_now();
+        uint64_t due = interp_due(), now = gpu_now();
 
-        due = due > sInterpBlendTook ? due - sInterpBlendTook : 0; /* (replaying the list takes that long again) */
         if (all) {
             sInterpNext = sInterpSteps;
         } else if (getenv("BT3_UNCAPPED") == NULL) {
@@ -4407,18 +4472,8 @@ void GsGpu_InterpPump(int ahead_ms, int all) {
                 SDL_DelayPrecise(due - now);
             }
         }
-        if (sInterpNext == sInterpSteps && getenv("BT3_INTERP_ONLY") != NULL) {
-            sInterpNext = 0; /* testing: only in-between pictures are shown (so a screenshot holds one) */
-            interp_counts_restore();
-            interp_remember();
-            gsVertCount = gsVuVertCount = gsVuIdxCount = gsVuUniCount = gsDrawCount = 0;
+        if (!interp_show_next()) {
             return;
-        }
-        interp_counts_restore();
-        {
-            int step = sInterpNext;
-            sInterpNext = step == sInterpSteps ? 0 : step + 1;
-            interp_show(step);
         }
     }
 }

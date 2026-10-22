@@ -188,6 +188,7 @@ static uint32_t sMoved;
 
 void Gs_StateKeep(void) {
     extern void GsVu1_StateKeep(int restore); /* gs_vu1.c: the vertex unit's memory and programs */
+    Gs_RenderIdle(); /* (GS memory and registers are the render thread's while it runs a list) */
     if (sKept.vram == NULL) {
         sKept.vram = malloc(sizeof(sVram));
     }
@@ -201,6 +202,7 @@ void Gs_StateKeep(void) {
 void Gs_StateBack(void) {
     extern void GsVu1_StateKeep(int restore);
     int i;
+    Gs_RenderIdle();
     if (!sKept.valid) {
         return;
     }
@@ -1161,7 +1163,17 @@ static void *render_thread(void *arg) {
             uint32_t tadr = sJobTadr;
             int tte = sJobTte;
             pthread_mutex_unlock(&sLock);
+            {
+                extern void GsGpu_InterpHurry(int on);
+                GsGpu_InterpHurry(0);
+            }
             run_frozen();
+            {
+                extern void GsGpu_InterpRun(void); /* gs_draw.c: Smooth motion's pictures after the first, each when due */
+                if (sGpu) {
+                    GsGpu_InterpRun();
+                }
+            }
             if (getenv("BT3_GS_RACE") != NULL) {
                 race_walk(tadr, 1);
                 race_compare();
@@ -1181,6 +1193,22 @@ static void render_wait(void) {
         pthread_cond_wait(&sDone, &sLock);
     }
     pthread_mutex_unlock(&sLock);
+}
+
+int Gs_RenderThreaded(void) {
+    return sThreaded;
+}
+
+int Gs_OnRenderThread(void) {
+    return sThreaded && pthread_equal(pthread_self(), sThread);
+}
+
+/* For the game's thread before it touches what the render thread uses while it runs a list (GS memory and registers,
+   the back end): returns once the thread has nothing to do. Without the thread, at once. */
+void Gs_RenderIdle(void) {
+    if (sThreaded && !pthread_equal(pthread_self(), sThread)) { /* (on the render thread itself: it is the one running) */
+        render_wait();
+    }
 }
 
 static void render_post(int job, uint32_t tadr, int tte) {
@@ -1316,6 +1344,8 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
     }
     tChain = now_ns();
     if (sThreaded) {
+        extern void GsGpu_InterpHurry(int on); /* gs_draw.c: the next list is here: the tick's real picture at once */
+        GsGpu_InterpHurry(1);
         render_wait(); /* the previous list must be finished before this one starts (the PS2's sceGsSyncPath) */
     } else {
         run_chain(tadr, tte);
@@ -1531,9 +1561,7 @@ void Gs_StoreImage(unsigned bp, unsigned w, unsigned h, unsigned char *rgb) {
         fprintf(stderr, "gs: frame %u: the game reads %ux%u back from buffer %#x, row %u\n", sFrame, w, h, fbp, y0);
     }
     if (sGpu) {
-        if (sThreaded) {
-            return;
-        }
+        Gs_RenderIdle(); /* (the back end is the render thread's while it runs a list) */
         {
             /* First choice: the frame stays on the card as it was drawn and the cross-fade draws from that (the
                game is handed black, which it uploads and never shows). BT3_XFADE_READ=1: the game's own way. */
