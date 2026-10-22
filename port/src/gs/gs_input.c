@@ -962,9 +962,13 @@ static void press_age(int socket, unsigned btn) {
         }
     }
     if (on && (btn & ~prev[socket]) != 0) {
+        /* (each press counted once: a direction from a stick is a new bit without a press of its own, and was given
+           the age of the last button press, seconds old) */
+        static uint64_t used;
         uint64_t at = __atomic_load_n(&sPressNs, __ATOMIC_ACQUIRE), now = SDL_GetTicksNS();
         extern void Port_LagNote(int what, unsigned long long value);
-        if (at != 0 && now >= at && now - at < 1000000000ull) {
+        if (at != 0 && at != used && now >= at && now - at < 1000000000ull) {
+            used = at;
             Port_LagNote('P', (unsigned long long)((now - at) / 1000ull));
         }
     }
