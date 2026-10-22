@@ -201,6 +201,70 @@ static void scale_changed(void) {
 /* The settings window (F1, ui.cpp) and the shared window it lives in are gs_draw.c's: what the user changes
    there reaches this back end through gsScale, gsFxOff and gsGlowPercent. */
 
+/* --- measuring which kind of pass costs what (branch native-fx) -------------------------------------
+   Every draw is one of: 1 into another buffer than the picture (the glow chain, the blur by depth, the haze, the
+   shadow page), 2 onto the picture reading a buffer drawn before (an effect put back), 4 onto the picture through a
+   vertex program (the fighters, the stage, 3D effects), 8 onto the picture from GS vertices (sprites: auras,
+   flashes, rays, smoke, particles, the HUD). BT3_FX_SKIP=<bits>: those are left out
+   (the picture is wrong: only for the time it takes). BT3_FX_STAT=<n>: every n frames, per kind and per buffer, the
+   draws and the pixels of their scissors. */
+static struct { double px[4]; unsigned draws[4]; unsigned fbp[64]; double fpx[64]; unsigned fdraws[64]; int nf; unsigned frames; } sFx;
+static int fx_kind(const GsDraw *d) {
+    uint32_t fbp = gsTargets[d->target].fbp;
+    if (fbp != 0x000 && fbp != 0x070) {
+        return 0;
+    }
+    if (d->tex_is_target) {
+        return 1;
+    }
+    return d->vu ? 2 : 3;
+}
+static int fx_measure(const GsDraw *d) {
+    static int skip = -1, stat = -1;
+    int k;
+    if (skip < 0) {
+        skip = getenv("BT3_FX_SKIP") != NULL ? atoi(getenv("BT3_FX_SKIP")) : 0;
+        stat = getenv("BT3_FX_STAT") != NULL ? atoi(getenv("BT3_FX_STAT")) : 0;
+    }
+    if (skip == 0 && stat == 0) {
+        return 0;
+    }
+    k = fx_kind(d);
+    if (stat) {
+        double px = (double)d->scissor[2] * d->scissor[3];
+        int i;
+        sFx.px[k] += px;
+        sFx.draws[k]++;
+        if (k == 0) {
+            for (i = 0; i < sFx.nf && sFx.fbp[i] != gsTargets[d->target].fbp; i++) {
+            }
+            if (i == sFx.nf && sFx.nf < 64) {
+                sFx.fbp[sFx.nf++] = gsTargets[d->target].fbp;
+            }
+            if (i < 64) {
+                sFx.fpx[i] += px;
+                sFx.fdraws[i]++;
+            }
+        }
+    }
+    return (skip >> k) & 1;
+}
+static void fx_frame(void) {
+    static const char *const names[4] = {"other buffers", "effects put back", "3D (vertex programs)", "sprites (GS vertices)"};
+    int k;
+    if (getenv("BT3_FX_STAT") == NULL || ++sFx.frames < (unsigned)atoi(getenv("BT3_FX_STAT"))) {
+        return;
+    }
+    fprintf(stderr, "fx: frame %u, per frame over %u (scissor pixels in millions at this scale)\n", gGsFrame, sFx.frames);
+    for (k = 0; k < 4; k++) {
+        fprintf(stderr, "fx:   %-24s %7.1f draws %8.2f Mpx\n", names[k], sFx.draws[k] / (double)sFx.frames, sFx.px[k] / 1e6 / sFx.frames);
+    }
+    for (k = 0; k < sFx.nf; k++) {
+        fprintf(stderr, "fx:     buffer %03x %7.1f draws %8.2f Mpx\n", sFx.fbp[k], sFx.fdraws[k] / (double)sFx.frames, sFx.fpx[k] / 1e6 / sFx.frames);
+    }
+    memset(&sFx, 0, sizeof(sFx));
+}
+
 /* --- pipelines ---------------------------------------------------------------------------------- */
 
 /* Where the keys of the pipelines the game has used are remembered between runs. Creating a pipeline takes the
@@ -738,6 +802,7 @@ static int pipe_no_aux(int p) {
 }
 
 static void vk_frame_end(void) {
+    fx_frame();
     SDL_GPUCommandBuffer *cmd;
     SDL_GPUCopyPass *copy;
     SDL_GPURenderPass *pass = NULL;
@@ -1263,6 +1328,9 @@ static void vk_frame_end(void) {
             SDL_SetGPUScissor(pass, &r);
             memcpy(lastScissor, d->scissor, sizeof(lastScissor));
             haveScissor = 1;
+        }
+        if (fx_measure(d)) {
+            continue;
         }
         if (d->vu) {
             SDL_DrawGPUIndexedPrimitives(pass, d->count, 1, d->first, 0, 0);
