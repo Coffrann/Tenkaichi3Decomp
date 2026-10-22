@@ -130,9 +130,9 @@ int Port_SpeedMilli(void) {
 /* BT3_LAG_LOG=1: when things happen in a tick, in microseconds since the start: V a vertical blank (after its wait),
    R a pad read, E the window's events taken (which is when a controller's state is renewed), S a picture handed to
    the window. For measuring how old the input is that the game reads, and how long until its picture is shown. */
+PORT_HOST static unsigned long long sLagFirst; /* (the lag log's clock starts at its first line) */
 void Port_LagMark(int what) {
     PORT_HOST static int on = -1;
-    PORT_HOST static unsigned long long first = 0;
     unsigned long long t;
     if (on < 0) {
         on = getenv("BT3_LAG_LOG") != NULL;
@@ -141,12 +141,28 @@ void Port_LagMark(int what) {
         return;
     }
     t = now_ns();
-    if (first == 0) {
-        first = t;
+    if (sLagFirst == 0) {
+        sLagFirst = t;
     }
     {
         extern unsigned gGsFrame; /* gs/gs_draw.c: the pictures so far */
-        fprintf(stderr, "lag %c %u %u\n", what, (unsigned)((t - first) / 1000ull), gGsFrame);
+        fprintf(stderr, "lag %c %u %u\n", what, (unsigned)((t - sLagFirst) / 1000ull), gGsFrame);
+    }
+}
+
+/* The same line with a value after it (the press's age: gs/gs_input.c; the graphics chip's end: gs/gs_gpu.c). */
+void Port_LagNote(int what, unsigned long long value) {
+    unsigned long long t;
+    if (getenv("BT3_LAG_LOG") == NULL) {
+        return;
+    }
+    t = now_ns();
+    if (sLagFirst == 0) {
+        sLagFirst = t;
+    }
+    {
+        extern unsigned gGsFrame;
+        fprintf(stderr, "lag %c %u %u %llu\n", what, (unsigned)((t - sLagFirst) / 1000ull), gGsFrame, value);
     }
 }
 
