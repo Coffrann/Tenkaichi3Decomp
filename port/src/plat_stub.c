@@ -229,7 +229,13 @@ static void vblank_wait(void) {
             asked = 1;
             timeBeginPeriod(1);
             win_no_throttling();
-            timer = CreateWaitableTimerExW(NULL, NULL, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, TIMER_ALL_ACCESS);
+            {   /* (looked up: not in every SDK's headers, and not in Windows before 10) */
+                typedef HANDLE (WINAPI *CreateTimerEx)(void *, const WCHAR *, DWORD, DWORD);
+                CreateTimerEx create = (CreateTimerEx)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "CreateWaitableTimerExW");
+                if (create != NULL) {
+                    timer = create(NULL, NULL, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */, 0x1F0003 /* TIMER_ALL_ACCESS */);
+                }
+            }
         }
         if (timer != NULL) {
             if (next - t > 400000ull) {
