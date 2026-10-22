@@ -1085,6 +1085,10 @@ static int sJob;            /* 0 none, 1 start the GPU back end, 2 run a list */
 static uint32_t sJobTadr;
 static int sJobTte, sInitResult;
 static void run_chain(uint32_t tadr, int tte);
+static void run_frozen(void);
+static void walk_chain(uint32_t tadr, int tte, void (*block)(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte));
+static void freeze_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte);
+static size_t sFrozenUsed; /* (the copy of a frame's list for the render thread: freeze_block) */
 
 /* BT3_GS_RACE=1 (with the render thread): finds data of a frame's list that the game changes while the list is
    being drawn. The list's blocks are hashed when the game hands the list over and again when the drawing is
@@ -1157,7 +1161,7 @@ static void *render_thread(void *arg) {
             uint32_t tadr = sJobTadr;
             int tte = sJobTte;
             pthread_mutex_unlock(&sLock);
-            run_chain(tadr, tte);
+            run_frozen();
             if (getenv("BT3_GS_RACE") != NULL) {
                 race_walk(tadr, 1);
                 race_compare();
@@ -1386,12 +1390,64 @@ void Port_GsVif1Chain(uint32_t tadr, int tte) {
         if (getenv("BT3_GS_RACE") != NULL) {
             race_walk(tadr, 0);
         }
+        sFrozenUsed = 0;
+        walk_chain(tadr, tte, freeze_block);
         render_post(2, tadr, tte);
     }
 }
 
-/* Executes one frame's list: the DMA chain at `tadr` on VIF1, then the end-of-frame work of the back end. */
-static void run_chain(uint32_t tadr, int tte) {
+/* One block of a frame's list into VIF1: its tag's last two words (with TTE) and its data. */
+static void chain_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte) {
+    sStat[0]++;
+    if (tte) {
+        vif(tag + 2, 2);
+    }
+    vif(data, qwc * 4);
+}
+
+static void chain_end(void);
+
+/* With the render thread: the frame's list as it was when the game handed it over. The game goes on with the next
+   frame meanwhile and writes over data the list refers to (BT3_GS_RACE found the block of the view the fighters
+   are drawn with: a jumping camera), so every block the list takes, its tag included, is copied on the game's
+   thread at the hand-over, and the render thread works from the copy: what it sees is what the list was at that
+   moment, as without the thread. Each block in sFrozen: qwc, tte, the tag's four words, then the data. */
+static uint32_t *sFrozen;
+static size_t sFrozenSize;
+
+static void freeze_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte) {
+    size_t need = 6 + (size_t)qwc * 4;
+    uint32_t *o;
+
+    if (sFrozenUsed + need > sFrozenSize) {
+        size_t size = sFrozenSize ? sFrozenSize * 2 : (size_t)1 << 20;
+        while (size < sFrozenUsed + need) {
+            size *= 2;
+        }
+        sFrozen = realloc(sFrozen, size * sizeof(uint32_t));
+        sFrozenSize = size;
+    }
+    o = sFrozen + sFrozenUsed;
+    o[0] = qwc;
+    o[1] = (uint32_t)tte;
+    memcpy(o + 2, tag, 16);
+    memcpy(o + 6, data, (size_t)qwc * 16);
+    sFrozenUsed += need;
+}
+
+static void run_frozen(void) {
+    size_t at = 0;
+
+    while (at < sFrozenUsed) {
+        const uint32_t *b = sFrozen + at;
+        chain_block(b + 2, b + 6, b[0], (int)b[1]);
+        at += 6 + (size_t)b[0] * 4;
+    }
+    chain_end();
+}
+
+/* Walks one frame's list, the DMA chain at `tadr` on VIF1, handing each block to `block`. */
+static void walk_chain(uint32_t tadr, int tte, void (*block)(const uint32_t *tag, const uint32_t *data, uint32_t qwc, int tte)) {
     uint32_t stack[2], sp = 0;
     int guard;
 
@@ -1413,15 +1469,20 @@ static void run_chain(uint32_t tadr, int tte) {
         if (sDumpFrame == (int)sFrame) {
             fprintf(stderr, "  dma tag at %08x: id %u qwc %u addr %08x | %08x %08x (depth %u)\n", (unsigned)Port_Addr(tag), id, qwc, addr, tag[2], tag[3], sp);
         }
-        sStat[0]++;
-        if (tte) {
-            vif(tag + 2, 2);
-        }
-        vif(data, qwc * 4);
+        block(tag, data, qwc, tte);
         if (end) {
             break;
         }
     }
+}
+
+/* Executes one frame's list: the DMA chain at `tadr` on VIF1, then the end-of-frame work of the back end. */
+static void run_chain(uint32_t tadr, int tte) {
+    walk_chain(tadr, tte, chain_block);
+    chain_end();
+}
+
+static void chain_end(void) {
     if (getenv("BT3_GS_VERBOSE") != NULL && (sFrame < 4 || sFrame % 60 == 0)) {
         fprintf(stderr, "gs: frame %u: %u DMA tags, %u VIF codes, %u DIRECT qwords, %u GIF tags, %u register writes, %u vertices, "
                         "%u image qwords, %d targets\n", sFrame, sStat[0], sStat[1], sStat[2], sStat[3], sStat[4], sStat[5],
