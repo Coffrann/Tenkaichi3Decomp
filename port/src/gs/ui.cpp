@@ -1290,8 +1290,22 @@ static void video_tab(PortVideo &v) {
             ImGui::SetItemTooltip("The game reads the controller, computes, and then waits before the picture is shown:\n"
                                   "about 33 ms in a fight. With this on the wait comes first, so the picture follows\n"
                                   "your press by the few milliseconds the machine needs. The game itself is unchanged.\n"
-                                  "Not used online or with in-between pictures. Off by default: on a machine that\n"
+                                  "With Smooth motion as well: its in-between picture then follows your press at once and\n"
+                                  "the full one a refresh later. Not used online. Off by default: on a machine that\n"
                                   "cannot keep up it may stutter where the original order would not.");
+        }
+        {
+            extern int Port_Setting(const char *name, int def);
+            extern void Port_SettingSave(const char *name, int value);
+            bool thr = Port_Setting("render_thread", 0) != 0;
+            if (ImGui::Checkbox("Render on a second processor core (experimental, after a restart)", &thr)) {
+                Port_SettingSave("render_thread", thr ? 1 : 0);
+                Port_SettingsWrite(); /* (kept outside the window's own values: written here, or it was lost at the end) */
+            }
+            ImGui::SetItemTooltip("The picture is prepared and shown on a core of its own while the game computes the next\n"
+                                  "moment: faster where the processor is the slow part (older or low-power machines).\n"
+                                  "The same picture and the same game. Takes effect when the game is started again.\n"
+                                  "Not with the OpenGL renderer, and not on machines with two cores or fewer.");
         }
     }
     SDL_DisplayID *displays = SDL_GetDisplays(&count);
@@ -1398,6 +1412,15 @@ static void effects_tab(PortVideo &v) {
         bool on = !((v.fxOff >> i) & 1);
         if (ImGui::Checkbox(fx[i].name, &on)) { v.fxOff = (v.fxOff & ~(1 << i)) | (on ? 0 : 1 << i); }
         ImGui::SetItemTooltip("%s", fx[i].tip);
+        if (i == 6 && on) { /* Weather on: how much of it (fx_off bit 128: half the sprites) */
+            static const char *const amount[2] = {"Full", "Light"};
+            int light = (v.fxOff >> 7) & 1;
+            ImGui::Indent();
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.0f);
+            if (ImGui::Combo("Weather amount", &light, amount, 2)) { v.fxOff = (v.fxOff & ~128) | (light ? 128 : 0); }
+            ImGui::SetItemTooltip("Light: half of the haze's sprites, a thinner haze; about half of what switching it off gains.");
+            ImGui::Unindent();
+        }
     }
     ImGui::Spacing();
     ImGui::SliderInt("Glow strength", &v.glow, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);

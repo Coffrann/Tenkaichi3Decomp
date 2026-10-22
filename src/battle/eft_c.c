@@ -646,6 +646,9 @@ void EftWeatherPtcl_Draw(EftTask *task) {
             if (Port_FxOff(64)) {
                 return;
             }
+            if (Port_FxOff(128)) { /* (and "Light": half of them) */
+                count = (count + 1) / 2;
+            }
 #endif
             if (EftStage_IsDrawOn()) {
                 EftWeather_DrawPtcls(p, count);
