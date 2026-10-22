@@ -640,6 +640,13 @@ void EftWeatherPtcl_Draw(EftTask *task) {
             }
         }
         if (!(gBtlStage->flags & 1)) {
+#ifdef PORT
+            /* (the setting "Weather": the particles go on moving, as they would, and are not drawn) */
+            extern int Port_FxOff(int bit); /* port/src/gs/gs_draw.c */
+            if (Port_FxOff(64)) {
+                return;
+            }
+#endif
             if (EftStage_IsDrawOn()) {
                 EftWeather_DrawPtcls(p, count);
             }
