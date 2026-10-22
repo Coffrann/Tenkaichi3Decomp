@@ -1962,7 +1962,7 @@ void GsGpu_SetSettings(const PortVideo *v) {
     if (v->fullscreen != now.fullscreen) {
         GsDraw_FullscreenSet(v->fullscreen);
     }
-    gsFxOff = (unsigned)v->fxOff & 127;
+    gsFxOff = (unsigned)v->fxOff & 255;
     gsGlowPercent = v->glow;
     gsGlarePercent = v->glare;
     gsSharpBlur = v->sharpBlur;
@@ -2056,7 +2056,7 @@ int GsGpu_Init(void) {
         }
     }
     gsWhite = sb->whiteTex();
-    gsFxOff = (unsigned)(getenv("BT3_FX_OFF") != NULL ? atoi(getenv("BT3_FX_OFF")) : Port_Setting("fx_off", 0)) & 127;
+    gsFxOff = (unsigned)(getenv("BT3_FX_OFF") != NULL ? atoi(getenv("BT3_FX_OFF")) : Port_Setting("fx_off", 0)) & 255;
     gsGlowPercent = getenv("BT3_GLOW") != NULL ? atoi(getenv("BT3_GLOW")) : Port_Setting("glow", GLOW_DEFAULT);
     /* (one strength for both until 2026-10-21: a saved "glow" is the glare's too until it has its own) */
     gsGlarePercent = getenv("BT3_GLARE") != NULL ? atoi(getenv("BT3_GLARE")) : Port_Setting("glare", gsGlowPercent);

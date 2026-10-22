@@ -1398,6 +1398,15 @@ static void effects_tab(PortVideo &v) {
         bool on = !((v.fxOff >> i) & 1);
         if (ImGui::Checkbox(fx[i].name, &on)) { v.fxOff = (v.fxOff & ~(1 << i)) | (on ? 0 : 1 << i); }
         ImGui::SetItemTooltip("%s", fx[i].tip);
+        if (i == 6 && on) { /* Weather on: how much of it (fx_off bit 128: half the sprites) */
+            static const char *const amount[2] = {"Full", "Light"};
+            int light = (v.fxOff >> 7) & 1;
+            ImGui::Indent();
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.0f);
+            if (ImGui::Combo("Weather amount", &light, amount, 2)) { v.fxOff = (v.fxOff & ~128) | (light ? 128 : 0); }
+            ImGui::SetItemTooltip("Light: half of the haze's sprites, a thinner haze; about half of what switching it off gains.");
+            ImGui::Unindent();
+        }
     }
     ImGui::Spacing();
     ImGui::SliderInt("Glow strength", &v.glow, 0, 200, "%d%%", ImGuiSliderFlags_AlwaysClamp);
