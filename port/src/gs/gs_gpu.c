@@ -142,9 +142,99 @@ static const SDL_GPUTextureFormat kTexFormat[4] = {SDL_GPU_TEXTUREFORMAT_R8G8B8A
                                                    SDL_GPU_TEXTUREFORMAT_BC2_RGBA_UNORM, SDL_GPU_TEXTUREFORMAT_BC3_RGBA_UNORM};
 
 /* Makes a texture object; the levels' pixels come with tex_upload (the copy pass uploads them). 0 = unsupported. */
+/* Spare images, made ahead in frames with time to spare: a fight's first big effects asked for 100 and more new
+   textures in one frame, and making their images took 28 ms of it (about 0.23 ms each on an NVIDIA card under
+   Linux). Only the textures' own kind (RGBA8, one level, a power of two up to 1024 a side), by size: of each up to
+   256 x 256, 32 once it has been asked for; of a larger one, as many as the most one frame has asked for so far and
+   4 more (at most 32); 96 MB at most in all. Made at the end of a
+   frame drawn in under 10 ms, for 1 ms at most (pool_refill). An image let go is not taken back (the graphics chip
+   may still read it). BT3_TEX_POOL=0: none. */
+#define POOL_SIZES 24
+#define POOL_MAX 32
+static struct { uint32_t w, h; SDL_GPUTexture *spare[POOL_MAX]; int count, want, burst; unsigned frame; } sPool[POOL_SIZES];
+static int sPoolCount, sPoolOn = -1;
+static uint64_t sPoolBytes;
+
+static SDL_GPUTexture *image_make(uint32_t w, uint32_t h, int format, int levels) {
+    SDL_GPUTextureCreateInfo ci;
+    SDL_zero(ci);
+    ci.type = SDL_GPU_TEXTURETYPE_2D;
+    ci.format = kTexFormat[format & 3];
+    ci.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    ci.width = w;
+    ci.height = h;
+    ci.layer_count_or_depth = 1;
+    ci.num_levels = (Uint32)(levels < 1 ? 1 : levels);
+    return SDL_CreateGPUTexture(sDev, &ci);
+}
+
+/* The pool of w x h (asked for now: counted in its burst), or -1 for a texture of another kind. */
+static int pool_find(uint32_t w, uint32_t h, int format, int levels) {
+    extern unsigned gGsFrame;
+    int i;
+    if (sPoolOn < 0) {
+        sPoolOn = getenv("BT3_TEX_POOL") == NULL || atoi(getenv("BT3_TEX_POOL")) != 0;
+    }
+    if (!sPoolOn || format != GS_TEXFMT_RGBA8 || levels > 1 || w > 1024 || h > 1024 || (w & (w - 1)) || (h & (h - 1))) {
+        return -1;
+    }
+    for (i = 0; i < sPoolCount && (sPool[i].w != w || sPool[i].h != h); i++) {
+    }
+    if (i == sPoolCount) {
+        if (sPoolCount == POOL_SIZES) {
+            return -1;
+        }
+        sPool[sPoolCount].w = w;
+        sPool[sPoolCount].h = h;
+        sPoolCount++;
+    }
+    if (sPool[i].frame != gGsFrame) {
+        sPool[i].frame = gGsFrame;
+        sPool[i].burst = 0;
+    }
+    if (w * h <= 65536) { /* (up to 256 x 256: 32 of them are 8 MB at most) */
+        sPool[i].want = POOL_MAX;
+    } else if (++sPool[i].burst + 4 > sPool[i].want) {
+        sPool[i].want = sPool[i].burst + 4 < POOL_MAX ? sPool[i].burst + 4 : POOL_MAX;
+    }
+    return i;
+}
+
+static void pool_refill(uint64_t drawn) {
+    uint64_t until;
+    int i;
+    if (sPoolOn != 1 || drawn > 10000000ull) {
+        return;
+    }
+    until = gpu_now() + 1000000ull;
+    for (i = 0; i < sPoolCount; i++) {
+        uint64_t bytes = (uint64_t)sPool[i].w * sPool[i].h * 4;
+        while (sPool[i].count < sPool[i].want && sPoolBytes + bytes <= 96ull << 20) {
+            SDL_GPUTexture *t;
+            if (gpu_now() >= until) {
+                return;
+            }
+            t = image_make(sPool[i].w, sPool[i].h, GS_TEXFMT_RGBA8, 1);
+            if (t == NULL) {
+                return;
+            }
+            sPool[i].spare[sPool[i].count++] = t;
+            sPoolBytes += bytes;
+        }
+    }
+}
+
 static GsTex tex_create(uint32_t w, uint32_t h, int format, int levels) {
     SDL_GPUTextureCreateInfo ci;
     SDL_GPUTexture *tex;
+    int pool = pool_find(w, h, format, levels);
+
+    if (pool >= 0 && sPool[pool].count > 0) {
+        extern unsigned gDrawImgPooled; /* BT3_DRAW_LOG */
+        gDrawImgPooled++;
+        sPoolBytes -= (uint64_t)w * h * 4;
+        return (GsTex)(uintptr_t)sPool[pool].spare[--sPool[pool].count];
+    }
 
     if (!SDL_GPUTextureSupportsFormat(sDev, kTexFormat[format & 3], SDL_GPU_TEXTURETYPE_2D, SDL_GPU_TEXTUREUSAGE_SAMPLER)) {
         return 0;
@@ -157,9 +247,12 @@ static GsTex tex_create(uint32_t w, uint32_t h, int format, int levels) {
     ci.height = h;
     ci.layer_count_or_depth = 1;
     ci.num_levels = (Uint32)(levels < 1 ? 1 : levels);
-    tex = SDL_CreateGPUTexture(sDev, &ci);
     {
         extern unsigned gDrawImgMade; /* BT3_DRAW_LOG */
+        extern uint64_t gDrawImgNs;
+        uint64_t t0 = gpu_now();
+        tex = SDL_CreateGPUTexture(sDev, &ci);
+        gDrawImgNs += gpu_now() - t0;
         gDrawImgMade++;
     }
     return (GsTex)(uintptr_t)tex;
@@ -1556,8 +1649,8 @@ static void vk_frame_end(void) {
     {   /* BT3_DRAW_LOG=<ms>: each picture whose drawing took longer, from the start of its list to the driver, in parts:
            to find what makes a drawing slow now and then (a laptop: 1 in 10 took 10 to 20 ms instead of 2) */
         static int limit = -1;
-        extern uint64_t gDrawStartNs, gDrawTexNs, gDrawPipeNs, gDrawUpBytes;
-        extern unsigned gDrawNewTex, gDrawImgMade, gDrawImgFreed, gGsFrame;
+        extern uint64_t gDrawStartNs, gDrawTexNs, gDrawPipeNs, gDrawUpBytes, gDrawImgNs;
+        extern unsigned gDrawNewTex, gDrawImgMade, gDrawImgFreed, gDrawImgPooled, gGsFrame;
         extern int gDrawLogged;
         if (limit < 0) {
             limit = getenv("BT3_DRAW_LOG") != NULL ? atoi(getenv("BT3_DRAW_LOG")) : 0;
@@ -1569,13 +1662,17 @@ static void vk_frame_end(void) {
                 uint64_t walk = sEndT[0] > gDrawStartNs ? sEndT[0] - gDrawStartNs : 0;
                 fprintf(stderr, "draw: frame %u: %.1f ms: the list %.1f (of it %u new textures decoded %.1f, pipelines made %.1f), "
                                 "uploads %.1f, issuing the draws %.1f, waiting for the screen's buffer %.1f, showing %.1f, handing over %.1f; "
-                                "images made %u, released %u, uploaded %u KB\n",
+                                "images made %u (%.1f ms) and %u spares taken, released %u, uploaded %u KB\n",
                         gGsFrame, (double)total / 1e6, (double)walk / 1e6, gDrawNewTex, (double)gDrawTexNs / 1e6, (double)gDrawPipeNs / 1e6,
                         (double)(sEndT[1] - sEndT[0]) / 1e6, (double)(sEndT[2] - sEndT[1]) / 1e6, (double)(sEndT[3] - sEndT[2]) / 1e6,
-                        (double)(sEndT[4] - sEndT[3]) / 1e6, (double)(now - sEndT[4]) / 1e6, gDrawImgMade, gDrawImgFreed,
+                        (double)(sEndT[4] - sEndT[3]) / 1e6, (double)(now - sEndT[4]) / 1e6, gDrawImgMade, (double)gDrawImgNs / 1e6, gDrawImgPooled, gDrawImgFreed,
                         (unsigned)(gDrawUpBytes / 1024));
             }
         }
+    }
+    {   /* spare images for coming bursts, when this picture left time (the drawing from its list's start) */
+        extern uint64_t gDrawStartNs;
+        pool_refill(gDrawStartNs != 0 ? gpu_now() - gDrawStartNs : ~0ull);
     }
     {   /* BT3_GS_VERBOSE: once a second, where the end of the frame spends its time */
         static uint64_t sum[5];
