@@ -107,7 +107,17 @@ static void copies_create(void) {
 
 /* --- the attachments of the shared targets ------------------------------------------------------------ */
 
-static void target_ensure(int i) {
+/* Spare render targets, made in quiet frames before they are needed: a target is the PS2 screen's size times the
+   internal resolution in three images (colour, the helper, depth: about 130 MB at 8x), and making one took 6.5 ms;
+   the first big effect of a fight asked for four new ones in one frame (26 ms). As many as a session has needed
+   at most (the setting gpu_targets_peak, kept from one run to the next) and are not there yet, 4 at most; one a
+   frame, after a frame drawn in under 6 ms (targets_refill). No more memory than the game takes at its peak, only
+   sooner. BT3_TARGET_SPARES=0: none. */
+#define TARGET_SPARES 4
+static SDL_GPUTexture *sSpareCol[TARGET_SPARES], *sSpareAux[TARGET_SPARES], *sSpareDep[TARGET_SPARES];
+static int sSpareCount, sTargetPeak = -1, sSpareOn = -1;
+
+static void target_make(SDL_GPUTexture **col, SDL_GPUTexture **aux, SDL_GPUTexture **dep) {
     SDL_GPUTextureCreateInfo ci;
     SDL_zero(ci);
     ci.type = SDL_GPU_TEXTURETYPE_2D;
@@ -117,12 +127,49 @@ static void target_ensure(int i) {
     ci.height = GS_H * SCALE;
     ci.layer_count_or_depth = 1;
     ci.num_levels = 1;
-    sTgCol[i] = SDL_CreateGPUTexture(sDev, &ci);
+    *col = SDL_CreateGPUTexture(sDev, &ci);
     ci.format = SDL_GPU_TEXTUREFORMAT_R8_UNORM;
-    sTgAux[i] = SDL_CreateGPUTexture(sDev, &ci);
+    *aux = SDL_CreateGPUTexture(sDev, &ci);
     ci.format = sDepthFormat;
     ci.usage = SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER; /* the depth effects read it */
-    sTgDep[i] = SDL_CreateGPUTexture(sDev, &ci);
+    *dep = SDL_CreateGPUTexture(sDev, &ci);
+}
+
+static void target_ensure(int i) {
+    extern int Port_Setting(const char *name, int def);
+    extern void Port_SettingSave(const char *name, int value);
+    if (sSpareCount > 0) {
+        sSpareCount--;
+        sTgCol[i] = sSpareCol[sSpareCount];
+        sTgAux[i] = sSpareAux[sSpareCount];
+        sTgDep[i] = sSpareDep[sSpareCount];
+    } else {
+        target_make(&sTgCol[i], &sTgAux[i], &sTgDep[i]);
+    }
+    if (sTargetPeak < 0) {
+        sTargetPeak = Port_Setting("gpu_targets_peak", 0);
+    }
+    if (i + 1 > sTargetPeak) { /* (a new most, kept for the next run: written now, as nothing writes the settings at the end) */
+        extern void Port_SettingsWrite(void);
+        sTargetPeak = i + 1;
+        Port_SettingSave("gpu_targets_peak", sTargetPeak);
+        Port_SettingsWrite();
+    }
+}
+
+static void targets_refill(uint64_t drawn) {
+    extern int Port_Setting(const char *name, int def);
+    if (sSpareOn < 0) {
+        sSpareOn = getenv("BT3_TARGET_SPARES") == NULL || atoi(getenv("BT3_TARGET_SPARES")) != 0;
+    }
+    if (sTargetPeak < 0) {
+        sTargetPeak = Port_Setting("gpu_targets_peak", 0);
+    }
+    if (!sSpareOn || drawn > 6000000ull || sSpareCount == TARGET_SPARES || gsTargetCount + sSpareCount >= sTargetPeak) {
+        return;
+    }
+    target_make(&sSpareCol[sSpareCount], &sSpareAux[sSpareCount], &sSpareDep[sSpareCount]);
+    sSpareCount++;
 }
 
 static void target_drop(int i) {
@@ -296,6 +343,12 @@ static void scale_changed(void) {
     SDL_WaitForGPUIdle(sDev);
     for (i = 0; i < gsTargetCount; i++) {
         target_drop(i);
+    }
+    while (sSpareCount > 0) { /* (the spares are the old size) */
+        sSpareCount--;
+        SDL_ReleaseGPUTexture(sDev, sSpareCol[sSpareCount]);
+        SDL_ReleaseGPUTexture(sDev, sSpareAux[sSpareCount]);
+        SDL_ReleaseGPUTexture(sDev, sSpareDep[sSpareCount]);
     }
     SDL_ReleaseGPUTexture(sDev, sAuxCopy);
     SDL_ReleaseGPUTexture(sDev, sDateCopy);
@@ -1673,6 +1726,7 @@ static void vk_frame_end(void) {
     {   /* spare images for coming bursts, when this picture left time (the drawing from its list's start) */
         extern uint64_t gDrawStartNs;
         pool_refill(gDrawStartNs != 0 ? gpu_now() - gDrawStartNs : ~0ull);
+        targets_refill(gDrawStartNs != 0 ? gpu_now() - gDrawStartNs : ~0ull); /* (and spare render targets) */
     }
     {   /* BT3_GS_VERBOSE: once a second, where the end of the frame spends its time */
         static uint64_t sum[5];
