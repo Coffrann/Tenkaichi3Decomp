@@ -647,7 +647,15 @@ static int vk_init(void) {
     if (!Ui_Init(sWindow, sDev, NULL, gpuName)) {
         fprintf(stderr, "bt3: the settings window could not be set up\n");
     }
-    fprintf(stderr, "bt3: GPU renderer: %s\n", SDL_GetGPUDeviceDriver(sDev));
+    {   /* which graphics chip draws the game, and its driver (as F1 > Video shows): on a laptop with two the slower
+           one can be the one used */
+        const char *name = gpuName != NULL ? gpuName : "", *driver = "";
+#if SDL_VERSION_ATLEAST(3, 4, 0)
+        driver = SDL_GetStringProperty(SDL_GetGPUDeviceProperties(sDev), SDL_PROP_GPU_DEVICE_DRIVER_INFO_STRING, "");
+#endif
+        fprintf(stderr, "bt3: GPU renderer: %s%s%s%s%s\n", SDL_GetGPUDeviceDriver(sDev), name[0] ? ", " : "", name,
+                driver[0] ? ", driver " : "", driver);
+    }
     fprintf(stderr, "bt3: %d logical processors, %d MB of memory\n", SDL_GetNumLogicalCPUCores(), SDL_GetSystemRAM());
     pipelines_preload();
     return 1;
