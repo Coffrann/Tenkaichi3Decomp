@@ -673,6 +673,7 @@ static GsTex texture_get(int ctx) {
         MenuLabels_ArtSwap((unsigned char *)px, (int)tw, (int)th); /* the European picture, in the chosen language */
     }
     if (px != NULL) {
+        MenuText_NewTexture(); /* (its label hash is worked out once, for this check and MenuText_Render below) */
         battleText = MenuText_IsBattleTexture((const uint8_t *)px, (int)tw, (int)th, bits <= 8);
     }
     if (replaced) {

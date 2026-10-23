@@ -924,16 +924,42 @@ int MenuText_MayHaveBattleTexture(int width, int height, int indexed) {
     return result;
 }
 
-int MenuText_IsBattleTexture(const uint8_t *rgba, int width, int height, int indexed) {
+/* The hash a label is known by, of the texture being made (gs_draw.c's texture_get): MenuText_IsBattleTexture and
+   MenuText_Render both need it, and it is a byte at a time over the whole texture: 60 ms over a recorded session's
+   new textures, and the same again in MenuText_Render with a menu font chosen (175 ms with its compares). Worked out
+   once per texture; MenuText_NewTexture forgets it, so a texture never gets another's. Called with sLock held. */
+static struct { const uint8_t *rgba; int width, height, valid; uint64_t hash; } sTexHash;
+
+void MenuText_NewTexture(void) {
+    pthread_mutex_lock(&sLock);
+    sTexHash.valid = 0;
+    pthread_mutex_unlock(&sLock);
+}
+
+static uint64_t texture_hash(const uint8_t *rgba, int width, int height) {
     uint64_t hash = UINT64_C(14695981039346656037);
     size_t i, bytes;
+    if (sTexHash.valid && sTexHash.rgba == rgba && sTexHash.width == width && sTexHash.height == height) {
+        return sTexHash.hash;
+    }
+    bytes = (size_t)width * height * 4;
+    for (i = 0; i < bytes; i++) { hash = (hash ^ rgba[i]) * UINT64_C(1099511628211); }
+    sTexHash.rgba = rgba;
+    sTexHash.width = width;
+    sTexHash.height = height;
+    sTexHash.hash = hash;
+    sTexHash.valid = 1;
+    return hash;
+}
+
+int MenuText_IsBattleTexture(const uint8_t *rgba, int width, int height, int indexed) {
+    uint64_t hash;
     int n;
     if (!indexed || rgba == NULL || width < 1 || height < 1) { return 0; }
     pthread_mutex_lock(&sLock);
     menu_text_labels();
     if (battle_texture_size_loaded(width, height)) {
-        bytes = (size_t)width * height * 4;
-        for (i = 0; i < bytes; i++) { hash = (hash ^ rgba[i]) * UINT64_C(1099511628211); }
+        hash = texture_hash(rgba, width, height);
         for (n = 0; n < sCount; n++) {
             if (sLabels[n].fontFace && sLabels[n].width == width && sLabels[n].height == height && sLabels[n].hash == hash) {
                 pthread_mutex_unlock(&sLock);
@@ -1743,8 +1769,7 @@ static void battle_art_fit(uint8_t *dst, int stride, const uint8_t *original, in
 }
 
 uint8_t *MenuText_Render(const uint8_t *rgba, int width, int height, int indexed, int scale, int *outWidth, int *outHeight) {
-    uint64_t hash = UINT64_C(14695981039346656037);
-    size_t i, bytes;
+    uint64_t hash;
     int n, x, y, changed = 0, rw, rh;
     uint8_t *result = NULL;
     if ((sFontChoice == 0 && sBattleChoice == 0) || !indexed) { return NULL; }
@@ -1754,9 +1779,8 @@ uint8_t *MenuText_Render(const uint8_t *rgba, int width, int height, int indexed
         pthread_mutex_unlock(&sLock);
         return NULL;
     }
-    bytes = (size_t)width * height * 4;
     rw = width * scale; rh = height * scale;
-    for (i = 0; i < bytes; i++) { hash = (hash ^ rgba[i]) * UINT64_C(1099511628211); }
+    hash = texture_hash(rgba, width, height);
     for (n = 0; n < sCount; n++) {
         const MenuLabel *label = &sLabels[n];
         Row row;
