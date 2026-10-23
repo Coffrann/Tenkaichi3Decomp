@@ -557,20 +557,26 @@ static GsTex texture_get(int ctx) {
     px = !replaced || MenuText_MayHaveBattleTexture((int)tw, (int)th, bits <= 8) ?
          malloc((size_t)tw * th * 4) : NULL;
     if (!replaced && px == NULL) { return gsWhite; }
-    for (y = 0; px != NULL && y < th; y++) {
-        for (x = 0; x < tw; x++) {
-            uint32_t c = Gs_VramRead(tbp, tbw, psm, x, y), a;
-            if (bits > 8) {
-                c = Gs_Expand(c, psm);
-            } else if (bits == 8) {
-                c = (c & 0xE7) | ((c & 8) << 1) | ((c & 0x10) >> 1);
-                c = Gs_Expand(Gs_VramRead(cbp, 1, cpsm, c & 15, c >> 4), cpsm);
-            } else {
-                c = Gs_Expand(Gs_VramRead(cbp, 1, cpsm, c & 7, c >> 3), cpsm);
+    {   /* a palette's colours read and expanded once, by the index as stored (8-bit: the GS's order of the 256 entries
+           undone), instead of again for every pixel: most of a fight's effects are 4- and 8-bit */
+        uint32_t lut[256];
+        if (px != NULL && bits <= 8) {
+            for (i = 0; i < (bits == 8 ? 256u : 16u); i++) {
+                if (bits == 8) {
+                    uint32_t n = (i & 0xE7) | ((i & 8) << 1) | ((i & 0x10) >> 1);
+                    lut[i] = Gs_Expand(Gs_VramRead(cbp, 1, cpsm, n & 15, n >> 4), cpsm);
+                } else {
+                    lut[i] = Gs_Expand(Gs_VramRead(cbp, 1, cpsm, i & 7, i >> 3), cpsm);
+                }
             }
-            (void)a; /* alpha is kept as the GS has it (0x80 = opaque, up to 0xFF): the shader rescales it. Values
-                        above 0x80 matter: the see-through pass gives palettes alpha 0xF9 to write an id */
-            px[y * tw + x] = c;
+        }
+        for (y = 0; px != NULL && y < th; y++) {
+            for (x = 0; x < tw; x++) {
+                uint32_t c = Gs_VramRead(tbp, tbw, psm, x, y);
+                /* (alpha is kept as the GS has it, 0x80 = opaque, up to 0xFF: the shader rescales it. Values above 0x80
+                   matter: the see-through pass gives palettes alpha 0xF9 to write an id) */
+                px[y * tw + x] = bits > 8 ? Gs_Expand(c, psm) : lut[bits == 8 ? c & 0xFF : c & 0xF];
+            }
         }
     }
     if (px != NULL && !replaced && bits <= 8) {
