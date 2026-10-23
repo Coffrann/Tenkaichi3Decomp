@@ -143,13 +143,13 @@ unsigned gGpuTexReplaced; /* textures taken from a texture pack so far */
 uint64_t gGpuTexNs, gGpuPipeNs, gGpuEndNs; /* time spent decoding textures, creating pipelines, in GsGpu_FrameEnd */
 /* The same for the picture being drawn only, where it is drawn (the render thread's, or the game's): BT3_DRAW_LOG
    (gs_gpu.c, draw_log). From the start of its list (GsGpu_ListStart). */
-uint64_t gDrawStartNs, gDrawTexNs, gDrawPipeNs, gDrawUpBytes, gDrawImgNs;
+uint64_t gDrawStartNs, gDrawTexNs, gDrawPipeNs, gDrawUpBytes, gDrawImgNs, gDrawLookNs, gDrawVuNs, gDrawXferNs;
 unsigned gDrawNewTex, gDrawImgMade, gDrawImgFreed, gDrawImgPooled; /* (the last three counted in gs_gpu.c: graphics-chip images, uploads) */
 int gDrawLogged; /* the picture's line is written (Smooth motion's other pictures of the list are not) */
 
 void GsGpu_ListStart(void) {
     gDrawStartNs = SDL_GetTicksNS(); /* (gs_gpu.c's clock, where it is compared) */
-    gDrawTexNs = gDrawPipeNs = gDrawUpBytes = gDrawImgNs = 0;
+    gDrawTexNs = gDrawPipeNs = gDrawUpBytes = gDrawImgNs = gDrawLookNs = gDrawVuNs = gDrawXferNs = 0;
     gDrawNewTex = gDrawImgMade = gDrawImgFreed = gDrawImgPooled = 0;
     gDrawLogged = 0;
 }
@@ -1158,7 +1158,9 @@ static int draw_state(int ctx, int topo, int sprite, int vu, GsDraw *d, float *u
                 sBlockSample = 0;
             }
         } else {
+            uint64_t tg0 = gpu_now();
             d->tex = texture_get(ctx);
+            gDrawLookNs += gpu_now() - tg0; /* (BT3_DRAW_LOG: all of the texture lookups, the new ones' work in it) */
         }
     }
     d->sampler = (int)((gGs.tex1[ctx] >> 5) & 1) | ((cl & 3) ? 2 : 0) | (((cl >> 2) & 3) ? 4 : 0);
