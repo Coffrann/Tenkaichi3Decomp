@@ -456,6 +456,100 @@ static void pack_arrived(Tex *c) {
     gGpuTexReplaced++;
 }
 
+/* Decoding a texture's rows: a large one is shared among worker threads (and the caller), which only read GS memory
+   while the caller waits, so nothing after it changes. When a fight's first effects come, one frame decodes 10 to
+   100 new textures; on one thread that was 20 to 30 ms of the frame. BT3_TEX_THREADS=<n>: that many workers (0: none;
+   by default the logical processors less two, at most 7). */
+typedef struct TexDecode {
+    uint32_t tbp, tbw, psm, bits, tw, th;
+    const uint32_t *lut; /* a palette's colours by index (bits <= 8) */
+    uint32_t *px;
+} TexDecode;
+
+static void tex_decode_rows(const TexDecode *d, uint32_t y0, uint32_t y1) {
+    uint32_t x, y;
+    for (y = y0; y < y1; y++) {
+        for (x = 0; x < d->tw; x++) {
+            uint32_t c = Gs_VramRead(d->tbp, d->tbw, d->psm, x, y);
+            /* (alpha is kept as the GS has it, 0x80 = opaque, up to 0xFF: the shader rescales it. Values above 0x80
+               matter: the see-through pass gives palettes alpha 0xF9 to write an id) */
+            d->px[y * d->tw + x] = d->bits > 8 ? Gs_Expand(c, d->psm) : d->lut[d->bits == 8 ? c & 0xFF : c & 0xF];
+        }
+    }
+}
+
+#define TEX_DECODE_CHUNK 16 /* rows taken at a time */
+static pthread_mutex_t sDecLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t sDecWake = PTHREAD_COND_INITIALIZER, sDecDone = PTHREAD_COND_INITIALIZER;
+static const TexDecode *sDecJob;
+static unsigned sDecGen, sDecNext, sDecBusy;
+static int sDecWorkers = -1;
+
+static void tex_decode_share(const TexDecode *d) { /* takes chunks of rows until there are none left */
+    for (;;) {
+        uint32_t y0 = __atomic_fetch_add(&sDecNext, TEX_DECODE_CHUNK, __ATOMIC_RELAXED);
+        if (y0 >= d->th) {
+            return;
+        }
+        tex_decode_rows(d, y0, y0 + TEX_DECODE_CHUNK < d->th ? y0 + TEX_DECODE_CHUNK : d->th);
+    }
+}
+
+static void *tex_decode_worker(void *unused) {
+    unsigned seen = 0;
+    (void)unused;
+    for (;;) {
+        const TexDecode *d;
+        pthread_mutex_lock(&sDecLock);
+        while (sDecGen == seen) {
+            pthread_cond_wait(&sDecWake, &sDecLock);
+        }
+        seen = sDecGen;
+        d = sDecJob;
+        pthread_mutex_unlock(&sDecLock);
+        tex_decode_share(d);
+        pthread_mutex_lock(&sDecLock);
+        if (--sDecBusy == 0) {
+            pthread_cond_signal(&sDecDone);
+        }
+        pthread_mutex_unlock(&sDecLock);
+    }
+    return NULL;
+}
+
+static void tex_decode(const TexDecode *d) {
+    if (sDecWorkers < 0) {
+        const char *e = getenv("BT3_TEX_THREADS");
+        int n = e != NULL ? atoi(e) : SDL_GetNumLogicalCPUCores() - 2, i;
+        sDecWorkers = n < 0 ? 0 : n > 7 ? 7 : n;
+        for (i = 0; i < sDecWorkers; i++) {
+            pthread_t t;
+            if (pthread_create(&t, NULL, tex_decode_worker, NULL) != 0) {
+                sDecWorkers = i;
+                break;
+            }
+            pthread_detach(t);
+        }
+    }
+    if (sDecWorkers == 0 || d->tw * d->th < 16384) { /* (a small one: waking the workers would cost more) */
+        tex_decode_rows(d, 0, d->th);
+        return;
+    }
+    pthread_mutex_lock(&sDecLock);
+    sDecJob = d;
+    __atomic_store_n(&sDecNext, 0, __ATOMIC_RELAXED);
+    sDecBusy = (unsigned)sDecWorkers;
+    sDecGen++;
+    pthread_cond_broadcast(&sDecWake);
+    pthread_mutex_unlock(&sDecLock);
+    tex_decode_share(d);
+    pthread_mutex_lock(&sDecLock);
+    while (sDecBusy != 0) {
+        pthread_cond_wait(&sDecDone, &sDecLock);
+    }
+    pthread_mutex_unlock(&sDecLock);
+}
+
 /* GS memory -> an RGBA texture for the current TEX0 (alpha as stored: 0x80 is opaque). The back end makes
    the texture and takes the decoded pixels (freed after it has uploaded them). */
 static GsTex texture_get(int ctx) {
@@ -570,13 +664,9 @@ static GsTex texture_get(int ctx) {
                 }
             }
         }
-        for (y = 0; px != NULL && y < th; y++) {
-            for (x = 0; x < tw; x++) {
-                uint32_t c = Gs_VramRead(tbp, tbw, psm, x, y);
-                /* (alpha is kept as the GS has it, 0x80 = opaque, up to 0xFF: the shader rescales it. Values above 0x80
-                   matter: the see-through pass gives palettes alpha 0xF9 to write an id) */
-                px[y * tw + x] = bits > 8 ? Gs_Expand(c, psm) : lut[bits == 8 ? c & 0xFF : c & 0xF];
-            }
+        if (px != NULL) {
+            TexDecode d = {tbp, tbw, psm, bits, tw, th, lut, px};
+            tex_decode(&d);
         }
     }
     if (px != NULL && !replaced && bits <= 8) {
