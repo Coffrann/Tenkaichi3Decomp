@@ -158,6 +158,10 @@ static GsTex tex_create(uint32_t w, uint32_t h, int format, int levels) {
     ci.layer_count_or_depth = 1;
     ci.num_levels = (Uint32)(levels < 1 ? 1 : levels);
     tex = SDL_CreateGPUTexture(sDev, &ci);
+    {
+        extern unsigned gDrawImgMade; /* BT3_DRAW_LOG */
+        gDrawImgMade++;
+    }
     return (GsTex)(uintptr_t)tex;
 }
 
@@ -174,11 +178,17 @@ static int tex_upload(GsTex handle, int level, uint32_t w, uint32_t h, int forma
     sPending[sPendingCount].px = (uint32_t *)px;
     sPending[sPendingCount].bytes = bytes;
     sPending[sPendingCount].level = (uint32_t)level;
+    {
+        extern uint64_t gDrawUpBytes; /* BT3_DRAW_LOG */
+        gDrawUpBytes += bytes;
+    }
     sPendingCount++;
     return 1;
 }
 
 static void tex_destroy(GsTex tex) {
+    extern unsigned gDrawImgFreed; /* BT3_DRAW_LOG */
+    gDrawImgFreed++;
     SDL_ReleaseGPUTexture(sDev, (SDL_GPUTexture *)(uintptr_t)tex);
 }
 
@@ -1546,8 +1556,8 @@ static void vk_frame_end(void) {
     {   /* BT3_DRAW_LOG=<ms>: each picture whose drawing took longer, from the start of its list to the driver, in parts:
            to find what makes a drawing slow now and then (a laptop: 1 in 10 took 10 to 20 ms instead of 2) */
         static int limit = -1;
-        extern uint64_t gDrawStartNs, gDrawTexNs, gDrawPipeNs;
-        extern unsigned gDrawNewTex, gGsFrame;
+        extern uint64_t gDrawStartNs, gDrawTexNs, gDrawPipeNs, gDrawUpBytes;
+        extern unsigned gDrawNewTex, gDrawImgMade, gDrawImgFreed, gGsFrame;
         extern int gDrawLogged;
         if (limit < 0) {
             limit = getenv("BT3_DRAW_LOG") != NULL ? atoi(getenv("BT3_DRAW_LOG")) : 0;
@@ -1558,10 +1568,12 @@ static void vk_frame_end(void) {
             if (total >= (uint64_t)limit * 1000000ull) {
                 uint64_t walk = sEndT[0] > gDrawStartNs ? sEndT[0] - gDrawStartNs : 0;
                 fprintf(stderr, "draw: frame %u: %.1f ms: the list %.1f (of it %u new textures decoded %.1f, pipelines made %.1f), "
-                                "uploads %.1f, issuing the draws %.1f, waiting for the screen's buffer %.1f, showing %.1f, handing over %.1f\n",
+                                "uploads %.1f, issuing the draws %.1f, waiting for the screen's buffer %.1f, showing %.1f, handing over %.1f; "
+                                "images made %u, released %u, uploaded %u KB\n",
                         gGsFrame, (double)total / 1e6, (double)walk / 1e6, gDrawNewTex, (double)gDrawTexNs / 1e6, (double)gDrawPipeNs / 1e6,
                         (double)(sEndT[1] - sEndT[0]) / 1e6, (double)(sEndT[2] - sEndT[1]) / 1e6, (double)(sEndT[3] - sEndT[2]) / 1e6,
-                        (double)(sEndT[4] - sEndT[3]) / 1e6, (double)(now - sEndT[4]) / 1e6);
+                        (double)(sEndT[4] - sEndT[3]) / 1e6, (double)(now - sEndT[4]) / 1e6, gDrawImgMade, gDrawImgFreed,
+                        (unsigned)(gDrawUpBytes / 1024));
             }
         }
     }
