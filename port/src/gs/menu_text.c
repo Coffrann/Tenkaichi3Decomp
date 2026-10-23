@@ -731,7 +731,7 @@ int MenuText_RasterScale(int internalScale) { return internalScale < 2 ? 2 : int
 /* ------------------------------------------------------------------------------------------- menu labels */
 
 typedef struct MenuLabel {
-    uint64_t hash;
+    uint64_t hash, quick; /* (quick: MenuLabels_Quick, 0 when the list has none: the hash is always worked out) */
     int width, height, y, rowHeight, cap, baseline, center, margin, widthMilli, x, rowWidth, artWidth;
     unsigned top, bottom, middleColor, outline, outlineBottom, bevelLight, bevelDark;
     int italic;
@@ -840,8 +840,15 @@ static void menu_text_labels(void) {
             label.depthMilli < 0 || label.depthMilli > 8000 || label.midGradient < 0 || label.midGradient > 1 ||
             label.fontFace < 0 || label.fontFace > 1 || label.hasMiddle < 0 || label.hasMiddle > 1 ||
             label.middleColor > 0xFFFFFF) { continue; }
-        if (sscanf(line + pos, "%63[^\r\n]%n", id, &end) != 1 || end == 0 || strchr(id, '\t') != NULL ||
-            (line[pos + end] != '\n' && line[pos + end] != '\r' && line[pos + end] != '\0')) continue;
+        if (sscanf(line + pos, "%63[^\t\r\n]%n", id, &end) != 1 || end == 0) continue;
+        if (line[pos + end] == '\t') { /* the fingerprint (v13 on) */
+            unsigned long long quick;
+            int more = 0;
+            if (sscanf(line + pos + end, "\t%llx%n", &quick, &more) != 1 || more == 0) continue;
+            label.quick = quick;
+            end += more;
+        }
+        if (line[pos + end] != '\n' && line[pos + end] != '\r' && line[pos + end] != '\0') continue;
         translated = MenuTranslation_Text(id);
         original = MenuTranslation_Original(id);
         if (translated == NULL || original == NULL || strlen(translated) >= sizeof(label.text) ||
@@ -928,12 +935,36 @@ int MenuText_MayHaveBattleTexture(int width, int height, int indexed) {
    MenuText_Render both need it, and it is a byte at a time over the whole texture: 60 ms over a recorded session's
    new textures, and the same again in MenuText_Render with a menu font chosen (175 ms with its compares). Worked out
    once per texture; MenuText_NewTexture forgets it, so a texture never gets another's. Called with sLock held. */
-static struct { const uint8_t *rgba; int width, height, valid; uint64_t hash; } sTexHash;
+static struct { const uint8_t *rgba; int width, height, valid, quickValid; uint64_t hash, quick; } sTexHash;
 
 void MenuText_NewTexture(void) {
     pthread_mutex_lock(&sLock);
-    sTexHash.valid = 0;
+    sTexHash.valid = sTexHash.quickValid = 0;
     pthread_mutex_unlock(&sLock);
+}
+
+/* Whether a label of this size could be this texture: one has its fingerprint, or one has none to compare. A
+   texture of a label's size that is none (most of a fight's effects) is told by 64 of its pixels, not all of its
+   bytes. Called with sLock held. */
+static int label_could_be(const uint8_t *rgba, int width, int height, int fontFaceOnly) {
+    int n;
+    if (!sTexHash.quickValid || sTexHash.rgba != rgba || sTexHash.width != width || sTexHash.height != height) {
+        sTexHash.quick = MenuLabels_Quick(rgba, width, height);
+        sTexHash.quickValid = 1;
+        if (sTexHash.rgba != rgba || sTexHash.width != width || sTexHash.height != height) {
+            sTexHash.valid = 0; /* (another texture: its full hash is not this one's) */
+        }
+        sTexHash.rgba = rgba;
+        sTexHash.width = width;
+        sTexHash.height = height;
+    }
+    for (n = 0; n < sCount; n++) {
+        if (sLabels[n].width == width && sLabels[n].height == height && (!fontFaceOnly || sLabels[n].fontFace) &&
+            (sLabels[n].quick == 0 || sLabels[n].quick == sTexHash.quick)) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static uint64_t texture_hash(const uint8_t *rgba, int width, int height) {
@@ -958,7 +989,7 @@ int MenuText_IsBattleTexture(const uint8_t *rgba, int width, int height, int ind
     if (!indexed || rgba == NULL || width < 1 || height < 1) { return 0; }
     pthread_mutex_lock(&sLock);
     menu_text_labels();
-    if (battle_texture_size_loaded(width, height)) {
+    if (battle_texture_size_loaded(width, height) && label_could_be(rgba, width, height, 1)) {
         hash = texture_hash(rgba, width, height);
         for (n = 0; n < sCount; n++) {
             if (sLabels[n].fontFace && sLabels[n].width == width && sLabels[n].height == height && sLabels[n].hash == hash) {
@@ -1780,6 +1811,10 @@ uint8_t *MenuText_Render(const uint8_t *rgba, int width, int height, int indexed
         return NULL;
     }
     rw = width * scale; rh = height * scale;
+    if (!label_could_be(rgba, width, height, 0)) {
+        pthread_mutex_unlock(&sLock);
+        return NULL;
+    }
     hash = texture_hash(rgba, width, height);
     for (n = 0; n < sCount; n++) {
         const MenuLabel *label = &sLabels[n];
