@@ -141,6 +141,18 @@ unsigned gsSkipped;
 unsigned gGpuNewTex, gGpuNewTexPixels, gGpuNewPipes; /* created since the front end last cleared them (slow-frame report) */
 unsigned gGpuTexReplaced; /* textures taken from a texture pack so far */
 uint64_t gGpuTexNs, gGpuPipeNs, gGpuEndNs; /* time spent decoding textures, creating pipelines, in GsGpu_FrameEnd */
+/* The same for the picture being drawn only, where it is drawn (the render thread's, or the game's): BT3_DRAW_LOG
+   (gs_gpu.c, draw_log). From the start of its list (GsGpu_ListStart). */
+uint64_t gDrawStartNs, gDrawTexNs, gDrawPipeNs;
+unsigned gDrawNewTex;
+int gDrawLogged; /* the picture's line is written (Smooth motion's other pictures of the list are not) */
+
+void GsGpu_ListStart(void) {
+    gDrawStartNs = SDL_GetTicksNS(); /* (gs_gpu.c's clock, where it is compared) */
+    gDrawTexNs = gDrawPipeNs = 0;
+    gDrawNewTex = 0;
+    gDrawLogged = 0;
+}
 
 static uint64_t gpu_now(void) {
     struct timespec ts;
@@ -590,6 +602,8 @@ static GsTex texture_get(int ctx) {
         }
     }
     gGpuTexNs += gpu_now() - tex_t0;
+    gDrawTexNs += gpu_now() - tex_t0;
+    gDrawNewTex++;
     t = &sTex[gsTexCount];
     t->tex = replaced ? pack_texture(&pack) : sBackend->texCreate(rw, rh, GS_TEXFMT_RGBA8, 1);
     if (t->tex == 0) {

@@ -427,6 +427,10 @@ static int pipeline_create(uint32_t key, int remember) {
     t0 = gpu_now();
     sPipes[sPipeCount].p = SDL_CreateGPUGraphicsPipeline(sDev, &ci);
     gGpuPipeNs += gpu_now() - t0;
+    {
+        extern uint64_t gDrawPipeNs;
+        gDrawPipeNs += gpu_now() - t0;
+    }
     if (sPipes[sPipeCount].p == NULL) {
         fprintf(stderr, "bt3: pipeline %08x: %s\n", key, SDL_GetError());
         return 0;
@@ -1538,6 +1542,28 @@ static void vk_frame_end(void) {
         lag_fence(f);
     } else {
         SDL_SubmitGPUCommandBuffer(cmd); { extern void Port_LagMark(int what); Port_LagMark('S'); }
+    }
+    {   /* BT3_DRAW_LOG=<ms>: each picture whose drawing took longer, from the start of its list to the driver, in parts:
+           to find what makes a drawing slow now and then (a laptop: 1 in 10 took 10 to 20 ms instead of 2) */
+        static int limit = -1;
+        extern uint64_t gDrawStartNs, gDrawTexNs, gDrawPipeNs;
+        extern unsigned gDrawNewTex, gGsFrame;
+        extern int gDrawLogged;
+        if (limit < 0) {
+            limit = getenv("BT3_DRAW_LOG") != NULL ? atoi(getenv("BT3_DRAW_LOG")) : 0;
+        }
+        if (limit > 0 && !gDrawLogged && gDrawStartNs != 0) {
+            uint64_t now = gpu_now(), total = now - gDrawStartNs;
+            gDrawLogged = 1;
+            if (total >= (uint64_t)limit * 1000000ull) {
+                uint64_t walk = sEndT[0] > gDrawStartNs ? sEndT[0] - gDrawStartNs : 0;
+                fprintf(stderr, "draw: frame %u: %.1f ms: the list %.1f (of it %u new textures decoded %.1f, pipelines made %.1f), "
+                                "uploads %.1f, issuing the draws %.1f, waiting for the screen's buffer %.1f, showing %.1f, handing over %.1f\n",
+                        gGsFrame, (double)total / 1e6, (double)walk / 1e6, gDrawNewTex, (double)gDrawTexNs / 1e6, (double)gDrawPipeNs / 1e6,
+                        (double)(sEndT[1] - sEndT[0]) / 1e6, (double)(sEndT[2] - sEndT[1]) / 1e6, (double)(sEndT[3] - sEndT[2]) / 1e6,
+                        (double)(sEndT[4] - sEndT[3]) / 1e6, (double)(now - sEndT[4]) / 1e6);
+            }
+        }
     }
     {   /* BT3_GS_VERBOSE: once a second, where the end of the frame spends its time */
         static uint64_t sum[5];

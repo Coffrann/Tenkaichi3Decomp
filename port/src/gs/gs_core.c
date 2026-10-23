@@ -1542,7 +1542,9 @@ static void freeze_block(const uint32_t *tag, const uint32_t *data, uint32_t qwc
 
 static void run_frozen(void) {
     size_t at = 0;
+    extern void GsGpu_ListStart(void); /* gs_draw.c: BT3_DRAW_LOG times a picture from here */
 
+    GsGpu_ListStart();
     while (at < sFrozenUsed) {
         const uint32_t *b = sFrozen + at;
         chain_block(b + 2, b + 6, b[0], (int)b[1]);
@@ -1583,6 +1585,9 @@ static void walk_chain(uint32_t tadr, int tte, void (*block)(const uint32_t *tag
 
 /* Executes one frame's list: the DMA chain at `tadr` on VIF1, then the end-of-frame work of the back end. */
 static void run_chain(uint32_t tadr, int tte) {
+    extern void GsGpu_ListStart(void);
+
+    GsGpu_ListStart();
     walk_chain(tadr, tte, chain_block);
     chain_end();
 }
