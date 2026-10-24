@@ -177,8 +177,12 @@ static Tex sTex[MAX_TEX];
 static uint16_t sTexBucket[TEX_BUCKETS]; /* index + 1 of a cache entry, 0 = empty (open addressing) */
 static Tex *sLast; /* the entry the previous lookup returned */
 
-/* The 256-colour tables as textures, by hash of the palette entries they use (64 slots). */
+/* The 256-colour tables as textures, by their entries (64 slots): found by a hash, taken only if every entry is the
+   same. (By the hash alone two different tables were one: the object glow's table and the glare's ramp, which differ
+   only in alpha, came out the same with teen Gohan's third costume on Namek, and the glow of the fighters was drawn
+   through the glare's ramp, every pixel of the stage as if it glowed: a white picture, seen by a player.) */
 static struct { uint32_t hash, last; GsTex tex; } sCluts[MAX_CLUTS];
+static uint32_t sClutPx[MAX_CLUTS][256]; /* (apart: the slots the lookup goes through stay together) */
 
 static uint32_t tex_bucket(uint64_t t0, uint64_t texa, uint32_t gen) {
     uint64_t h = (t0 ^ (texa * 0x9E3779B97F4A7C15ull) ^ ((uint64_t)gen << 17)) * 0xD6E8FEB86659FD93ull;
@@ -789,10 +793,10 @@ static GsTex clut_texture(uint32_t cbp) {
     for (i = 0; i < 256; i++) {
         uint32_t n = (i & 0xE7) | ((i & 8) << 1) | ((i & 0x10) >> 1);
         px[i] = Gs_VramRead(cbp, 1, 0, n & 15, n >> 4);
-        hash = (hash ^ px[i]) * 16777619u;
+        hash = (hash ^ px[i] ^ (px[i] >> 16)) * 16777619u; /* (the top bits folded in: the alpha is there) */
     }
     for (k = 0; k < MAX_CLUTS; k++) {
-        if (sCluts[k].tex != 0 && sCluts[k].hash == hash) {
+        if (sCluts[k].tex != 0 && sCluts[k].hash == hash && memcmp(sClutPx[k], px, sizeof(px)) == 0) {
             sCluts[k].last = gGsFrame;
             return sCluts[k].tex;
         }
@@ -816,6 +820,7 @@ static GsTex clut_texture(uint32_t cbp) {
     sBackend->texUpload(tex, 0, 256, 1, GS_TEXFMT_RGBA8, upload, sizeof(px));
     sCluts[old].tex = tex;
     sCluts[old].hash = hash;
+    memcpy(sClutPx[old], px, sizeof(px));
     sCluts[old].last = gGsFrame;
     return tex;
 }
