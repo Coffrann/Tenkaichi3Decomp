@@ -1662,6 +1662,7 @@ static void audio_tab(PortVideo &v) {
         if (ImGui::Checkbox("Music follows game speed", &follows)) {
             gPortMusicFollows = follows;
             Port_SettingSave("music_follows_speed", follows);
+            Port_SettingsWrite(); // (in the file at once: it was lost at the end unless another setting was written after it)
         }
         ImGui::SetItemTooltip("When the game runs at another speed than 100%% (an online match, the Cheats tab):\n"
                               "off, the music plays as it is; on, it is sped up or slowed down with the game,\n"
@@ -1686,6 +1687,9 @@ static void cheats_tab(void) {
             Port_GameSpeedSet(speed);
             Port_AudioRefresh();
         }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+            Port_SettingsWrite(); // (when the slider is let go: the speed was lost at the end unless another setting was written)
+        }
         ImGui::SetItemTooltip("How fast the game runs outside online play (the sound keeps its pitch). 100%% is the game's own;\n"
                               "114%% is what competitive play uses. An online match never uses this value:\n"
                               "its speed is the host's or the queue's.");
@@ -1693,6 +1697,7 @@ static void cheats_tab(void) {
         if (ImGui::Button("Reset")) {
             Port_GameSpeedSet(100);
             Port_AudioRefresh();
+            Port_SettingsWrite();
         }
         ImGui::Separator();
         ImGui::Spacing();

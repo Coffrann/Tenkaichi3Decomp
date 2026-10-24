@@ -561,6 +561,7 @@ int Port_ClashSquareX(void) {
 void Port_ClashSquareXSet(int quarters) {
     sClashSquareX = quarters == 4 || quarters == 6 || quarters == 7 || quarters == 8 || quarters == 9 ? quarters : 9;
     Port_SettingSave("clash_square_x", sClashSquareX);
+    Port_SettingsWrite(); /* (in the file at once: the value was lost at the end unless another setting was written after it) */
 }
 
 void Port_ClashSquareSet(int on) {
