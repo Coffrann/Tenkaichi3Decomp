@@ -21,6 +21,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <pthread.h>
 #include <string.h>
 #include <time.h>
@@ -582,6 +583,7 @@ static void draw_line(Target *sf, int ctx, const Vertex *a, const Vertex *b) {
 #define SEAM_SLOTS 16384
 static struct { volatile uint64_t key; volatile float fx, fy; } sSeam[SEAM_SLOTS];
 static int sSeamOn = -1;
+static int sSeamWiden = 1; /* BT3_SEAM_WIDEN=0: seam triangles at their own size */
 
 static uint64_t seam_key(uint32_t x, uint32_t y, uint32_t z) {
     return ((uint64_t)(z & 0xFFFFFF) << 32 | (uint64_t)(y & 0xFFFF) << 16 | (x & 0xFFFF)) | 1ull << 63; /* (never 0) */
@@ -595,6 +597,7 @@ void Port_SeamExact(uint32_t x, uint32_t y, uint32_t z, uint32_t fxBits, uint32_
     unsigned slot = (unsigned)((key * 0x9E3779B97F4A7C15ull) >> 50) & (SEAM_SLOTS - 1);
     if (sSeamOn < 0) {
         sSeamOn = getenv("BT3_SEAM_ROUND") == NULL || atoi(getenv("BT3_SEAM_ROUND")) == 0;
+        sSeamWiden = getenv("BT3_SEAM_WIDEN") == NULL || atoi(getenv("BT3_SEAM_WIDEN")) != 0;
     }
     __atomic_store_n(&sSeam[slot].key, 0, __ATOMIC_RELEASE); /* (a reader in between finds no key) */
     sSeam[slot].fx = fx;
@@ -613,8 +616,29 @@ static int seam_exact(uint32_t x, uint32_t y, uint32_t z, float *fx, float *fy) 
     return __atomic_load_n(&sSeam[slot].key, __ATOMIC_ACQUIRE) == key;
 }
 
+/* Which of gs.vtx are a seam's (seam_exact found them): a triangle of three is drawn a little larger (seam_widen). */
+static uint8_t sVtxSeam[3];
+
+/* A seam triangle, half a picture pixel larger all round (each corner moved that far from the middle, at the internal
+   resolution). Even at their exact positions the seam and the parts beside it left a pixel open here and there,
+   where one's edge has a corner the other's has not; overlapping them a little closes those. */
+static void seam_widen(Vertex *t) {
+    extern int gsScale;
+    float cx = (t[0].x + t[1].x + t[2].x) / 3.0f, cy = (t[0].y + t[1].y + t[2].y) / 3.0f;
+    float d = 0.5f / (float)(gsScale > 0 ? gsScale : 1);
+    int i;
+    for (i = 0; i < 3; i++) {
+        float dx = t[i].x - cx, dy = t[i].y - cy, len = sqrtf(dx * dx + dy * dy);
+        if (len > 1e-4f) {
+            t[i].x += dx / len * d;
+            t[i].y += dy / len * d;
+        }
+    }
+}
+
 /* A vertex arrives (XYZ2 / XYZF2 with kick = 1, XYZ3 / XYZF3 with kick = 0). */
 static void vertex(uint32_t x, uint32_t y, uint32_t z, int kick) {
+    int seamHit = 0;
     int ctx = (gs.prim >> 9) & 1, type = gs.prim & 7;
     Target *sf;
     Vertex v;
@@ -631,6 +655,7 @@ static void vertex(uint32_t x, uint32_t y, uint32_t z, int kick) {
     {   /* a seam's vertex: where it was before the rounding (Port_SeamExact) */
         float fx, fy;
         if (sGpu && seam_exact(x, y, z, &fx, &fy)) {
+            seamHit = 1;
             v.x = fx - (float)(gs.xyoffset[ctx] & 0xFFFF) / 16.0f;
             v.y = fy - (float)((gs.xyoffset[ctx] >> 32) & 0xFFFF) / 16.0f;
         }
@@ -641,8 +666,12 @@ static void vertex(uint32_t x, uint32_t y, uint32_t z, int kick) {
     v.q = gs.q;
     v.u = gs.uv & 0x3FFF; v.v = (gs.uv >> 16) & 0x3FFF;
     if (gs.vcount < 3) {
+        sVtxSeam[gs.vcount] = (uint8_t)seamHit;
         gs.vtx[gs.vcount++] = v;
     } else {
+        sVtxSeam[0] = sVtxSeam[1];
+        sVtxSeam[1] = sVtxSeam[2];
+        sVtxSeam[2] = (uint8_t)seamHit;
         gs.vtx[0] = gs.vtx[1]; gs.vtx[1] = gs.vtx[2]; gs.vtx[2] = v;
     }
     gs.strip++;
@@ -701,7 +730,7 @@ static void vertex(uint32_t x, uint32_t y, uint32_t z, int kick) {
     case 0: if (kick) { if (sGpu) { GsGpu_Draw(0, ctx, &v); } else { pixel(sf, ctx, (int)v.x, (int)v.y, v.z, vcol(&v)); } } gs.vcount = 0; break;
     case 1: if (gs.vcount == 2) { if (kick) { if (sGpu) { GsGpu_Draw(1, ctx, gs.vtx); } else { draw_line(sf, ctx, &gs.vtx[0], &gs.vtx[1]); } } gs.vcount = 0; } break;
     case 2: if (gs.vcount == 2) { if (kick) { if (sGpu) { GsGpu_Draw(1, ctx, gs.vtx); } else { draw_line(sf, ctx, &gs.vtx[0], &gs.vtx[1]); } } gs.vtx[0] = gs.vtx[1]; gs.vcount = 1; } break;
-    case 3: if (gs.vcount == 3) { if (kick) { if (sGpu) { GsGpu_Draw(3, ctx, gs.vtx); } else { draw_triangle(sf, ctx, &gs.vtx[0], &gs.vtx[1], &gs.vtx[2]); } } gs.vcount = 0; } break;
+    case 3: if (gs.vcount == 3) { if (kick) { if (sGpu && sVtxSeam[0] && sVtxSeam[1] && sVtxSeam[2] && sSeamWiden) { Vertex t[3] = {gs.vtx[0], gs.vtx[1], gs.vtx[2]}; seam_widen(t); GsGpu_Draw(3, ctx, t); } else if (sGpu) { GsGpu_Draw(3, ctx, gs.vtx); } else { draw_triangle(sf, ctx, &gs.vtx[0], &gs.vtx[1], &gs.vtx[2]); } } gs.vcount = 0; } break;
     case 4: if (gs.vcount == 3 && kick) { if (sGpu) { GsGpu_Draw(3, ctx, gs.vtx); } else { draw_triangle(sf, ctx, &gs.vtx[0], &gs.vtx[1], &gs.vtx[2]); } } break;
     case 5:
         if (gs.vcount == 3) {
