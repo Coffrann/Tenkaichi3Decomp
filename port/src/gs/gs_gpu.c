@@ -1163,30 +1163,52 @@ static void vk_frame_end(void) {
         dst.size = gsVuIdxCount * sizeof(uint32_t);
         SDL_UploadToGPUBuffer(copy, &src, &dst, true);
     }
-    for (i = 0; i < sPendingCount; i++) {
-        SDL_GPUTransferBufferCreateInfo ti;
-        SDL_GPUTransferBuffer *tb;
-        SDL_GPUTextureTransferInfo src;
-        SDL_GPUTextureRegion dst;
-        void *p;
-        SDL_zero(ti);
-        ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-        ti.size = sPending[i].bytes ? sPending[i].bytes : sPending[i].w * sPending[i].h * 4;
-        tb = SDL_CreateGPUTransferBuffer(sDev, &ti);
-        p = SDL_MapGPUTransferBuffer(sDev, tb, false);
-        memcpy(p, sPending[i].px, ti.size);
-        SDL_UnmapGPUTransferBuffer(sDev, tb);
-        SDL_zero(src);
-        src.transfer_buffer = tb;
-        SDL_zero(dst);
-        dst.texture = sPending[i].tex;
-        dst.mip_level = sPending[i].level;
-        dst.w = sPending[i].w;
-        dst.h = sPending[i].h;
-        dst.d = 1;
-        SDL_UploadToGPUTexture(copy, &src, &dst, false);
-        SDL_ReleaseGPUTransferBuffer(sDev, tb);
-        free(sPending[i].px);
+    if (sPendingCount != 0) {
+        /* The frame's textures through one upload buffer, each level at its own offset (16-byte aligned), mapped
+           once: a buffer made, mapped and let go for every level (a pack's picture has up to 11) cost the frame
+           and the driver's hand-over after it most of a large pack's time. The buffer stays and grows; SDL hands a
+           fresh one (cycle) while the last frame's is still being read. */
+        static SDL_GPUTransferBuffer *tb;
+        static uint32_t tbSize;
+        uint32_t total = 0, at = 0;
+        uint8_t *p;
+        for (i = 0; i < sPendingCount; i++) {
+            total += ((sPending[i].bytes ? sPending[i].bytes : sPending[i].w * sPending[i].h * 4) + 15) & ~15u;
+        }
+        if (tb == NULL || total > tbSize) {
+            SDL_GPUTransferBufferCreateInfo ti;
+            if (tb != NULL) {
+                SDL_ReleaseGPUTransferBuffer(sDev, tb);
+            }
+            SDL_zero(ti);
+            ti.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+            ti.size = tbSize = total > (4u << 20) ? (total + 0xFFFFF) & ~0xFFFFFu : 4u << 20;
+            tb = SDL_CreateGPUTransferBuffer(sDev, &ti);
+        }
+        p = tb != NULL ? SDL_MapGPUTransferBuffer(sDev, tb, true) : NULL;
+        for (i = 0; i < sPendingCount; i++) {
+            uint32_t bytes = sPending[i].bytes ? sPending[i].bytes : sPending[i].w * sPending[i].h * 4;
+            if (p != NULL) {
+                SDL_GPUTextureTransferInfo src;
+                SDL_GPUTextureRegion dst;
+                memcpy(p + at, sPending[i].px, bytes);
+                SDL_zero(src);
+                src.transfer_buffer = tb;
+                src.offset = at;
+                SDL_zero(dst);
+                dst.texture = sPending[i].tex;
+                dst.mip_level = sPending[i].level;
+                dst.w = sPending[i].w;
+                dst.h = sPending[i].h;
+                dst.d = 1;
+                SDL_UploadToGPUTexture(copy, &src, &dst, false);
+                at += (bytes + 15) & ~15u;
+            }
+            free(sPending[i].px);
+        }
+        if (p != NULL) {
+            SDL_UnmapGPUTransferBuffer(sDev, tb);
+        }
     }
     sPendingCount = 0;
     /* A picture the game uploaded straight into a display buffer (a movie frame): from GS memory into a 512 x 448
