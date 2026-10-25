@@ -3,7 +3,7 @@
 A small Cloudflare Worker that lets two players of the port find each other with a short code, without typing
 addresses or forwarding a port. It only introduces the two games to each other: no game data passes through it.
 
-Files: `worker.js` (the Worker), `schema.sql` (its one table, as ONE line without comments: the dashboard's console
+Files: `worker.js` (the Worker), `schema.sql` (its tables, each as ONE line without comments: the dashboard's console
 joins what is pasted into one line, and a `--` comment then takes the rest of the statement with it).
 
 The table `rooms`, one row per room (rows older than ten minutes are removed whenever a room is made):
@@ -20,6 +20,39 @@ The table `rooms`, one row per room (rows older than ten minutes are removed whe
 
 | `queue` | a quick-match room: which queue it waits in (`S`, `T`, `D10`, `D15`, `D20`); empty for a room with a code to hand on |
 | `who` | a quick-match room: a random text the host's game made up for this run, so that a room it left behind is not given back to it |
+
+## Spectators (from the release after 0.1.38.7)
+
+A third player can watch a match with its room code (the game's chapter "Spectators", docs/port/README.md). The
+Worker only introduces the spectator to the host, as it does the two players; the match itself goes from the host
+to the spectator directly.
+
+- `/v1/watch {v, rel, code, name, addrs}` -> `{key, you, peer: {name, addrs}}`: the host's addresses (and relay
+  address, if it has one), for any room of the same `v`, joined or not. The spectator's own addresses (what the
+  other player's would be, with `seen=ip`) are kept for two minutes in the table `watchers`. At most 12 such
+  requests per room in two minutes (`full`); wrong codes count against the same 30 an hour as joins (`busy`).
+- The host's `/v1/poll` with `"watch": true` also answers `watchers`: one list of addresses per spectator of the
+  last two minutes. With `"keep": true` as well, a room someone has joined starts its ten minutes again: the
+  game's host asks every five seconds while its match is on (720 requests an hour of match) and gives the room up
+  (`/v1/leave`, which now removes its spectators too) when the session ends. A host that lets nobody watch does
+  neither, and gives its room up as soon as the match begins, as before.
+- Older games send neither field and get exactly the answers they had: two 0.1.38.7 copies play through the new
+  Worker as through the old one. A spectator asking a Worker without `/v1/watch` is answered "no room" (its
+  message says the service may not take spectators yet).
+
+The table `watchers` (one row per request, removed after two minutes):
+
+| Column | |
+|---|---|
+| `key` | a random text (not handed to the host) |
+| `code` | the room |
+| `made` | seconds since 1970 |
+| `name`, `addrs` | the spectator's name and its addresses as the host is told them (JSON) |
+
+**To deploy:** run the third line of `schema.sql` (`CREATE TABLE IF NOT EXISTS watchers ...`) in the database's
+console (the other two lines change nothing that exists), then replace the Worker's code with `worker.js` and
+Deploy. Without the table, `/v1/watch` answers `{"error":"no spectators"}` (501) and polls list no spectators;
+everything else works.
 
 ## Quick match (from 0.1.27)
 
@@ -190,8 +223,9 @@ official release). The first is the kinder one; do both if the key is known to b
 ## What it keeps
 
 For at most ten minutes per room: the room code, the two player names, the addresses each game reported about
-itself, and the host's address as Cloudflare saw it (to limit how many rooms one address can open). Nothing else,
-and nothing after the room has expired.
+itself, and the host's address as Cloudflare saw it (to limit how many rooms one address can open). A room whose
+host lets spectators in lives while its match is on (the host keeps it, see Spectators), and a spectator's name and
+addresses are kept for two minutes. Nothing else, and nothing after the room has expired.
 
 ## Setting it up (the Cloudflare dashboard, no tools needed)
 
@@ -294,6 +328,10 @@ the top of that file; with `BT3_BUILD_KEY` set to the made-up key the program wa
     # -> {"key":"...","you":"...","peer":{"name":"A","addrs":["203.0.113.5:7000"]}}
     curl -s -X POST $W/v1/poll -d '{"code":"ABC234","key":"<the host key>"}'
     # -> {"peer":{"name":"B","addrs":["198.51.100.9:7000"]}}
+    curl -s -X POST $W/v1/watch -d '{"v":3,"code":"ABC234","name":"C","addrs":["192.0.2.7:7000"]}'
+    # -> {"key":"...","you":"...","peer":{"name":"A","addrs":["203.0.113.5:7000"]}}
+    curl -s -X POST $W/v1/poll -d '{"code":"ABC234","key":"<the host key>","watch":true}'
+    # -> {"peer":{...},"watchers":[["192.0.2.7:7000","seen=<C's address>"]]}
 
 ## Limits
 

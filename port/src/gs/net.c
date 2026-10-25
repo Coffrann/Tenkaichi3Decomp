@@ -2365,7 +2365,13 @@ static void spec_tick(unsigned tick) {
     if (tick % SYNC_EVERY == 0 && tick != 0) { /* its own check value, compared with the host's for the same blank */
         uint64_t had;
         if (!note_get(&sNotesOwn, tick, &had)) {
-            note_put(&sNotesOwn, tick, Port_NetDigest());
+            uint64_t v = Port_NetDigest();
+            static int falsed;
+            if (getenv("BT3_TEST_SPEC_APART") != NULL && tick >= (unsigned)atoi(getenv("BT3_TEST_SPEC_APART")) && !falsed) {
+                falsed = 1; /* testing: this spectator claims another game than it has, once in the run */
+                v ^= 1;
+            }
+            note_put(&sNotesOwn, tick, v);
             spec_compare(tick);
         }
     }

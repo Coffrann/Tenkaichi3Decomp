@@ -3571,3 +3571,111 @@ A copy whose MP3 is gone stays a song, and an ADX without the mark (made by hand
 left out. The files are not touched. Counted at start, four folders: MP3 + its copy + WAV + FLAC gave 3 songs
 (4 before); the copy alone 1; a hand-made ADX beside an MP3 of the same name 2; the list naming the copy 3. Heard
 (Linux): WAV and FLAC songs in a fight, and the MP3 beside its old ADX copy.
+
+## Spectators (2026-10-26)
+
+The first stage of the lobbies: a third game, and up to six, can watch a one-on-one match. (Later an eight-place
+lobby is to reuse it: two players, six spectators, the host in the middle.)
+
+**How.** A session is computed from its first blank out of nothing but the two players' input (the chapters on
+the session's start-up above: nothing else enters the game's state). So a spectator does not need to be sent
+pictures or state: the host sends it the match's set-up, the same words the one who joins is told (rules and speed,
+the seed, both players' camera and shake options, the names), and then the input of both players for every blank
+from the session's first, as the host has it CONFIRMED: its own, and the other player's as it arrived, never a
+guess (`spec_log_update`: every blank below the input known of both). The spectator's copy starts a session like
+the players' (state put back to the first blank, or the program started as the session), runs the same unseen
+start-up, and from the character select on reads both pads from what came (`Port_NetInput`): it computes the same
+character select, battles and rematches, and its player-1 view is the host's picture.
+
+- **Buffer.** It keeps about a second of the host's blanks in hand (`SPEC_BUFFER`, 60). With none left it waits
+  until it has a second's worth again ("Waiting for the match..."); more than two seconds behind (it came in
+  mid-match, or loaded slower) it runs blanks without picture, sound and pacing until it is back at one second
+  ("Catching up with the match... N%", `Port_NetSpecSkip`, the way blanks after a rollback are run).
+- **Whole match kept.** The host keeps every blank's input of the session (36 bytes a blank, 7.8 MB an hour; at
+  most 1,000,000 blanks), so a spectator can come at any time and is sent the match from its first blank.
+- **Packets** (`T_SPEC_*`, types 20 to 28, gs/net.c, the comment above `spec_pump`): greeting (with the
+  fingerprint, the netcode version and a version of its own), wait, no (with why), set-up, data, ack, goodbye,
+  the list of who watches (to the other player), ready (to a lobby's question). Data packets carry a run of blanks,
+  a byte per step: `0x80|n` = the next n+1 blanks are the one before again, `1`/`2`/`3` = the pad(s) that changed
+  follow; a packet's first blank is whole, so every packet stands by itself (a fight with random presses on both
+  sides is about 15 bytes a blank, a menu nothing). After the blanks, the host's sure check values (`sync_check`,
+  every 32 blanks) from the first not yet sent.
+- **Unreliable line.** The spectator says every 50 ms how many blanks it has in a row, and at once when a packet
+  came after a gap; the host sends again from there (after such a word, or after half a second without progress).
+- **The players come first.** Nothing waits for a spectator. The host does its sending with its looks at the socket
+  (`receive`), at most every 16 ms: a live spectator gets a packet every other blank or so (about 30 a second,
+  3 to 4 KB), one with nothing new one every half second, and those that are catching up two packets of 1,150
+  bytes every 16 ms between them all (about 140 KB a second at most, whatever their number). A spectator silent for
+  8 s, or still a minute behind after a minute, is let go.
+- **Same data, same release.** The greeting carries the gameplay fingerprint: different data are refused ("The host's
+  game data are not the same as yours..."), so is another netcode or spectator version. A 0.1.38.7 host ignores
+  every packet of a spectator: after 10 s without an answer the spectator says so ("No answer from the host...
+  needs a release newer than 0.1.38.7 on the host as well"). Nothing the two players send each other changed:
+  NET_VERSION stays 5, and the new build plays 0.1.38.7 both ways.
+- **Desync.** The spectator compares the host's check values with its own. When they differ it says so ("this
+  screen no longer shows the players' fight") and follows the match again from its first blank, once (a second
+  difference is only noted). The players are never told or touched.
+- **The view.** A session's battle is the game's two-player battle with both cameras computed on every copy; each
+  player's copy shows its own one full screen (`BtlCam_UpdateOverride`, `Port_NetView`). The spectator chooses:
+  player 1's (the default), player 2's, or both halves as the game draws them on one machine, V or R1 (and F1 >
+  Change view). Only drawing: the fight's values are the same in every view (tested below; the game's whole state
+  differs by the camera, as between the two players' copies).
+
+**In the game.** The online window's Join tab has "Watch the match" beside "Join the match" (by address and port, or
+by room code); the Host tab "Let others watch the match" (setting `net_spectators`, on by default; the host then
+answers no). While the host has no match yet the spectator waits ("The host is there but its match has not begun
+yet"). The players see "N watching: names" small in the top right corner; the spectator a line at the top
+("Spectating A vs B, view: ...", "V or R1: change view, F1: stop watching"), and F1 has Change view and Stop
+watching. Its controller and keyboard play nobody (and nothing vibrates). When the players leave, the spectator is
+told and goes back to where it was.
+
+**Room codes** (port/matchmaking/README.md, "Spectators"): the spectator asks the service for the room's host
+(`/v1/watch`), the host learns the spectator's addresses with its polls (`watch: true`) and knocks at them for ten
+seconds, letting them through its relay if it holds one. A host that lets spectators in keeps its room while the
+match is on (`keep: true` every five seconds) and gives it up when the session ends; one that does not, gives it up
+when the match begins, as before. Needs the Worker change deployed (a new table and the code).
+
+**Limits.** Six spectators. A spectator behind a router that the host's knocking does not open, with a host that has
+no relay address (the relay is only asked for when the two players needed it), cannot watch by code. Watching by
+code needs the session without a restart on the host (the 64-bit programs with the state list). During a catch-up
+the spectator sees the last picture and hears nothing. A match with a modified disc is watched only by a copy with
+the same one.
+
+**Testing.** `BT3_LOBBY=spectate:<address>:<port>` or `spectate:CODE` (the lobby without its window),
+`BT3_NET_SPECTATE=<address>:<port>` with `BT3_NET_SESSION=1` (started as the session); `BT3_LOBBY_AT=<n>` (the lobby
+begins at the n-th blank, as from the menus), `BT3_SPEC_VIEWS=<blank>:<view>|...` (0, 1, 2 = split),
+`BT3_SPEC_LEAVE=<blank>`, `BT3_TEST_SPEC_APART=<blank>` (this spectator claims a wrong check value once),
+`BT3_NET_LOSS` (a spectator drops that share of what it sends and receives), `BT3_NET_SPECTATORS=0|1` (the host's
+setting), `BT3_NET_SAVES=<folder>` (the session's save folder, for several copies in one folder),
+`BT3_SHOT_DIR=<folder>` (screenshots there, named by frame and blank: two copies' pictures of one blank compared).
+A program started as the session now exits when the session ends (it kept no game to go back to; it used to crash).
+
+Found on the way: a session begun from the lobby window (not by starting the program again) waited forever at the
+language question of the start-up when no language had been chosen yet, or with "Always ask" on: it now never
+asks in a session.
+
+**Tested** (this machine, every copy offscreen and on 127.0.0.1; host and joiner fed one table of random presses
+from the character select on, `BT3_NET_SCRIPT`, rollback 8, 20 ms each way, 60 s battles at 100%; `BT3_HASH` of
+every blank compared, the last line of a blank counting):
+
+| case | compared | result |
+|---|---|---|
+| two spectators from the start (one by the lobby, caught up 570 blanks; one started as the session) | 13,403 blanks, two battles and the rematch between | the whole state identical to the host's in every blank |
+| a spectator coming mid-fight (at the host's blank 6,293; 5,151 blanks run without picture) | 13,942 blanks | identical |
+| a spectator with 15% of its packets lost both ways | 13,998 blanks | identical (one wait of 0.74 s) |
+| views 1 -> 2 -> split -> 1 -> split, and one that left at blank 10,000 | 4,380 and 5,893 fight blanks | the fight's values identical (the whole state differs from the first change: the camera); 312 check values compared, none differed; the host let it go at once |
+| a spectator killed | | the host let it go after 8 s |
+| a false check value at blank 4,000 | | noted, followed again from the start (2,597 blanks caught up), then 4,557 fight blanks identical |
+| pictures: host and spectator, every 20th frame of 110 s | 169 pictures of the same blanks | 168 byte-identical; the first after the start-up differs in 58 pixels of its bottom-right corner |
+| by room code through a local copy of the new Worker: one before the match (told to wait), one mid-match (1,851 caught up) | 4,798 blanks | identical; the joiner's log names them |
+| seven spectators | | the seventh is told the match has six |
+
+The players' pacing (host / joiner, `BT3_LAG_LOG`, 130 s): without spectators, pictures 33.26 ms apart on average,
+99th percentile 34.7 / 37.6 ms, longest 38.0 / 38.1, no waits; with six spectators (without picture, so as not to
+share this machine's graphics card) 33.26, 37.6 / 34.7, 38.8 / 37.8, no waits; rollbacks per 600 blanks within
+the run-to-run spread of the random input (44 to 48). (With four spectators that draw too, the six pictures at 2x
+on one graphics card made frames of up to 100 ms on the players' copies: this machine, not the netcode.)
+0.1.38.7 against this build, host and joiner both ways: the fight's values identical over 4,283 fight blanks, no
+desync; two 0.1.38.7 copies by room code through the new Worker: connected as before; a spectator of a 0.1.38.7
+host: "No answer from the host..." after 10 s by address, the same or "No room with that code..." by code. The
+Windows build compiles (mingw-w64).
