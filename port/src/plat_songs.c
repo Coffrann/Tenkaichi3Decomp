@@ -344,6 +344,18 @@ int PortSongs_BattleBgm(void) {
    checked). `again`: the blank is only being run again (rollback), so the song picked the first time is kept and
    the stream plays on. A song of its own is picked with a generator of its own: the game's random numbers are part
    of what the two copies compute and are not touched. */
+/* Whether song i's file can be opened (on Windows a name with characters outside the system's code page is read
+   from the folder with '?' in their place, and no such file opens: that song is left out rather than leaving the
+   fight without music). */
+static int net_playable(int i) {
+    FILE *fp = fopen(sAliases[i].target, "rb");
+    if (fp == NULL) {
+        return 0;
+    }
+    fclose(fp);
+    return 1;
+}
+
 const char *PortSongs_NetPath(int again) {
     int mode = PortSongs_NetMode(), list[PORT_SONG_MAX], n = 0, i, pick;
 
@@ -351,16 +363,16 @@ const char *PortSongs_NetPath(int again) {
         return NULL;
     }
     net_read();
+    if (again && sNetLast >= 0 && sNetLast < gPortSongCount && sNetChosen[sNetLast]) {
+        return sAliases[sNetLast].target;
+    }
     for (i = 0; i < gPortSongCount; i++) {
-        if (sNetChosen[i]) {
+        if (sNetChosen[i] && net_playable(i)) {
             list[n++] = i;
         }
     }
     if (n == 0) {
         return NULL;
-    }
-    if (again && sNetLast >= 0 && sNetLast < gPortSongCount && sNetChosen[sNetLast]) {
-        return sAliases[sNetLast].target;
     }
     if (mode == 2) {
         for (pick = 0; pick < n && list[pick] <= sNetLast; pick++) {
