@@ -471,6 +471,11 @@ static unsigned sSyncCompared; /* (for the log: notes of the two copies compared
 static uint64_t sSyncOutValue;
 extern unsigned long long Port_NetDigest(void); /* headless.c */
 static void ended(const char *why, unsigned tick);
+/* Spectators (below): every sure note of the match, by blank / SYNC_EVERY (the host's own; a spectator's copy of
+   the host's, and its own) */
+typedef struct { uint64_t *v; uint8_t *has; uint32_t cap; } NoteLog;
+static NoteLog sNotesSure, sNotesOwn;
+static void note_put(NoteLog *l, uint32_t tick, uint64_t v);
 
 /* When the two copies' notes differ, the match goes on (as before 0.1.34, when nothing compared them): the player
    is told once that the two screens may now show different fights, and the log says where it began and, as the
@@ -505,6 +510,9 @@ static void sync_check(uint32_t sure, unsigned tick) {
     if (at != 0 && sSyncMine[at / SYNC_EVERY % SYNC_SLOTS].tick == at) {
         sSyncOutTick = at;
         sSyncOutValue = sSyncMine[at / SYNC_EVERY % SYNC_SLOTS].value;
+        if (sMode == 1) {
+            note_put(&sNotesSure, at, sSyncOutValue); /* (what spectators compare with, for the whole match) */
+        }
     }
     if (getenv("BT3_TEST_APART") != NULL && tick == (unsigned)atoi(getenv("BT3_TEST_APART"))) {
         sSyncOutValue ^= 1; /* testing: from that blank on this copy claims another game than it has, once */
@@ -632,6 +640,691 @@ static void chat_send(void) {
     }
 }
 
+/* ---------------------------------------------------------------------------------------------------------------
+ * Spectators (the first stage of the lobbies; docs/port/README.md, "Spectators").
+ *
+ * A third game can watch a match. It connects to the host and is told the match's set-up (what the one who joins
+ * is told: the rules and speed, the seed, both players' options and names), then sent the input of both players
+ * for every blank from the session's first, as the host has it CONFIRMED (its own, and the other player's as it
+ * arrived; never a guess). A session is computed from its first blank out of nothing but that input, so the
+ * spectator's copy computes the same match: the character select, every battle, the rematches. It runs about a
+ * second behind the host (SPEC_BUFFER); one that is further behind (it came in mid-match, or the line held it up)
+ * runs blanks without picture until it has caught up. The host keeps the whole match's input (36 bytes a blank,
+ * fewer in the packets), so a spectator can come at any time. The check values (sync_check) of the host travel
+ * with the input, and a spectator compares them with its own: a spectator that computes another fight says so.
+ *
+ * Nothing here waits for anything or is waited for: the host sends a spectator at most SPEC_BURST packets a blank
+ * whatever it is owed, and forgets one that has not answered for SPEC_QUIET_NS. The packets:
+ *   T_SPEC_HELLO  spectator -> host   {SPEC_VERSION, NET_VERSION, fingerprint mark, low, high, name, flags}: flag 1,
+ *                                      only asking (the spectator's lobby): the host answers and keeps nothing
+ *   T_SPEC_WAIT   host -> spectator   no match has begun yet (the host's lobby, or its set-up): ask again
+ *   T_SPEC_READY  host -> spectator   (to a lobby's question) the match is on, come in
+ *   T_SPEC_NO     host -> spectator   {why: SPEC_NO_*}
+ *   T_SPEC_SETUP  host -> spectator   {SPEC_VERSION, NET_VERSION, delay, rules, seed, options of both players,
+ *                                      flags, blanks known, the two names}
+ *   T_SPEC_DATA   host -> spectator   {first blank, blanks, blanks known, ...} + blanks + check values (spec_data)
+ *   T_SPEC_ACK    spectator -> host   {blanks it has in a row, 1 if a packet came that it could not use}
+ *   T_SPEC_BYE    either way          the match is over / the spectator leaves
+ *   T_SPEC_LIST   host -> the other player   {count, names}: who watches (for the players' screens)
+ * A copy without spectators (0.1.38.7 and older) ignores all of them: an old host never answers, and after
+ * SPEC_ASK_NS the spectator says why that may be. Nothing the two players send each other has changed.
+ *
+ * The blanks of T_SPEC_DATA, a byte per step: 0x80 | n: the next n + 1 blanks are the same as the one before; 1, 2
+ * or 3: the pads that changed follow (bit 0 player 1, bit 1 player 2, PAD bytes each). A packet's first blank is
+ * always whole (3), so that every packet can be read by itself.
+ * ------------------------------------------------------------------------------------------------------------- */
+enum { T_SPEC_HELLO = 20, T_SPEC_WAIT = 21, T_SPEC_NO = 22, T_SPEC_SETUP = 23, T_SPEC_DATA = 24, T_SPEC_ACK = 25, T_SPEC_BYE = 26, T_SPEC_LIST = 27,
+       T_SPEC_READY = 28 };
+enum { SPEC_VERSION = 1, SPEC_MAX = 6, SPEC_HEAD = 32, SPEC_PAYLOAD = 1150, SPEC_BURST = 2, SPEC_BUFFER = 60, SPEC_MAX_BLANKS = 1000000 };
+enum { SPEC_NO_VERSION = 1, SPEC_NO_DATA = 2, SPEC_NO_FULL = 3, SPEC_NO_OFF = 4, SPEC_NO_PLAIN = 5, SPEC_NO_PLAYER = 6 };
+#define SPEC_QUIET_NS 8000000000ull  /* silent this long: the spectator is gone / the host is gone */
+#define SPEC_ASK_NS 10000000000ull   /* no answer at all this long: nobody hosts there, or a release without spectators */
+#define SPEC_LAG_BLANKS (60u * 60u)   /* a spectator that has been there a minute and is still a minute behind is let go */
+
+static uint8_t *sLog; /* both players' input by blank (PAD bytes each), every blank below sLogN (host and spectator) */
+static uint32_t sLogN, sLogCap;
+
+static int log_room(uint32_t n) {
+    if (n > SPEC_MAX_BLANKS) {
+        return 0;
+    }
+    if (n > sLogCap) {
+        uint32_t cap = sLogCap != 0 ? sLogCap : 65536;
+        uint8_t *p;
+        while (cap < n) {
+            cap *= 2;
+        }
+        p = (uint8_t *)realloc(sLog, (size_t)cap * 2 * PAD);
+        if (p == NULL) {
+            return 0;
+        }
+        sLog = p;
+        sLogCap = cap;
+    }
+    return 1;
+}
+
+static void note_put(NoteLog *l, uint32_t tick, uint64_t v) {
+    uint32_t i = tick / SYNC_EVERY;
+    if (i >= SPEC_MAX_BLANKS / SYNC_EVERY) {
+        return;
+    }
+    if (i >= l->cap) {
+        uint32_t cap = l->cap != 0 ? l->cap : 1024;
+        uint64_t *nv;
+        uint8_t *nh;
+        while (cap <= i) {
+            cap *= 2;
+        }
+        nv = (uint64_t *)realloc(l->v, (size_t)cap * sizeof(uint64_t));
+        if (nv == NULL) {
+            return;
+        }
+        l->v = nv;
+        nh = (uint8_t *)realloc(l->has, cap);
+        if (nh == NULL) {
+            return;
+        }
+        memset(nh + l->cap, 0, cap - l->cap);
+        l->has = nh;
+        l->cap = cap;
+    }
+    l->v[i] = v;
+    l->has[i] = 1;
+}
+
+static int note_get(const NoteLog *l, uint32_t tick, uint64_t *v) {
+    uint32_t i = tick / SYNC_EVERY;
+    if (tick % SYNC_EVERY != 0 || i >= l->cap || !l->has[i]) {
+        return 0;
+    }
+    *v = l->v[i];
+    return 1;
+}
+
+/* The host's spectators. */
+typedef struct {
+    int on;
+    struct sockaddr_in addr;
+    char name[NAME_LEN];
+    uint32_t acked, next;                              /* it has every blank below acked; the next blank to send */
+    uint32_t noteNext;                                 /* the next check value to send (a blank) */
+    uint64_t heardNs, movedNs, rewoundNs, sentNs, sinceNs;
+} Watcher;
+static Watcher sWatch[SPEC_MAX];
+static int sSpecOpen;        /* host: the match's set-up is final, spectators are let in */
+static int sSpecAllow = -1;  /* host: spectators allowed (Port_NetSpectatorsAllow; -1: the setting says) */
+static char sWatchName[SPEC_MAX][NAME_LEN]; /* who watches: the host's own list, or the host's word (T_SPEC_LIST) */
+static int sWatchCount, sListDirty;
+static uint64_t sListSentNs;
+
+/* The spectator's side. */
+static uint32_t sSpecHead;                 /* the blanks the host has (its last word) */
+static uint64_t sSpecHeardNs, sSpecAckNs, sSpecGapNs;
+static int sSpecSkip;                      /* running blanks without picture to catch up */
+static int sSpecSetup, sSpecWaits, sSpecNo, sSpecEnded;
+static uint32_t sSpecApartAt;
+static unsigned sSpecCompared, sSpecDiffered;
+/* What the spectator shows of the fight. A session's battle is always the game's two-player battle, with both
+   players' cameras computed on every copy; each player's copy shows its own one full screen (Port_NetView,
+   btl_cam.c BtlCam_UpdateOverride), and which one it shows is only drawing (the two players' copies show different
+   ones and compute the same fight). The spectator chooses: 0 player 1's view, 1 player 2's, 2 both, the screen
+   split as in a two-player game on one machine (the same battle: nothing is loaded differently). */
+static int sSpecView;
+static int sSpecResyncs, sSpecRejoin;      /* following again from the start after a desync */
+static char sSpecTarget[160];              /* "address:port" of the host (for following again) */
+static uint64_t sSpecDrawNs;
+static unsigned sSpecSkipped;
+static int sSpecNoticed;                   /* the end of watching has been told (ended) */
+static volatile int sSpecLeaveAsked;       /* the window's "Stop watching" (done on the game's thread) */
+
+/* The window (ui.cpp): stop watching; switch whose view is shown. */
+void Port_NetSpecLeave(void) {
+    sSpecLeaveAsked = 1;
+}
+void Port_NetSpecViewSet(int view) {
+    sSpecView = view < 0 || view > 2 ? 0 : view;
+}
+int Port_NetSpecView(void) {
+    return sSpecView;
+}
+
+static int spec_allowed(void) {
+    extern int Port_Setting(const char *name, int def);
+    if (getenv("BT3_NET_SPECTATORS") != NULL) {
+        return atoi(getenv("BT3_NET_SPECTATORS")) != 0;
+    }
+    return sSpecAllow >= 0 ? sSpecAllow : Port_Setting("net_spectators", 1) != 0;
+}
+
+void Port_NetSpectatorsAllow(int on) {
+    sSpecAllow = on != 0;
+}
+
+/* 1 while this copy watches a match. */
+int Port_NetSpectating(void) {
+    return sMode == 3;
+}
+
+static int same_addr(const struct sockaddr_in *a, const struct sockaddr_in *b) {
+    return a->sin_addr.s_addr == b->sin_addr.s_addr && a->sin_port == b->sin_port;
+}
+
+/* For the players' screens (ui.cpp): how many watch this match, and their names. */
+int Port_NetWatchers(void) {
+    return Port_NetActive() && sMode != 3 ? sWatchCount : 0;
+}
+const char *Port_NetWatcher(int i) {
+    return i >= 0 && i < sWatchCount ? sWatchName[i] : "";
+}
+
+/* For the spectator's line (ui.cpp): 0 not watching; else 1 and out = catching up (percent, -1 not), waiting for
+   the host's blanks (1), the blank this copy came apart from the host's at (0: it has not). */
+int Port_NetSpecStatus(int *out) {
+    if (sMode != 3 || !sSpecSetup) {
+        return 0;
+    }
+    out[0] = sSpecSkip && sSpecHead != 0 ? (int)((uint64_t)sTick * 100 / sSpecHead) : -1;
+    out[1] = sTick >= sLogN;
+    out[2] = (int)sSpecApartAt;
+    return 1;
+}
+
+static void spec_list_make(void) {
+    int i;
+    sWatchCount = 0;
+    for (i = 0; i < SPEC_MAX; i++) {
+        if (sWatch[i].on) {
+            memcpy(sWatchName[sWatchCount++], sWatch[i].name, NAME_LEN);
+        }
+    }
+    sListDirty = 1;
+}
+
+/* The other player is told who watches (when that changes, and every two seconds while anyone does). */
+static void spec_list_send(void) {
+    uint32_t pkt[3 + SPEC_MAX * NAME_LEN / 4] = {MAGIC, T_SPEC_LIST, (uint32_t)sWatchCount};
+    int i;
+    for (i = 0; i < sWatchCount; i++) {
+        memcpy((uint8_t *)pkt + 12 + i * NAME_LEN, sWatchName[i], NAME_LEN);
+    }
+    net_send(pkt, 12 + sWatchCount * NAME_LEN, &sPeer);
+    sListSentNs = SDL_GetTicksNS();
+    sListDirty = 0;
+}
+
+static void spec_drop(int i, const char *why) {
+    fprintf(stderr, "bt3: net: spectator %d (%s) %s\n", i + 1, sWatch[i].name, why);
+    sWatch[i].on = 0;
+    spec_list_make();
+}
+
+static void spec_no(const struct sockaddr_in *to, uint32_t why) {
+    uint32_t no[3] = {MAGIC, T_SPEC_NO, why};
+    net_send(no, sizeof(no), to);
+}
+
+/* Is this greeting of a spectator one this game can take? 0 yes, else SPEC_NO_*. (Also the lobby's, below.) */
+static uint32_t spec_check(const uint8_t *pkt, int n) {
+    uint32_t v[5];
+    unsigned long long mine;
+    if (n < 28 + NAME_LEN) {
+        return SPEC_NO_VERSION;
+    }
+    memcpy(v, pkt + 8, 20);
+    if (v[0] != SPEC_VERSION || v[1] != NET_VERSION) {
+        return SPEC_NO_VERSION;
+    }
+    if (v[2] == FP_MARK && fprint_mine(&mine) && ((unsigned long long)v[3] | (unsigned long long)v[4] << 32) != mine) {
+        return SPEC_NO_DATA;
+    }
+    return spec_allowed() ? 0 : SPEC_NO_OFF;
+}
+
+static void spec_setup_send(const struct sockaddr_in *to) {
+    uint32_t s[11 + 2 * NAME_LEN / 4] = {MAGIC, T_SPEC_SETUP, SPEC_VERSION, NET_VERSION, (uint32_t)sDelay, sRules, sSeed, sOpts[0], sOpts[1], 1, sLogN};
+    memcpy(&s[11], sNames[0], NAME_LEN);
+    memcpy(&s[11 + NAME_LEN / 4], sNames[1], NAME_LEN);
+    net_send(s, sizeof(s), to);
+}
+
+/* The host: a spectator's greeting. */
+static void spec_hello(const uint8_t *pkt, int n, const struct sockaddr_in *from) {
+    uint32_t why = sMode == 1 ? spec_check(pkt, n) : SPEC_NO_PLAYER;
+    uint64_t now = SDL_GetTicksNS();
+    int i, free = -1;
+
+    if (why == 0 && !Port_NetSession()) {
+        why = SPEC_NO_PLAIN;
+    }
+    if (why != 0) {
+        spec_no(from, why);
+        return;
+    }
+    if (!sSpecOpen || (n >= 32 + NAME_LEN && (pkt[28 + NAME_LEN] & 1))) {
+        uint32_t wait[3] = {MAGIC, sSpecOpen ? T_SPEC_READY : T_SPEC_WAIT, SPEC_VERSION};
+        net_send(wait, sizeof(wait), from); /* (a lobby's question: answered, nothing kept) */
+        return;
+    }
+    for (i = 0; i < SPEC_MAX; i++) {
+        if (sWatch[i].on && same_addr(&sWatch[i].addr, from)) {
+            sWatch[i].heardNs = now;
+            spec_setup_send(from); /* (its greeting came again: the answer was lost) */
+            return;
+        }
+        if (!sWatch[i].on && free < 0) {
+            free = i;
+        }
+    }
+    if (free < 0) {
+        spec_no(from, SPEC_NO_FULL);
+        return;
+    }
+    memset(&sWatch[free], 0, sizeof(sWatch[free]));
+    sWatch[free].on = 1;
+    sWatch[free].addr = *from;
+    memcpy(sWatch[free].name, pkt + 28, NAME_LEN);
+    sWatch[free].name[NAME_LEN - 1] = '\0';
+    for (i = 0; sWatch[free].name[i] != '\0'; i++) { /* (shown on the players' screens: printable only) */
+        if ((unsigned char)sWatch[free].name[i] < 0x20 || sWatch[free].name[i] == 0x7F) {
+            sWatch[free].name[i] = '?';
+        }
+    }
+    sWatch[free].heardNs = sWatch[free].movedNs = sWatch[free].sinceNs = now;
+    fprintf(stderr, "bt3: net: spectator %d (%s) is watching from blank %u of %u\n", free + 1, sWatch[free].name, 0u, (unsigned)sLogN);
+    spec_list_make();
+    spec_setup_send(from);
+}
+
+/* The host: what the confirmed input has become (every blank both players' input is known for). */
+static void spec_log_update(void) {
+    uint32_t sure = sHave[0] < sHave[1] ? sHave[0] : sHave[1];
+    while (sLogN < sure && sure - sLogN < RING && log_room(sLogN + 1)) {
+        memcpy(sLog + (size_t)sLogN * 2 * PAD, sIn[0][sLogN % RING], PAD);
+        memcpy(sLog + (size_t)sLogN * 2 * PAD + PAD, sIn[1][sLogN % RING], PAD);
+        sLogN++;
+    }
+}
+
+/* Blanks from `from` on, at most `most` of them, into `out` (at most `room` bytes); how many in *count. */
+static int spec_encode(uint32_t from, uint32_t most, uint8_t *out, int room, uint32_t *count) {
+    uint32_t t = from, stop = sLogN - from > most ? from + most : sLogN;
+    int n = 0;
+    while (t < stop) {
+        const uint8_t *cur = sLog + (size_t)t * 2 * PAD, *prev = cur - 2 * PAD;
+        int mask, need;
+        if (t == from) {
+            mask = 3;
+        } else if (memcmp(cur, prev, 2 * PAD) == 0) {
+            uint32_t r = 1;
+            while (t + r < stop && r < 128 && memcmp(cur + (size_t)r * 2 * PAD, cur + ((size_t)r - 1) * 2 * PAD, 2 * PAD) == 0) {
+                r++;
+            }
+            if (n + 1 > room) {
+                break;
+            }
+            out[n++] = (uint8_t)(0x80 | (r - 1));
+            t += r;
+            continue;
+        } else {
+            mask = (memcmp(cur, prev, PAD) != 0) | (memcmp(cur + PAD, prev + PAD, PAD) != 0) << 1;
+        }
+        need = 1 + ((mask & 1) + (mask >> 1)) * PAD;
+        if (n + need > room) {
+            break;
+        }
+        out[n++] = (uint8_t)mask;
+        if (mask & 1) {
+            memcpy(out + n, cur, PAD);
+            n += PAD;
+        }
+        if (mask & 2) {
+            memcpy(out + n, cur + PAD, PAD);
+            n += PAD;
+        }
+        t++;
+    }
+    *count = t - from;
+    return n;
+}
+
+/* A T_SPEC_DATA packet: {first blank, blanks, blanks known, check values, bytes of blanks, 0}, the blanks, then
+   the host's sure check values (blank, value: 12 bytes each) from the first not yet sent, as far as the packet's
+   blanks go (one becomes sure only when the host has run its blank with both players' input: those of the newest
+   blanks come with a later packet). A packet spans at most SPEC_NOTES check values' worth of blanks, so that
+   the spectator can compare every one of them. */
+enum { SPEC_NOTES = 16 };
+static void spec_data(Watcher *w, uint64_t now) {
+    uint8_t pkt[SPEC_HEAD + SPEC_PAYLOAD + SPEC_NOTES * 12];
+    uint32_t head[8], count = 0, at;
+    int len = spec_encode(w->next, SPEC_NOTES * SYNC_EVERY, pkt + SPEC_HEAD, SPEC_PAYLOAD, &count), notes = 0;
+
+    if (w->noteNext < w->next - w->next % SYNC_EVERY) { /* (after a rewind: from the blanks it gets again) */
+        w->noteNext = w->next - w->next % SYNC_EVERY;
+    }
+    for (at = w->noteNext; at < w->next + count && notes < SPEC_NOTES; at += SYNC_EVERY) {
+        uint64_t v;
+        if (at == 0) {
+            continue;
+        }
+        if (!note_get(&sNotesSure, at, &v)) {
+            break; /* (not sure yet on the host: in a later packet) */
+        }
+        memcpy(pkt + SPEC_HEAD + len + notes * 12, &at, 4);
+        memcpy(pkt + SPEC_HEAD + len + notes * 12 + 4, &v, 8);
+        notes++;
+    }
+    w->noteNext = at;
+    head[0] = MAGIC;
+    head[1] = T_SPEC_DATA;
+    head[2] = w->next;
+    head[3] = count;
+    head[4] = sLogN;
+    head[5] = (uint32_t)notes;
+    head[6] = (uint32_t)len;
+    head[7] = 0;
+    memcpy(pkt, head, SPEC_HEAD);
+    net_send(pkt, SPEC_HEAD + len + notes * 12, &w->addr);
+    w->next += count;
+    w->sentNs = now;
+}
+
+/* The host: what is due to each spectator. Called with every look at the socket (receive), done at most every
+   16 ms: a spectator that is live gets a packet every other blank or so, one with nothing new a packet every half
+   second (to be heard), and those that are catching up SPEC_BURST packets every 16 ms between them all (about
+   140 KB a second at the most, whatever their number: the host's line is the players' match first). */
+static void spec_pump(void) {
+    static uint64_t last;
+    static int turn;
+    uint64_t now = SDL_GetTicksNS();
+    int i, k, budget = SPEC_BURST;
+
+    if (sMode != 1 || now - last < 16000000ull) {
+        return;
+    }
+    if (now - last > 1000000000ull) { /* (this copy was away a while, loading: the spectators' silence says nothing) */
+        for (i = 0; i < SPEC_MAX; i++) {
+            sWatch[i].heardNs = now;
+        }
+    }
+    last = now;
+    spec_log_update();
+    turn++;
+    for (k = 0; k < SPEC_MAX; k++) {
+        Watcher *w = &sWatch[(turn + k) % SPEC_MAX];
+        uint32_t behind;
+        i = (turn + k) % SPEC_MAX;
+        if (!w->on) {
+            continue;
+        }
+        if (now > w->heardNs && now - w->heardNs > SPEC_QUIET_NS) {
+            spec_drop(i, "stopped answering: no longer sent the match");
+            continue;
+        }
+        if (now - w->sinceNs > 60000000000ull && sLogN - w->acked > SPEC_LAG_BLANKS) {
+            spec_drop(i, "does not keep up (a minute behind): no longer sent the match");
+            continue;
+        }
+        if (w->next > w->acked && now - w->movedNs > 500000000ull && now - w->rewoundNs > 500000000ull) {
+            w->next = w->acked; /* nothing taken for half a second: from what it has, again */
+            w->noteNext = w->acked - w->acked % SYNC_EVERY;
+            w->rewoundNs = now;
+        }
+        behind = sLogN - w->next;
+        if (behind == 0) {
+            if (now - w->sentNs >= 500000000ull) {
+                spec_data(w, now);
+            }
+        } else if (behind > 240) {
+            while (budget > 0 && w->next < sLogN) {
+                spec_data(w, now);
+                budget--;
+            }
+        } else if (now - w->sentNs >= 30000000ull) {
+            spec_data(w, now);
+        }
+    }
+    if (sConnected && (sListDirty || (sWatchCount > 0 && now - sListSentNs > 2000000000ull))) {
+        spec_list_send();
+    }
+}
+
+static void spec_ack_send(int gap) {
+    uint32_t ack[4] = {MAGIC, T_SPEC_ACK, sLogN, (uint32_t)gap};
+    if (sLoss != 0 && (rand() % 100) < sLoss) {
+        return; /* (testing: BT3_NET_LOSS) */
+    }
+    net_send(ack, sizeof(ack), &sPeer);
+    sSpecAckNs = SDL_GetTicksNS();
+}
+
+extern int Port_SessionCan(void); /* gs/state.c */
+static void spec_compare(uint32_t at) {
+    uint64_t mine, theirs;
+    if (!note_get(&sNotesOwn, at, &mine) || !note_get(&sNotesSure, at, &theirs)) {
+        return;
+    }
+    sNotesOwn.has[at / SYNC_EVERY] = 2; /* (compared: not again) */
+    sSpecCompared++;
+    sSyncCompared++;
+    if (mine == theirs) {
+        return;
+    }
+    sSpecDiffered++;
+    if (sSpecApartAt == 0) {
+        sSpecApartAt = at;
+        fprintf(stderr, "bt3: net: spectating: this game differs from the host's at blank %u (this copy %016llx, the host %016llx)\n", (unsigned)at,
+                (unsigned long long)mine, (unsigned long long)theirs);
+        if (sSpecResyncs < 1 && Port_SessionCan() && getenv("BT3_SPEC_NORESYNC") == NULL) {
+            sSpecResyncs++;
+            sSpecRejoin = 1; /* followed again from the start (Port_LobbyAuto), once */
+            Port_UiNotice("Spectating: this screen no longer shows the players' fight (desync). Following the match again from the start...");
+        } else {
+            Port_UiNotice("Spectating: this screen no longer shows the players' fight (desync). The players' match is not affected.");
+        }
+    }
+}
+
+/* The spectator: blanks from the host. */
+static void spec_take(const uint8_t *pkt, int n) {
+    uint32_t h[6], t, end, k;
+    uint8_t cur[2 * PAD];
+    int i = SPEC_HEAD, stop;
+
+    if (n < SPEC_HEAD) {
+        return;
+    }
+    memcpy(h, pkt + 8, 24); /* first, blanks, known, check values, bytes of blanks, 0 */
+    if (h[4] > (uint32_t)(n - SPEC_HEAD) || h[3] > SPEC_NOTES || SPEC_HEAD + h[4] + h[3] * 12 > (uint32_t)n) {
+        return;
+    }
+    stop = SPEC_HEAD + (int)h[4];
+    sSpecHead = h[2] > sSpecHead ? h[2] : sSpecHead;
+    for (k = 0; k < h[3]; k++) { /* the host's check values: compared with this copy's as both are known */
+        uint32_t at;
+        uint64_t v, had;
+        memcpy(&at, pkt + stop + k * 12, 4);
+        memcpy(&v, pkt + stop + k * 12 + 4, 8);
+        if (at != 0 && at % SYNC_EVERY == 0 && !note_get(&sNotesSure, at, &had)) {
+            note_put(&sNotesSure, at, v);
+            spec_compare(at);
+        }
+    }
+    if (h[1] == 0) {
+        return;
+    }
+    if (h[0] > sLogN) { /* a packet before it went missing: say so (at most every 50 ms) */
+        uint64_t now = SDL_GetTicksNS();
+        if (now - sSpecGapNs > 50000000ull) {
+            sSpecGapNs = now;
+            spec_ack_send(1);
+        }
+        return;
+    }
+    end = h[0] + h[1];
+    for (t = h[0]; t < end && i < stop;) {
+        uint8_t b = pkt[i++];
+        uint32_t r = 1;
+        if (b & 0x80) {
+            if (t == h[0]) {
+                return; /* (not a packet this program makes) */
+            }
+            r = (uint32_t)(b & 0x7F) + 1;
+        } else {
+            if ((t == h[0] && b != 3) || b == 0 || b > 3 || i + ((b & 1) + (b >> 1)) * PAD > stop) {
+                return;
+            }
+            if (b & 1) {
+                memcpy(cur, pkt + i, PAD);
+                i += PAD;
+            }
+            if (b & 2) {
+                memcpy(cur + PAD, pkt + i, PAD);
+                i += PAD;
+            }
+        }
+        for (k = 0; k < r && t < end; k++, t++) {
+            if (t == sLogN) {
+                if (!log_room(sLogN + 1)) {
+                    return;
+                }
+                memcpy(sLog + (size_t)sLogN * 2 * PAD, cur, 2 * PAD);
+                sLogN++;
+            }
+        }
+    }
+}
+
+/* A packet of the spectators' kind. Returns 1 if it was for this copy. */
+static int spec_packet(const uint8_t *pkt, int n, const struct sockaddr_in *from, uint32_t type) {
+    if (sMode == 3) {
+        if (!same_addr(from, &sPeer)) {
+            return 0; /* (a spectator listens to the host only) */
+        }
+        if (type == T_SPEC_DATA && sLoss != 0 && (rand() % 100) < sLoss) {
+            return 0; /* (testing: BT3_NET_LOSS drops what comes in too) */
+        }
+        sSpecHeardNs = SDL_GetTicksNS();
+        if (type == T_SPEC_SETUP && n >= 44 + 2 * NAME_LEN && !sSpecSetup) {
+            uint32_t s[9];
+            memcpy(s, pkt + 8, 36);
+            if (s[0] != SPEC_VERSION || s[1] != NET_VERSION) {
+                sSpecNo = SPEC_NO_VERSION;
+                return 1;
+            }
+            sDelay = (int)s[2] < 0 || (int)s[2] > 30 ? 2 : (int)s[2];
+            sRules = s[3];
+            sSeed = s[4];
+            sOpts[0] = s[5];
+            sOpts[1] = s[6];
+            sSpecHead = s[8];
+            memcpy(sNames[0], pkt + 44, NAME_LEN);
+            memcpy(sNames[1], pkt + 44 + NAME_LEN, NAME_LEN);
+            sNames[0][NAME_LEN - 1] = sNames[1][NAME_LEN - 1] = '\0';
+            sSpecSetup = 1;
+            sConnected = 1;
+        } else if (type == T_SPEC_DATA && sSpecSetup) {
+            spec_take(pkt, n);
+        } else if (type == T_SPEC_WAIT) {
+            sSpecWaits = 1;
+        } else if (type == T_SPEC_NO && n >= 12) {
+            memcpy(&sSpecNo, pkt + 8, 4);
+            sSpecNo = sSpecNo == 0 ? SPEC_NO_VERSION : sSpecNo;
+        } else if (type == T_SPEC_BYE) {
+            sSpecEnded = 1;
+        }
+        return 1;
+    }
+    if (type == T_SPEC_HELLO) {
+        spec_hello(pkt, n, from);
+        return 1;
+    }
+    if (type == T_SPEC_LIST && sMode == 2 && sConnected && same_addr(from, &sPeer) && n >= 12) {
+        uint32_t count;
+        int i;
+        memcpy(&count, pkt + 8, 4);
+        sWatchCount = 0;
+        for (i = 0; i < (int)count && i < SPEC_MAX && 12 + (i + 1) * NAME_LEN <= n; i++) {
+            int k;
+            memcpy(sWatchName[i], pkt + 12 + i * NAME_LEN, NAME_LEN);
+            sWatchName[i][NAME_LEN - 1] = '\0';
+            for (k = 0; sWatchName[i][k] != '\0'; k++) {
+                if ((unsigned char)sWatchName[i][k] < 0x20 || sWatchName[i][k] == 0x7F) {
+                    sWatchName[i][k] = '?';
+                }
+            }
+            sWatchCount++;
+        }
+        return 1;
+    }
+    if (sMode == 1 && (type == T_SPEC_ACK || type == T_SPEC_BYE)) {
+        int i;
+        for (i = 0; i < SPEC_MAX; i++) {
+            Watcher *w = &sWatch[i];
+            if (!w->on || !same_addr(&w->addr, from)) {
+                continue;
+            }
+            w->heardNs = SDL_GetTicksNS();
+            if (type == T_SPEC_BYE) {
+                spec_drop(i, "left");
+            } else if (n >= 16) {
+                uint32_t v[2];
+                memcpy(v, pkt + 8, 8);
+                if (v[0] > w->acked && v[0] <= sLogN) {
+                    w->acked = v[0];
+                    w->movedNs = w->heardNs;
+                }
+                if (w->next < w->acked) {
+                    w->next = w->acked;
+                }
+                if (v[1] != 0 && w->next > w->acked && w->heardNs - w->rewoundNs > 150000000ull) {
+                    w->next = w->acked; /* it missed a packet: from what it has, again */
+                    w->noteNext = w->acked - w->acked % SYNC_EVERY;
+                    w->rewoundNs = w->heardNs;
+                }
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The spectator's greeting, to `to` (the session's and the lobby's). */
+static void spec_hello_send(const struct sockaddr_in *to, int asking) {
+    uint32_t hello[8 + NAME_LEN / 4] = {MAGIC, T_SPEC_HELLO, SPEC_VERSION, NET_VERSION, 0, 0, 0};
+    unsigned long long fp;
+    if (fprint_mine(&fp)) {
+        hello[4] = FP_MARK;
+        hello[5] = (uint32_t)fp;
+        hello[6] = (uint32_t)(fp >> 32);
+    }
+    memcpy(&hello[7], sMyName, NAME_LEN);
+    hello[7 + NAME_LEN / 4] = (uint32_t)asking;
+    net_send(hello, sizeof(hello), to);
+}
+
+static const char *spec_no_text(int why) {
+    switch (why) {
+    case SPEC_NO_DATA:
+        return "The host's game data are not the same as yours (a modified disc image or mods on one side): you cannot watch this match.";
+    case SPEC_NO_FULL:
+        return "This match already has as many spectators as it can take (6).";
+    case SPEC_NO_OFF:
+        return "The host does not let anyone watch its matches.";
+    case SPEC_NO_PLAIN:
+        return "This match cannot be watched (it was not started from Dragon Net Battle).";
+    case SPEC_NO_PLAYER:
+        return "That is the address of the player who joined, not of the host: spectators connect to the host.";
+    default:
+        return "The host's game is a different version: watching needs the same release as the host's.";
+    }
+}
+
+static const char kSpecNoAnswer[] = "No answer from the host. Check the address and port. Watching a match needs a release newer than 0.1.38.7 on "
+                                    "the host as well (an older host does not answer spectators).";
+
+static void spec_tick(unsigned tick);
+
 /* Takes in what has arrived. Returns 1 if anything did. */
 static int receive(void) {
     uint8_t pkt[2048];
@@ -640,13 +1333,22 @@ static int receive(void) {
     int got = 0, n;
 
     queue_flush();
-    chat_send();
+    if (sMode != 3) {
+        chat_send();
+    }
     while ((n = net_recv(pkt, (int)sizeof(pkt), &from)) >= 8) {
         uint32_t magic, type;
         memcpy(&magic, pkt, 4);
         memcpy(&type, pkt + 4, 4);
         if (magic != MAGIC) {
             continue;
+        }
+        if (type >= T_SPEC_HELLO && type <= T_SPEC_READY) { /* (spectators: from any address, see spec_packet) */
+            got |= spec_packet(pkt, n, &from, type) && sMode == 3;
+            continue;
+        }
+        if (sMode == 3) {
+            continue; /* (a spectator takes nothing else) */
         }
         if (sConnected && (from.sin_addr.s_addr != sPeer.sin_addr.s_addr || from.sin_port != sPeer.sin_port)) {
             continue; /* a match takes packets from the other player's address only: nobody else can end it or put buttons in */
@@ -836,6 +1538,9 @@ static int receive(void) {
             }
         }
     }
+    if (sMode == 1) {
+        spec_pump();
+    }
     return got;
 }
 
@@ -860,7 +1565,8 @@ static int sSession; /* a session started from Dragon Net Battle (below), not a 
 static int sArrived; /* its start-up has reached the character select */
 static uint32_t sStartedMs; /* when the two were connected (for the log) */
 
-/* Connects: role 1 hosts on `port`, role 2 joins `join` ("address:port"). Waits until the other side is there. */
+/* Connects: role 1 hosts on `port`, role 2 joins `join` ("address:port"), role 3 watches the match hosted at `join`
+   (a spectator). Waits until the other side is there. */
 static void net_start(int role, const char *host, const char *join) {
     struct sockaddr_in local;
     uint64_t t0, last = 0;
@@ -873,6 +1579,28 @@ static void net_start(int role, const char *host, const char *join) {
     memset(sHave, 0, sizeof(sHave)); /* (a second session in one run starts as clean as the first) */
     PortChat_Reset();
     sWaitNs = sWaits = 0;
+    {   /* spectators: nothing of the last session's */
+        int i;
+        for (i = 0; i < SPEC_MAX; i++) {
+            sWatch[i].on = 0;
+        }
+        sWatchCount = sListDirty = 0;
+        sLogN = 0;
+        for (i = 0; i < 2; i++) {
+            NoteLog *l = i == 0 ? &sNotesSure : &sNotesOwn;
+            if (l->has != NULL) {
+                memset(l->has, 0, l->cap);
+            }
+        }
+        sSpecOpen = sSpecSetup = sSpecWaits = sSpecNo = sSpecEnded = sSpecSkip = sSpecNoticed = sSpecLeaveAsked = sSpecRejoin = 0;
+        sSpecHead = 0;
+        sSpecApartAt = 0;
+        sSpecCompared = sSpecDiffered = sSpecSkipped = 0;
+        sSpecHeardNs = sSpecAckNs = sSpecGapNs = sSpecDrawNs = 0;
+        if (role == 3) {
+            snprintf(sSpecTarget, sizeof(sSpecTarget), "%s", join);
+        }
+    }
     sFromLobby = sHandSock >= 0;
     if (sFromLobby) {
         sSock = sHandSock;
@@ -889,7 +1617,7 @@ static void net_start(int role, const char *host, const char *join) {
         fcntl(sSock, F_SETFL, fcntl(sSock, F_GETFL, 0) | O_NONBLOCK);
 #endif
     }
-    sMe = sMode - 1;
+    sMe = sMode == 3 ? 0 : sMode - 1; /* (a spectator sees the match as the host does) */
     if (getenv("BT3_NET_LOCALPORT") != NULL && sCodeLocalPort == 0) { /* (across the restart into the session) */
         sCodeLocalPort = atoi(getenv("BT3_NET_LOCALPORT"));
     }
@@ -911,7 +1639,11 @@ static void net_start(int role, const char *host, const char *join) {
     memset(sNames, 0, sizeof(sNames));
     memcpy(sNames[sMe], sMyName, NAME_LEN);
     memset(sOpts, 0, sizeof(sOpts));
-    sOpts[sMe] = own_options();
+    if (sMode != 3) {
+        sOpts[sMe] = own_options();
+    } else {
+        sNames[0][0] = '\0'; /* (both names are the host's word) */
+    }
     if (getenv("BT3_NET_RULES") != NULL) { /* (the host's, across the restart into the session, or for a test) */
         sRules = (uint32_t)strtoul(getenv("BT3_NET_RULES"), NULL, 0);
     }
@@ -988,6 +1720,10 @@ static void net_start(int role, const char *host, const char *join) {
             struct hostent *he = gethostbyname(addr);
             if (he == NULL) {
                 fprintf(stderr, "bt3: net: unknown address %s\n", addr);
+                if (sSession) {
+                    Port_UiNotice("That address is not known.");
+                    Port_NetLeave();
+                }
                 exit(2);
             }
             memcpy(&sPeer.sin_addr, he->h_addr_list[0], sizeof(sPeer.sin_addr));
@@ -1000,7 +1736,9 @@ static void net_start(int role, const char *host, const char *join) {
         }
         /* The address is only printed when the player typed it. One that came from the matchmaking service (a
            room code, a quick match) is the other player's, and logs get pasted into bug reports. */
-        if (sCodeLocalPort != 0) {
+        if (sMode == 3) {
+            fprintf(stderr, "bt3: net: watching the match of %s (a spectator)...\n", sCodeLocalPort != 0 ? "the host found by the matchmaking service" : join);
+        } else if (sCodeLocalPort != 0) {
             fprintf(stderr, "bt3: net: joining the host found by the matchmaking service (player 2)...\n");
         } else {
             fprintf(stderr, "bt3: net: joining %s (player 2)...\n", join);
@@ -1013,6 +1751,31 @@ static void net_start(int role, const char *host, const char *join) {
             uint32_t punch[2] = {MAGIC, T_PUNCH}; /* (room codes: keeps this side's router open for the one who joins) */
             net_send(punch, sizeof(punch), &sCodePunch);
             last = now;
+        }
+        if (sMode == 3) {
+            if (now - last > 200000000ull) {
+                spec_hello_send(&sPeer, 0);
+                last = now;
+            }
+            receive();
+            if (sSpecWaits && !sSpecSetup) {
+                Port_UiBanner("The host's match has not begun yet. Waiting for it...", 0);
+            }
+            if (sSession) {
+                Gs_HoldFrame();
+            }
+            if (sSpecNo != 0 || sSpecEnded || (!sSpecWaits && now - t0 > SPEC_ASK_NS) || now - t0 > 120000000000ull) {
+                const char *why = sSpecNo != 0 ? spec_no_text(sSpecNo) : sSpecEnded ? "The match has ended." : sSpecWaits ? "The host's match did not begin in two minutes." : kSpecNoAnswer;
+                fprintf(stderr, "bt3: net: spectating: %s\n", why);
+                Port_UiBanner(NULL, 0);
+                Port_UiNotice(why);
+                if (sSession) {
+                    Port_NetLeave();
+                }
+                exit(2);
+            }
+            SDL_Delay(2);
+            continue;
         }
         if (sMode == 2 && now - last > 100000000ull) {
             uint32_t hello[5 + NAME_LEN / 4] = {MAGIC, T_HELLO, NET_VERSION};
@@ -1042,7 +1805,9 @@ static void net_start(int role, const char *host, const char *join) {
     /* Setting up. The host measures the round trip (a dozen pings, the smallest counts), chooses the input delay
        from it if that is automatic, and tells the other side its choices until that side has them; the other
        side answers the pings and waits for the choices. */
-    if (sMode == 1) {
+    if (sMode == 3) {
+        Port_UiBanner(NULL, 0);
+    } else if (sMode == 1) {
         uint64_t start = SDL_GetTicksNS(), lastPing = 0, lastCfg = 0;
         int pings = 0;
         while (SDL_GetTicksNS() - start < 400000000ull) {
@@ -1110,6 +1875,15 @@ static void net_start(int role, const char *host, const char *join) {
         memcpy(sIn[1][i], kIdle, PAD);
     }
     sHave[0] = sHave[1] = (uint32_t)sDelay + 1;
+    if (sMode == 3) {
+        fprintf(stderr, "bt3: net: spectating \"%s\" vs \"%s\": the host has %u blanks of the match; game speed %d%%\n", sNames[0], sNames[1], (unsigned)sSpecHead,
+                rules_speed());
+        sRollMax = 0;
+        sStartedMs = now_ms();
+        spec_ack_send(0);
+        return;
+    }
+    sSpecOpen = sMode == 1; /* (the host: from here its choices are final, and spectators are let in) */
     fprintf(stderr, "bt3: net: connected%s; input delay %d blanks, %s\n", sFromLobby && Port_LobbyRelayed() ? " through the relay" : sFromLobby ? " directly" : "", sDelay,
             sRollMax > 0 ? "rollback" : "waiting for each other");
     fprintf(stderr, "bt3: net: game speed %d%%\n", rules_speed());
@@ -1194,11 +1968,11 @@ int Port_NetMe(void) {
 
 int Port_NetActive(void) {
     if (sMode < 0) { /* first asked: connected from the start if the environment says so */
-        const char *host = getenv("BT3_NET_HOST"), *join = getenv("BT3_NET_JOIN");
+        const char *host = getenv("BT3_NET_HOST"), *join = getenv("BT3_NET_JOIN"), *watch = getenv("BT3_NET_SPECTATE");
         sMode = 0;
-        if (host != NULL || join != NULL) {
+        if (host != NULL || join != NULL || watch != NULL) {
             sSession = getenv("BT3_NET_SESSION") != NULL;
-            net_start(host != NULL ? 1 : 2, host, join);
+            net_start(host != NULL ? 1 : join != NULL ? 2 : 3, host, join != NULL ? join : watch);
         }
     }
     return sMode > 0;
@@ -1232,6 +2006,7 @@ static void sample_local(unsigned tick) {
 static void ended(const char *why, unsigned tick) {
     fprintf(stderr, "bt3: net: %s (blank %u)\n", why, tick);
     Port_UiNotice(why);
+    sSpecNoticed = 1;
     if (sSession) {
         Port_NetLeave(); /* back to the game as it normally is */
     }
@@ -1473,6 +2248,144 @@ static void meet(unsigned tick) {
     }
 }
 
+/* The spectator: looks at the socket, and tells the host what it has (every 50 ms). */
+static void spec_service(void) {
+    static uint64_t last;
+    uint64_t now = SDL_GetTicksNS();
+    if (now - last > 1000000000ull) {
+        sSpecHeardNs = now; /* (this copy was away a while, loading: the host's silence meanwhile says nothing) */
+    }
+    last = now;
+    receive();
+    if (SDL_GetTicksNS() - sSpecAckNs > 50000000ull) {
+        spec_ack_send(0);
+    }
+}
+
+/* The spectator's line in the middle while it waits or catches up, with the last picture (at most 10 a second). */
+static void spec_hold(const char *line) {
+    uint64_t now = SDL_GetTicksNS();
+    if (now - sSpecDrawNs >= 100000000ull) {
+        sSpecDrawNs = now;
+        Port_UiBanner(line, 0);
+        Gs_HoldFrame();
+    }
+}
+
+/* 1 while a spectator runs blanks without picture and not held to real time, to catch up (plat_stub.c). */
+int Port_NetSpecSkip(void) {
+    return sMode == 3 && sSpecSkip;
+}
+
+/* A blank of the spectator. Its input is the host's (Port_NetInput); the start-up runs as the players' does
+   (Port_NetWarp: nothing pressed, no picture). It keeps about SPEC_BUFFER blanks of the host's in hand: with none
+   left it waits until it has that many again; with more than SPEC_BUFFER + 60 it runs without picture until it is
+   back at SPEC_BUFFER. */
+static void spec_tick(unsigned tick) {
+    uint64_t now = SDL_GetTicksNS();
+
+    if (tick % SYNC_EVERY == 0 && tick != 0) { /* its own check value, compared with the host's for the same blank */
+        uint64_t had;
+        if (!note_get(&sNotesOwn, tick, &had)) {
+            note_put(&sNotesOwn, tick, Port_NetDigest());
+            spec_compare(tick);
+        }
+    }
+    spec_service();
+    if (getenv("BT3_SPEC_VIEWS") != NULL) { /* testing: BT3_SPEC_VIEWS=<blank>:<view>|...: the view changes at those blanks */
+        const char *p = getenv("BT3_SPEC_VIEWS");
+        char *after;
+        while (*p != '\0') {
+            unsigned at = (unsigned)strtoul(p, &after, 10);
+            if (after == p || *after != ':') {
+                break;
+            }
+            if (at == tick) {
+                sSpecView = atoi(after + 1) % 3;
+                fprintf(stderr, "bt3: net: spectating: view %d from blank %u\n", sSpecView, tick);
+            }
+            p = after + 1;
+            while (*p >= '0' && *p <= '9') {
+                p++;
+            }
+            while (*p != '\0' && (*p < '0' || *p > '9')) {
+                p++;
+            }
+        }
+    }
+    if (getenv("BT3_SPEC_LEAVE") != NULL && tick == (unsigned)atoi(getenv("BT3_SPEC_LEAVE"))) { /* testing: leaves at that blank */
+        fprintf(stderr, "bt3: net: spectating: leaving at blank %u (BT3_SPEC_LEAVE)\n", tick);
+        Port_NetLeave();
+    }
+    if (sSpecEnded) {
+        ended("The players' match has ended.", tick);
+    }
+    if (sSpecLeaveAsked) {
+        sSpecLeaveAsked = 0;
+        sSpecNoticed = 1;
+        fprintf(stderr, "bt3: net: spectating: stopped watching at blank %u\n", tick);
+        Port_NetLeave();
+    }
+    now = SDL_GetTicksNS(); /* (after the look at the socket: what came meanwhile is later than `now` was) */
+    if (now > sSpecHeardNs && now - sSpecHeardNs > SPEC_QUIET_NS) {
+        ended("The connection to the host was lost.", tick);
+    }
+    if (sSpecRejoin) {
+        fprintf(stderr, "bt3: net: spectating: following the match again from the start\n");
+        Port_NetLeave(); /* (Port_LobbyAuto asks for the session again) */
+    }
+    if (Port_NetWarp()) {
+        spec_hold("Joining the match as a spectator...");
+        gPortResim = 1; /* (as warp_tick: the start-up's blanks are not shown) */
+        return;
+    }
+    if (!sMet) {
+        sMet = 1;
+        fprintf(stderr, "bt3: net: spectating: at the character select (blank %u), %u ms after connecting; the host has %u blanks\n", tick,
+                (unsigned)(now_ms() - sStartedMs), (unsigned)sLogN);
+    }
+    if (tick >= sLogN) { /* nothing to run this blank with: wait for a second's worth */
+        uint64_t t0 = now;
+        int said = 0;
+        sSpecSkip = 0;
+        while (sLogN < tick + SPEC_BUFFER && !(sLogN > tick && sSpecHead <= sLogN && SDL_GetTicksNS() - t0 > 2000000000ull)) {
+            uint64_t at = SDL_GetTicksNS();
+            spec_service();
+            if (sSpecEnded) {
+                ended("The players' match has ended.", tick);
+            }
+            if (at > sSpecHeardNs && at - sSpecHeardNs > SPEC_QUIET_NS) {
+                ended("The connection to the host was lost.", tick);
+            }
+            if (at - t0 > 250000000ull) {
+                said = 1;
+                spec_hold("Waiting for the match...");
+            }
+            SDL_DelayNS(500000);
+        }
+        if (said) {
+            Port_UiBanner(NULL, 0);
+            fprintf(stderr, "bt3: net: spectating: waited %u ms for the host's blanks at blank %u\n", (unsigned)((SDL_GetTicksNS() - t0) / 1000000ull), tick);
+        }
+    }
+    if (!sSpecSkip && sLogN > tick + SPEC_BUFFER + 60) {
+        sSpecSkip = 1;
+        sSpecSkipped = 0;
+        fprintf(stderr, "bt3: net: spectating: %u blanks behind the host at blank %u: catching up without picture\n", (unsigned)(sLogN - tick), tick);
+    } else if (sSpecSkip && sLogN <= tick + SPEC_BUFFER) {
+        sSpecSkip = 0;
+        sSpecDrawNs = 0;
+        Port_UiBanner(NULL, 0);
+        fprintf(stderr, "bt3: net: spectating: caught up at blank %u (%u blanks run without picture)\n", tick, sSpecSkipped);
+    }
+    if (sSpecSkip) {
+        char line[96];
+        sSpecSkipped++;
+        snprintf(line, sizeof(line), "Catching up with the match... %u%%", sSpecHead != 0 ? (unsigned)((uint64_t)tick * 100 / sSpecHead) : 0u);
+        spec_hold(line);
+    }
+}
+
 void Port_NetBeginTick(unsigned tick) {
     uint64_t t0, last;
 
@@ -1480,6 +2393,10 @@ void Port_NetBeginTick(unsigned tick) {
         return;
     }
     sTick = tick;
+    if (sMode == 3) {
+        spec_tick(tick);
+        return;
+    }
     if (Port_NetWarp()) {
         warp_tick(tick);
         return;
@@ -1546,6 +2463,10 @@ void Port_NetBeginTick(unsigned tick) {
 
 /* What the game reads for a pad during this blank. */
 void Port_NetInput(int player, unsigned char *data) {
+    if (sMode == 3) { /* a spectator: both players' input as the host has it */
+        memcpy(data, player >= 0 && player < 2 && sTick < sLogN ? sLog + ((size_t)sTick * 2 + (size_t)player) * PAD : kIdle, PAD);
+        return;
+    }
     if (sRollMax > 0 && player == !sMe) {
         memcpy(data, sUsed[sTick % RING], PAD); /* their real input, or the guess (roll_tick) */
         return;
@@ -1574,7 +2495,7 @@ int Port_NetView(void) {
     if (forced >= 0) {
         return forced & 1;
     }
-    return Port_NetActive() ? sMe : -1;
+    return Port_NetActive() ? (sMode == 3 ? (sSpecView == 2 ? -1 : sSpecView) : sMe) : -1;
 }
 
 /* ---------------------------------------------------------------------------------------------------------------
@@ -1596,6 +2517,23 @@ int Port_NetView(void) {
 #include <unistd.h>
 #endif
 
+/* The session's own save folder: net_session beside the program's data (BT3_NET_SAVES=<folder>, testing: another,
+   for several copies started in one folder). */
+static const char *session_saves(void) {
+    const char *e = getenv("BT3_NET_SAVES");
+    return e != NULL && e[0] != '\0' ? e : "net_session";
+}
+
+static void session_saves_empty(void) {
+    static const char *const kFiles[] = {"BASLUS-21678DBZT3", "icon.sys", "dbzsm.ico"};
+    char path[600];
+    int i;
+    for (i = 0; i < 3; i++) {
+        snprintf(path, sizeof(path), "%s/card1/BASLUS-21678DBZT3/%s", session_saves(), kFiles[i]);
+        remove(path);
+    }
+}
+
 static void relaunch(int role, const char *join, int port) {
     char value[160];
 #ifdef _WIN32
@@ -1611,6 +2549,7 @@ static void relaunch(int role, const char *join, int port) {
 #endif
     SETENV("BT3_NET_HOST", NULL);
     SETENV("BT3_NET_JOIN", NULL);
+    SETENV("BT3_NET_SPECTATE", NULL);
     SETENV("BT3_NET_SESSION", NULL);
     SETENV("BT3_SOUND_TICKS", NULL);
     if (role != 0) {
@@ -1619,7 +2558,7 @@ static void relaunch(int role, const char *join, int port) {
             SETENV("BT3_NET_HOST", value);
         } else {
             snprintf(value, sizeof(value), "%s:%d", join, port);
-            SETENV("BT3_NET_JOIN", value);
+            SETENV(role == 3 ? "BT3_NET_SPECTATE" : "BT3_NET_JOIN", value);
         }
         SETENV("BT3_NET_SESSION", "1");
         SETENV("BT3_NET_NAME", sMyName);
@@ -1648,11 +2587,9 @@ static void relaunch(int role, const char *join, int port) {
             snprintf(value, sizeof(value), "%u", (unsigned)(own_options() & 0xFFFFu));
             SETENV("BT3_NET_OPTS", value);
         }
-        SETENV("BT3_SAVES", "net_session");
+        SETENV("BT3_SAVES", session_saves());
         /* the session's own save folder starts empty: both sides begin from the game's defaults */
-        remove("net_session/card1/BASLUS-21678DBZT3/BASLUS-21678DBZT3");
-        remove("net_session/card1/BASLUS-21678DBZT3/icon.sys");
-        remove("net_session/card1/BASLUS-21678DBZT3/dbzsm.ico");
+        session_saves_empty();
     } else {
         SETENV("BT3_SAVES", NULL); /* (a save folder named on the command line is not carried over a session: known) */
         SETENV("BT3_NOMOVIE", "1");
@@ -1735,6 +2672,7 @@ int Port_NetFixedStart(void) {
 extern int Port_SessionCan(void);                                    /* gs/state.c */
 extern void Port_SessionRequest(int role, const char *address, int port);
 extern void Port_SessionReturn(void);
+extern int Port_SessionAsked(void);
 static char sSavesBefore[512];
 static int sSavesWasSet;
 
@@ -1758,11 +2696,9 @@ void Port_NetSessionBegin(int role, const char *address, int port) {
         snprintf(sSavesBefore, sizeof(sSavesBefore), "%s", saves != NULL ? saves : "");
     }
     /* the session's own save folder starts empty: both sides begin from the game's defaults */
-    remove("net_session/card1/BASLUS-21678DBZT3/BASLUS-21678DBZT3");
-    remove("net_session/card1/BASLUS-21678DBZT3/icon.sys");
-    remove("net_session/card1/BASLUS-21678DBZT3/dbzsm.ico");
+    session_saves_empty();
     sVoiceAlt = own_voice_alt(); /* (before the save folder changes: it is read from the player's own) */
-    put_env("BT3_SAVES", "net_session");
+    put_env("BT3_SAVES", session_saves());
     snprintf(host, sizeof(host), "%d", port);
     snprintf(join, sizeof(join), "%s:%d", address, port);
     if (sSock >= 0) {
@@ -1774,7 +2710,7 @@ void Port_NetSessionBegin(int role, const char *address, int port) {
     sMyArrival = sTheirArrival = 0;
     sMet = 0;
     sBannerSaid[0] = 0;
-    net_start(role, role == 1 ? host : NULL, role == 2 ? join : NULL);
+    net_start(role, role == 1 ? host : NULL, role >= 2 ? join : NULL);
 }
 
 /* How many sessions have ended in this run. The port's own memory: the game's is put back to the moment the session
@@ -1816,15 +2752,39 @@ void Port_NetLeave(void) {
         fprintf(stderr, "bt3: net: the two games differed from blank %u on (%u comparisons differed)\n", (unsigned)sApartAt, sApartCount);
     }
     PortChat_Reset();
-    if (sSock >= 0 && sConnected) { /* tell the other side, so that it does not wait for input that will not come */
-        uint32_t bye[3] = {MAGIC, T_BYE, sByeWhy};
+    if (sMode == 3) {
+        uint32_t bye[2] = {MAGIC, T_SPEC_BYE};
         int k;
+        fprintf(stderr, "bt3: net: spectating: %u check values compared with the host's, %u differed\n", sSpecCompared, sSpecDiffered);
+        for (k = 0; k < 3 && sSock >= 0; k++) {
+            net_send(bye, sizeof(bye), &sPeer); /* (the host lets this spectator go at once) */
+        }
+        if (!sSpecNoticed && !sSpecRejoin) {
+            Port_UiNotice("The players' match has ended.");
+        }
+        Port_UiBanner(NULL, 0);
+    } else if (sSock >= 0 && sConnected) { /* tell the other side, so that it does not wait for input that will not come */
+        uint32_t bye[3] = {MAGIC, T_BYE, sByeWhy}, specBye[2] = {MAGIC, T_SPEC_BYE};
+        int k, i;
         for (k = 0; k < 3; k++) {
             net_send(bye, sizeof(bye), &sPeer);
         }
+        for (i = 0; i < SPEC_MAX; i++) { /* (and the spectators: the match is over) */
+            for (k = 0; k < 2 && sWatch[i].on; k++) {
+                net_send(specBye, sizeof(specBye), &sWatch[i].addr);
+            }
+            sWatch[i].on = 0;
+        }
+        sWatchCount = 0;
     }
     if (Port_SessionCan()) {
-        Port_SessionReturn(); /* the game as it was when the session was asked for (does not return) */
+        if (Port_SessionAsked()) {
+            Port_SessionReturn(); /* the game as it was when the session was asked for (does not return) */
+        }
+        /* (a program started as the session where sessions are begun without a start again: only tests do that,
+           and there was no game before it to go back to) */
+        fflush(NULL);
+        exit(0);
     }
     relaunch(0, NULL, 0);
 }
@@ -1907,6 +2867,33 @@ int Port_LobbyStart(int host, const char *address, int port) {
         }
     }
     return sLobby;
+}
+
+/* Watching the match hosted at `address`:`port` (a spectator). The lobby asks the host (T_SPEC_HELLO) until it
+   answers with the match's set-up (state 2: the session begins as a spectator's) or says no (-3, Port_LobbyError
+   says why); while the host has no match yet it says so (Port_LobbySpectateWaiting) and the lobby goes on asking. */
+static uint64_t sSpecAskSince;
+static int sLobbySpecWait;
+
+int Port_LobbySpectate(const char *address, int port) {
+    Port_LobbyStart(0, address, port);
+    if (sLobby < 0) {
+        return sLobby;
+    }
+    sLobbyRole = 3;
+    sLobbySpecWait = 0;
+    sCodeError[0] = '\0';
+    sSpecAskSince = SDL_GetTicksNS();
+    return sLobby;
+}
+
+int Port_LobbySpectateCode(const char *code) { /* (room codes: below, with the matchmaking service) */
+    (void)code;
+    return -1;
+}
+
+int Port_LobbySpectateWaiting(void) {
+    return sLobby == 1 && sLobbyRole == 3 && sLobbySpecWait;
 }
 
 static int sQuickQueue = -1; /* Port_LobbyStartQuick: the search that Port_LobbyStartCode starts is a quick match in this queue */
@@ -2091,6 +3078,14 @@ int Port_LobbyPoll(void) {
                             the two cannot reach each other */
             return sLobby;
         }
+    } else if (!sCodeMode && sLobbyRole == 3 && now - sLobbyLast > 200000000ull) {
+        spec_hello_send(&sPeer, 1);
+        sLobbyLast = now;
+        if (!sLobbySpecWait && now - sSpecAskSince > SPEC_ASK_NS) {
+            snprintf(sCodeError, sizeof(sCodeError), "%s", kSpecNoAnswer);
+            sLobby = -3;
+            return sLobby;
+        }
     } else if (!sCodeMode && sLobbyRole == 2 && now - sLobbyLast > 200000000ull) {
         uint32_t hello[3] = {MAGIC, T_HELLO, NET_VERSION};
         fprint_send(&sPeer);
@@ -2102,6 +3097,33 @@ int Port_LobbyPoll(void) {
         memcpy(&magic, pkt, 4);
         memcpy(&type, pkt + 4, 4);
         if (magic != MAGIC) {
+            continue;
+        }
+        if (sLobbyRole == 3) { /* watching: only the host's answers */
+            if (!same_addr(&from, &sPeer)) {
+                continue;
+            }
+            if (type == T_SPEC_SETUP || type == T_SPEC_READY) {
+                sLobby = 2;
+            } else if (type == T_SPEC_WAIT) {
+                sLobbySpecWait = 1;
+            } else if (type == T_SPEC_NO && n >= 12) {
+                uint32_t why;
+                memcpy(&why, pkt + 8, 4);
+                snprintf(sCodeError, sizeof(sCodeError), "%s", spec_no_text((int)why));
+                sLobby = -3;
+                return sLobby;
+            }
+            continue;
+        }
+        if (sLobbyRole == 1 && type == T_SPEC_HELLO) { /* someone wants to watch, before the match has begun */
+            uint32_t why = spec_check(pkt, n);
+            if (why != 0) {
+                spec_no(&from, why);
+            } else {
+                uint32_t wait[3] = {MAGIC, T_SPEC_WAIT, SPEC_VERSION};
+                net_send(wait, sizeof(wait), &from);
+            }
             continue;
         }
         if (type == T_FPRINT && fprint_differs(pkt, n)) {
@@ -2151,10 +3173,25 @@ void Port_LobbyAuto(void) {
     int now;
 
     lobby_background();
+    if (sSpecRejoin && !Port_NetSession()) { /* a spectator whose game came apart from the host's: from the start again */
+        char addr[160], *colon;
+        sSpecRejoin = 0;
+        snprintf(addr, sizeof(addr), "%s", sSpecTarget);
+        colon = strrchr(addr, ':');
+        if (colon != NULL) {
+            *colon = '\0';
+            Port_SessionRequest(3, addr, atoi(colon + 1));
+        }
+        return;
+    }
     if (what == NULL || begun == 2 || Port_NetSession()) {
         return;
     }
     if (!begun) {
+        static unsigned blanks;
+        if (getenv("BT3_LOBBY_AT") != NULL && ++blanks < (unsigned)atoi(getenv("BT3_LOBBY_AT"))) {
+            return; /* (BT3_LOBBY_AT=<n>: the lobby begins at the program's n-th blank, as a player would from the menus) */
+        }
         begun = 1;
         if (strncmp(what, "quick:", 6) == 0) { /* BT3_LOBBY=quick:<queue>: a quick match (S, T, D10, D15, D20) */
             int q, type, dp;
@@ -2168,6 +3205,12 @@ void Port_LobbyAuto(void) {
                 Port_NetOptions(Port_RollCan() ? 8 : 0, -2); /* (and a quick match's fixed rollback and delay, as the window sets them) */
             }
             Port_LobbyStartQuick(q);
+        } else if (strncmp(what, "spectate:", 9) == 0) { /* BT3_LOBBY=spectate:<address>:<port>: watches that host's match */
+            char addr[128];
+            int port;
+            if (sscanf(what + 9, "%127[^:]:%d", addr, &port) == 2) {
+                Port_LobbySpectate(addr, port);
+            }
         } else if (strncmp(what, "direct:", 7) == 0) { /* BT3_LOBBY=direct:<port> hosts, direct:<address>:<port> joins */
             char addr[128];
             int port;
@@ -2223,7 +3266,7 @@ void Port_LobbyLaunch(void) {
    other), the input delay, whether it is chosen from the ping, why the waits of the last second were (1: the other
    game behind, 2: nothing came), the blank the two games came apart at (0: they agree). */
 int Port_NetStats(int *out) {
-    if (sMode <= 0 || !sConnected) {
+    if (sMode <= 0 || sMode == 3 || !sConnected) {
         return 0;
     }
     out[0] = sPingMs;

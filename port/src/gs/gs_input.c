@@ -877,7 +877,8 @@ void Port_PadVibrate(int socket, int small, int large) {
         return;
     }
     if (Port_NetActive()) {
-        if (socket != Port_NetMe()) {
+        extern int Port_NetSpectating(void);
+        if (socket != Port_NetMe() || Port_NetSpectating()) { /* (a spectator's controller plays nobody) */
             return;
         }
         player = 0;
