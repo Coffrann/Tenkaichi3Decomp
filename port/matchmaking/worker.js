@@ -5,13 +5,21 @@
 // games then connect to each other directly. No game data passes through here.
 //
 // What it stores (a D1 database bound as DB, table `rooms`, see schema.sql), for at most ten minutes per room: the
-// code, the two player names, the addresses each game reported, and the host's address as Cloudflare saw it.
+// code, the two player names, the addresses each game reported, and the host's address as Cloudflare saw it (a room
+// whose match is on lasts as long as its host keeps it, see /v1/poll); and in the table `watchers`, for two minutes,
+// a spectator's name and addresses.
 //
 // Requests are JSON over POST:
 //   /v1/host   {v, name, addrs}        -> {code, key, you, turn?}
 //   /v1/addrs  {code, key, addrs}      -> {}       (the host, once it has more addresses: its relay address)
 //   /v1/join   {v, code, name, addrs}  -> {key, you, peer: {name, addrs}}
 //   /v1/poll   {code, key}             -> {peer: {name, addrs} | null}     (the host asks until someone has joined)
+//       A host that sends `watch: true` is also told its spectators: watchers: [[addrs of one], ...] (those that asked
+//       in the last WATCH_SECONDS); with `keep: true` as well, a room someone has joined is kept (its ten minutes
+//       start again): the host asks every few seconds while its match is on, so spectators can still come.
+//   /v1/watch  {v, code, name, addrs}  -> {key, you, peer: {name, addrs}}   a spectator: the host's addresses, and the
+//       host learns the spectator's (with "seen=ip") by its poll. Any room of the same version, joined or not; at
+//       most WATCHERS_PER_ROOM a room in WATCH_SECONDS. Errors as for join ("no room", "version", "busy", "full").
 //   /v1/leave  {code, key}             -> {}
 //   /v1/relay  {code, key}             -> {turn} | {noRelay}   (the host, once someone has joined and the two did not
 //       reach each other directly: a relay login, asked for only then. A game that sends `rel` >= 129 gets none
@@ -59,6 +67,8 @@ const WRONG_CODES_PER_HOUR = 30; // codes that name no room, from one address in
 const HOSTS_PER_HOUR = 20;      // rooms one address may make in an hour
 const QUICK_PER_HOUR = 60;      // quick-match searches from one address in an hour (a search that waits asks again every ten minutes)
 const QUEUES = ["S", "T", "D10", "D15", "D20"];
+const WATCH_SECONDS = 120;      // a spectator's addresses are handed to the host for this long after it asked
+const WATCHERS_PER_ROOM = 12;   // spectators' requests one room takes in that time (the game takes six at a time)
 const RELAY_PER_DAY_ADDRESS = 10; // relay logins one address may be given in a day
 const RELAY_PER_DAY = 500;      // relay logins given in a day, all told (the variable TURN_DAILY_MAX overrides it): the
                                 // ceiling on what the relay can be made to cost, whatever anyone sends
@@ -491,7 +501,7 @@ export default {
         if (what === "hello") { // a game asks, when its online screen opens, whether it is new enough (and what the newest is)
             return reply({ min: minRelease, latest: Number(env.LATEST_RELEASE ?? 0) || 0, now });
         }
-        const entry = what === "host" || what === "join" || what === "quick";
+        const entry = what === "host" || what === "join" || what === "quick" || what === "watch";
         if (minRelease > 0 && entry && !(Number.isInteger(body.rel) && body.rel >= minRelease)) {
             return reply({ error: "old", need: minRelease }, 426);
         }
@@ -596,15 +606,44 @@ export default {
             return reply({ error: "no room" }, 404);
         }
         const hour = now - (now % 3600);
-        if (what === "join" && (await usesSoFar(env, "miss:" + ip, hour)) >= WRONG_CODES_PER_HOUR) {
+        if ((what === "join" || what === "watch") && (await usesSoFar(env, "miss:" + ip, hour)) >= WRONG_CODES_PER_HOUR) {
             return reply({ error: "busy" }, 429); // (codes are not to be found by trying)
         }
         const room = await env.DB.prepare("SELECT * FROM rooms WHERE code = ? AND made >= ?").bind(code, now - ROOM_SECONDS).first();
         if (!room) {
-            if (what === "join") {
+            if (what === "join" || what === "watch") {
                 await countUse(env, "miss:" + ip, hour);
             }
             return reply({ error: "no room" }, 404);
+        }
+
+        if (what === "watch") { // a spectator: the host's addresses; the host learns this one's by its poll
+            const addrs = cleanAddrs(body.addrs);
+            if (!Number.isInteger(body.v) || addrs === null) {
+                return reply({ error: "bad request" }, 400);
+            }
+            if (body.v !== room.version) {
+                return reply({ error: "version" }, 409);
+            }
+            let many;
+            try {
+                await env.DB.prepare("DELETE FROM watchers WHERE made < ?").bind(now - WATCH_SECONDS).run();
+                many = await env.DB.prepare("SELECT COUNT(*) AS n FROM watchers WHERE code = ?").bind(code).first();
+            } catch (e) {
+                return reply({ error: "no spectators" }, 501); // (the table "watchers" is missing: see schema.sql)
+            }
+            if (many && many.n >= WATCHERS_PER_ROOM) {
+                return reply({ error: "full" }, 409);
+            }
+            const hostAddrs = JSON.parse(room.host_addrs);
+            const same = sameNetwork(ip, addrs, room.ip, hostAddrs);
+            const kept = shown(addrs, same);
+            if (/^[0-9.]{7,15}$/.test(ip)) {
+                kept.push("seen=" + ip); // for the host's relay: whom to let through
+            }
+            const key = randomText(24, ALPHABET);
+            await env.DB.prepare("INSERT INTO watchers (key, code, made, name, addrs) VALUES (?, ?, ?, ?, ?)").bind(key, code, now, cleanName(body.name), JSON.stringify(kept)).run();
+            return reply({ key, you: ip, peer: { name: room.host_name, addrs: shown(hostAddrs, same) } });
         }
 
         if (what === "join") {
@@ -625,7 +664,19 @@ export default {
         }
         if (what === "poll") {
             if (isHost) {
-                return reply({ peer: room.join_key !== null ? { name: room.join_name, addrs: shown(JSON.parse(room.join_addrs), true) } : null });
+                const out = { peer: room.join_key !== null ? { name: room.join_name, addrs: shown(JSON.parse(room.join_addrs), true) } : null };
+                if (body.watch === true) { // (a game that knows spectators: older ones get the answer they always had)
+                    if (body.keep === true && room.join_key !== null) {
+                        await env.DB.prepare("UPDATE rooms SET made = ? WHERE code = ?").bind(now, code).run();
+                    }
+                    try {
+                        const rows = await env.DB.prepare("SELECT addrs FROM watchers WHERE code = ? AND made >= ? ORDER BY made").bind(code, now - WATCH_SECONDS).all();
+                        out.watchers = ((rows && rows.results) || []).map((r) => JSON.parse(r.addrs));
+                    } catch (e) {
+                        out.watchers = []; // (the table "watchers" is missing: see schema.sql)
+                    }
+                }
+                return reply(out);
             }
             return reply({ peer: { name: room.host_name, addrs: shown(JSON.parse(room.host_addrs), JSON.parse(room.join_addrs).includes("same=1")) } });
         }
@@ -647,6 +698,7 @@ export default {
         }
         if (what === "leave") {
             await env.DB.prepare("DELETE FROM rooms WHERE code = ?").bind(code).run();
+            await env.DB.prepare("DELETE FROM watchers WHERE code = ?").bind(code).run().catch(() => {});
             return reply({});
         }
         return reply({ error: "bad request" }, 404);

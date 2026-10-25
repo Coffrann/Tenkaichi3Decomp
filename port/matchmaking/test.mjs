@@ -8,13 +8,15 @@ const src = fs.readFileSync(new URL("./worker.js", import.meta.url), "utf8").rep
 const copy = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "worker-test-")), "worker.mjs");
 fs.writeFileSync(copy, src);
 const { worker, network, sameNetwork } = await import(copy);
-const rooms = new Map(), used = new Map();
+const rooms = new Map(), used = new Map(), watchers = new Map();
 let rowids = 0;
 const DB = { prepare(sql) { return { args: [], bind(...a) { this.args = a; return this; },
     async all() { const a = this.args;
+        if (sql.startsWith("SELECT addrs FROM watchers")) { return { results: [...watchers.values()].filter((w) => w.code === a[0] && w.made >= a[1]).sort((x, y) => x.made - y.made).map((w) => ({ addrs: w.addrs })) }; }
         if (sql.startsWith("SELECT queue, COUNT")) { const m = new Map(); for (const r of rooms.values()) { if (r.queue !== null && r.version === a[0] && r.join_key === null && r.made >= a[1]) m.set(r.queue, (m.get(r.queue) ?? 0) + 1); } return { results: [...m].map(([queue, n]) => ({ queue, n })) }; }
         throw new Error("all: " + sql); },
     async first() { const a = this.args;
+        if (sql.startsWith("SELECT COUNT(*) AS n FROM watchers")) { return { n: [...watchers.values()].filter((w) => w.code === a[0]).length }; }
         if (sql.startsWith("SELECT COUNT(*) AS n FROM rooms WHERE queue") && sql.includes("rowid <")) { const mine = rooms.get(a[3]); return { n: [...rooms.values()].filter((r) => r.queue === a[0] && r.version === a[1] && r.join_key === null && r.made >= a[2] && mine && r.rowid < mine.rowid).length }; }
         if (sql.startsWith("SELECT COUNT(*) AS n FROM rooms WHERE queue")) { return { n: [...rooms.values()].filter((r) => r.queue === a[0] && r.version === a[1] && r.join_key === null && r.made >= a[2]).length }; }
         if (sql.startsWith("SELECT * FROM rooms WHERE queue")) { const l = [...rooms.values()].filter((r) => r.queue === a[0] && r.version === a[1] && r.join_key === null && r.made >= a[2]).sort((x, y) => x.rowid - y.rowid); return l[0] ?? null; }
@@ -26,6 +28,10 @@ const DB = { prepare(sql) { return { args: [], bind(...a) { this.args = a; retur
     async run() { const a = this.args;
         if (sql.startsWith("DELETE FROM rooms WHERE made")) { for (const [k, r] of rooms) { if (r.made < a[0]) rooms.delete(k); } return {}; }
         if (sql.startsWith("DELETE FROM used")) { return {}; }
+        if (sql.startsWith("DELETE FROM watchers WHERE made")) { for (const [k, w] of watchers) { if (w.made < a[0]) watchers.delete(k); } return {}; }
+        if (sql.startsWith("DELETE FROM watchers WHERE code")) { for (const [k, w] of watchers) { if (w.code === a[0]) watchers.delete(k); } return {}; }
+        if (sql.startsWith("INSERT INTO watchers")) { watchers.set(a[0], { key: a[0], code: a[1], made: a[2], name: a[3], addrs: a[4] }); return {}; }
+        if (sql.startsWith("UPDATE rooms SET made")) { const r = rooms.get(a[1]); if (r) r.made = a[0]; return {}; }
         if (sql.startsWith("INSERT INTO used")) { used.set(a[0] + "|" + a[1], a[2]); return {}; }
         if (sql.startsWith("INSERT INTO rooms")) { if (rooms.has(a[0])) throw new Error("taken"); rooms.set(a[0], { code: a[0], made: a[1], version: a[2], ip: a[3], host_key: a[4], join_key: null, host_name: a[5], join_name: null, host_addrs: a[6], join_addrs: null, queue: a[7] ?? null, who: a[8] ?? null, rowid: ++rowids }); return {}; }
         if (sql.startsWith("DELETE FROM rooms WHERE who")) { for (const [k, r] of rooms) { if (r.who === a[0] && r.queue !== null && r.join_key === null) rooms.delete(k); } return {}; }
@@ -315,6 +321,39 @@ rooms.clear();
     for (const [name, ok] of results) {
         check(name, ok);
     }
+}
+// spectators (/v1/watch, and the host's poll with watch / keep)
+{
+    const H = "198.51.100.40", S = "203.0.113.40";
+    const room = await post("host", H, { v: 5, rel: 139, name: "H", addrs: [H + ":7000", "192.168.1.10:7000"] });
+    let w = await post("watch", S, { v: 5, rel: 139, code: room.code, name: "Spec", addrs: [S + ":9000", "10.1.1.1:9000"] });
+    check("watch: the spectator gets the host's public addresses", w.key && JSON.stringify(w.peer.addrs) === JSON.stringify([H + ":7000"]) && w.peer.name === "H");
+    let q = await post("poll", H, { code: room.code, key: room.key });
+    check("host's poll without watch: the answer of old (no watchers)", !("watchers" in q) && q.peer === null);
+    q = await post("poll", H, { code: room.code, key: room.key, watch: true });
+    check("host's poll with watch: the spectator's addresses and seen", JSON.stringify(q.watchers) === JSON.stringify([[S + ":9000", "seen=" + S]]));
+    check("the spectator's key is no key of the room", (await post("poll", S, { code: room.code, key: w.key })).error === "no room");
+    w = await post("watch", S, { v: 4, code: room.code, name: "Spec", addrs: [S + ":9000"] });
+    check("watch: another version is refused", w.error === "version");
+    w = await post("watch", S, { v: 5, code: "QQQQQ2", name: "Spec", addrs: [S + ":9000"] });
+    check("watch: an unknown code is no room", w.error === "no room");
+    await post("join", "192.0.2.41", { v: 5, code: room.code, name: "J", addrs: ["192.0.2.41:8000"] });
+    rooms.get(room.code).made -= 500;
+    const before = rooms.get(room.code).made;
+    await post("poll", H, { code: room.code, key: room.key, keep: true });
+    check("keep without watch (an old game's words): the room is not kept", rooms.get(room.code).made === before);
+    q = await post("poll", H, { code: room.code, key: room.key, watch: true, keep: true });
+    check("keep with watch, once joined: the room's time starts again", rooms.get(room.code).made > before && q.peer && q.peer.name === "J");
+    w = await post("watch", S, { v: 5, code: room.code, name: "Late", addrs: [S + ":9001"] });
+    check("watch after the match has begun", w.key && w.peer.addrs[0] === H + ":7000");
+    for (const x of watchers.values()) { if (x.code === room.code && x.name === "Spec") x.made -= 200; }
+    q = await post("poll", H, { code: room.code, key: room.key, watch: true, keep: true });
+    check("a spectator's addresses are handed on for two minutes only", JSON.stringify(q.watchers) === JSON.stringify([[S + ":9001", "seen=" + S]]));
+    let full;
+    for (let i = 0; i < 12; i++) { full = await post("watch", "198.18.0." + (i + 1), { v: 5, code: room.code, name: "W" + i, addrs: ["198.18.0." + (i + 1) + ":1"] }); }
+    check("the 13th spectator in two minutes is refused as full", full.error === "full");
+    await post("leave", H, { code: room.code, key: room.key });
+    check("leave: the room's spectators go too", ![...watchers.values()].some((x) => x.code === room.code));
 }
 console.log(fails === 0 ? "all passed" : fails + " failed");
 process.exit(fails === 0 ? 0 : 1);

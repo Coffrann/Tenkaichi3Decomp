@@ -1037,6 +1037,69 @@ static void spec_data(Watcher *w, uint64_t now) {
     w->sentNs = now;
 }
 
+/* The host of a room code: the spectators the matchmaking service has told of (net_match.c, Match_Watchers). Each
+   new one is let through this side's relay (if it holds one) and knocked at for ten seconds, so that this side's
+   router lets its greeting in (as the host does for the other player). Called by the lobby and by spec_pump. */
+enum { WATCH_KNOCK = 16 };
+static struct sockaddr_in sKnock[WATCH_KNOCK];
+static uint64_t sKnockUntil[WATCH_KNOCK], sKnockLast;
+static int sKnockGen;
+
+static void watch_service(void) {
+    char addr[MATCH_WATCH_ADDRS][64];
+    uint64_t now = SDL_GetTicksNS();
+    int gen, n = Match_Watchers(addr, MATCH_WATCH_ADDRS, &gen), i, k;
+
+    if (sSock < 0 || Match_SocketBusy()) {
+        return;
+    }
+    if (gen != sKnockGen) {
+        sKnockGen = gen;
+        for (i = 0; i < n; i++) {
+            struct sockaddr_in a;
+            char text[64], *colon;
+            int seen = strncmp(addr[i], "seen=", 5) == 0;
+            memset(&a, 0, sizeof(a));
+            a.sin_family = AF_INET;
+            snprintf(text, sizeof(text), "%s", seen ? addr[i] + 5 : addr[i]);
+            colon = seen ? NULL : strrchr(text, ':');
+            if (colon != NULL) {
+                *colon = '\0';
+                a.sin_port = htons((uint16_t)atoi(colon + 1));
+            }
+            if (strncmp(text, "relay=", 6) == 0 || inet_pton(AF_INET, text, &a.sin_addr) != 1) {
+                continue;
+            }
+            Relay_Permit(sSock, &a);
+            if (seen || a.sin_port == 0) {
+                continue;
+            }
+            for (k = 0; k < WATCH_KNOCK && !(sKnockUntil[k] != 0 && same_addr(&sKnock[k], &a)); k++) {
+            }
+            if (k == WATCH_KNOCK) { /* (a new one: in the first free place, or the oldest) */
+                int pick = 0;
+                for (k = 0; k < WATCH_KNOCK; k++) {
+                    if (sKnockUntil[k] < sKnockUntil[pick]) {
+                        pick = k;
+                    }
+                }
+                k = pick;
+                sKnock[k] = a;
+            }
+            sKnockUntil[k] = now + 10000000000ull;
+        }
+    }
+    if (now - sKnockLast >= 200000000ull) {
+        uint32_t punch[2] = {MAGIC, T_PUNCH};
+        sKnockLast = now;
+        for (k = 0; k < WATCH_KNOCK; k++) {
+            if (sKnockUntil[k] > now) {
+                net_send(punch, sizeof(punch), &sKnock[k]);
+            }
+        }
+    }
+}
+
 /* The host: what is due to each spectator. Called with every look at the socket (receive), done at most every
    16 ms: a spectator that is live gets a packet every other blank or so, one with nothing new a packet every half
    second (to be heard), and those that are catching up SPEC_BURST packets every 16 ms between them all (about
@@ -1057,6 +1120,9 @@ static void spec_pump(void) {
     }
     last = now;
     spec_log_update();
+    if (sFromLobby) {
+        watch_service(); /* (a room code: spectators the service has told of) */
+    }
     turn++;
     for (k = 0; k < SPEC_MAX; k++) {
         Watcher *w = &sWatch[(turn + k) % SPEC_MAX];
@@ -1250,6 +1316,7 @@ static int spec_packet(const uint8_t *pkt, int n, const struct sockaddr_in *from
     if (type == T_SPEC_LIST && sMode == 2 && sConnected && same_addr(from, &sPeer) && n >= 12) {
         uint32_t count;
         int i;
+        int was = sWatchCount;
         memcpy(&count, pkt + 8, 4);
         sWatchCount = 0;
         for (i = 0; i < (int)count && i < SPEC_MAX && 12 + (i + 1) * NAME_LEN <= n; i++) {
@@ -1262,6 +1329,9 @@ static int spec_packet(const uint8_t *pkt, int n, const struct sockaddr_in *from
                 }
             }
             sWatchCount++;
+        }
+        if (sWatchCount != was) {
+            fprintf(stderr, "bt3: net: %d watching this match%s%s\n", sWatchCount, sWatchCount > 0 ? ", the first " : "", sWatchCount > 0 ? sWatchName[0] : "");
         }
         return 1;
     }
@@ -2731,6 +2801,7 @@ int Port_NetSessionsEnded(void) {
 
 void Port_NetSessionEnd(void) {
     sSessionsEnded++;
+    Match_Cancel(); /* (a host's room kept for spectators is given up) */
     Relay_Close(sSock);
     if (sSock >= 0) {
         closesocket(sSock);
@@ -2815,7 +2886,7 @@ static int sCodeSeenSet, sCodeGen, sCodeRelayGen; /* ... and which of the search
 
 int Port_LobbyRelayed(void) { return sCodeVia; }
 static struct sockaddr_in sCodeAddr[MATCH_ADDRS];
-static char sCodeText[8], sCodeError[192];
+static char sCodeText[8], sCodeError[256];
 static uint64_t sCodeSince;
 
 const char *Port_LobbyCode(void) { return sCodeText; }
@@ -2895,9 +2966,21 @@ int Port_LobbySpectate(const char *address, int port) {
     return sLobby;
 }
 
-int Port_LobbySpectateCode(const char *code) { /* (room codes: below, with the matchmaking service) */
-    (void)code;
-    return -1;
+int Port_LobbyStartCode(int host, const char *code);
+static int sWatchByCode;
+
+/* Watching the match of a room code: the service gives the host's addresses (Match_Begin role 4), and the lobby
+   asks the host from there as by address. */
+int Port_LobbySpectateCode(const char *code) {
+    sWatchByCode = 1;
+    Port_LobbyStartCode(0, code);
+    sWatchByCode = 0;
+    if (sLobby >= 0) {
+        sLobbyRole = 3;
+        sLobbySpecWait = 0;
+        sSpecAskSince = SDL_GetTicksNS();
+    }
+    return sLobby;
 }
 
 int Port_LobbySpectateWaiting(void) {
@@ -2929,7 +3012,10 @@ int Port_LobbyStartCode(int host, const char *code) {
     sLobby = 3;
     Relay_Close(-1);
     sCodeVia = 0;
-    Match_Begin(sQuickQueue >= 0 ? 3 : sLobbyRole, sSock, sCodeLocalPort, sQuickQueue >= 0 ? kMatchQueues[sQuickQueue] : code, sMyName, NET_VERSION);
+    Match_Watch(sLobbyRole == 1 && sQuickQueue < 0 && spec_allowed()); /* (a room of its own: spectators may come with its code) */
+    sKnockGen = -1;
+    memset(sKnockUntil, 0, sizeof(sKnockUntil));
+    Match_Begin(sQuickQueue >= 0 ? 3 : sWatchByCode ? 4 : sLobbyRole, sSock, sCodeLocalPort, sQuickQueue >= 0 ? kMatchQueues[sQuickQueue] : code, sMyName, NET_VERSION);
     return sLobby;
 }
 
@@ -3016,6 +3102,17 @@ static void lobby_permit_again(void) {
     }
 }
 
+/* The host's lobby: someone wants to watch before the match has begun (wait, or no). */
+static void lobby_spec_hello(const uint8_t *pkt, int n, const struct sockaddr_in *from) {
+    uint32_t why = spec_check(pkt, n);
+    if (why != 0) {
+        spec_no(from, why);
+    } else {
+        uint32_t wait[3] = {MAGIC, T_SPEC_WAIT, SPEC_VERSION};
+        net_send(wait, sizeof(wait), from);
+    }
+}
+
 /* 0 idle, 1 still waiting, 2 the other player is there, -1 it cannot work (port in use, unknown address). */
 int Port_LobbyPoll(void) {
     uint8_t pkt[256];
@@ -3029,6 +3126,18 @@ int Port_LobbyPoll(void) {
         Match_Poll(&st);
         if (st.state == 2) {
             Relay_Tick(sSock); /* (the relay address is kept while the room waits; the thread is done with the socket) */
+            if (sLobbyRole == 1) { /* spectators who come before the other player: told to wait (the other player's
+                                      greetings that are taken here meanwhile come again) */
+                watch_service();
+                while ((n = net_recv(pkt, (int)sizeof(pkt), &from)) >= 8) {
+                    uint32_t magic, type;
+                    memcpy(&magic, pkt, 4);
+                    memcpy(&type, pkt + 4, 4);
+                    if (magic == MAGIC && type == T_SPEC_HELLO) {
+                        lobby_spec_hello(pkt, n, &from);
+                    }
+                }
+            }
         }
         snprintf(sCodeText, sizeof(sCodeText), "%s", st.code);
         if (st.role != 0) {
@@ -3073,7 +3182,9 @@ int Port_LobbyPoll(void) {
                 continue; /* three seconds for the direct ways first (BT3_RELAY_ONLY, testing: the relay at once, and
                              nothing else, also while there is no relay address yet) */
             }
-            if (sLobbyRole == 2) {
+            if (sLobbyRole == 3) {
+                spec_hello_send(&sCodeAddr[i], 1);
+            } else if (sLobbyRole == 2) {
                 fprint_send(&sCodeAddr[i]);
                 net_send(hello, sizeof(hello), &sCodeAddr[i]);
             } else {
@@ -3081,6 +3192,17 @@ int Port_LobbyPoll(void) {
             }
         }
         sLobbyLast = now;
+        if (sLobbyRole == 1) {
+            watch_service();
+        }
+        if (sLobbyRole == 3 && sLobbySpecWait) {
+            sCodeSince = now; /* (the host is there and has no match yet: waited for as long as the player does) */
+        }
+        if (sLobbyRole == 3 && now - sCodeSince > 24000000000ull) {
+            snprintf(sCodeError, sizeof(sCodeError), "%s", kSpecNoAnswer);
+            sLobby = -3;
+            return sLobby;
+        }
         if (now - sCodeSince > 24000000000ull) {
             sLobby = -4; /* 24 seconds of knocking (a relay address is asked for after four of them, see net_match.c):
                             the two cannot reach each other */
@@ -3108,11 +3230,20 @@ int Port_LobbyPoll(void) {
             continue;
         }
         if (sLobbyRole == 3) { /* watching: only the host's answers */
-            if (!same_addr(&from, &sPeer)) {
+            int k, ours = !sCodeMode && same_addr(&from, &sPeer);
+            for (k = 0; sCodeMode && k < sCodeAddrs; k++) {
+                ours |= same_addr(&from, &sCodeAddr[k]);
+            }
+            if (!ours) {
                 continue;
             }
             if (type == T_SPEC_SETUP || type == T_SPEC_READY) {
                 sLobby = 2;
+                if (sCodeMode) { /* the address that answered is the one the session watches */
+                    inet_ntop(AF_INET, &from.sin_addr, sLobbyAddr, sizeof(sLobbyAddr));
+                    sLobbyPort = ntohs(from.sin_port);
+                    sCodeVia = sCodeRelay >= 0 && same_addr(&from, &sCodeAddr[sCodeRelay]);
+                }
             } else if (type == T_SPEC_WAIT) {
                 sLobbySpecWait = 1;
             } else if (type == T_SPEC_NO && n >= 12) {
@@ -3125,13 +3256,7 @@ int Port_LobbyPoll(void) {
             continue;
         }
         if (sLobbyRole == 1 && type == T_SPEC_HELLO) { /* someone wants to watch, before the match has begun */
-            uint32_t why = spec_check(pkt, n);
-            if (why != 0) {
-                spec_no(&from, why);
-            } else {
-                uint32_t wait[3] = {MAGIC, T_SPEC_WAIT, SPEC_VERSION};
-                net_send(wait, sizeof(wait), &from);
-            }
+            lobby_spec_hello(pkt, n, &from);
             continue;
         }
         if (type == T_FPRINT && fprint_differs(pkt, n)) {
@@ -3213,11 +3338,13 @@ void Port_LobbyAuto(void) {
                 Port_NetOptions(Port_RollCan() ? 8 : 0, -2); /* (and a quick match's fixed rollback and delay, as the window sets them) */
             }
             Port_LobbyStartQuick(q);
-        } else if (strncmp(what, "spectate:", 9) == 0) { /* BT3_LOBBY=spectate:<address>:<port>: watches that host's match */
+        } else if (strncmp(what, "spectate:", 9) == 0) { /* BT3_LOBBY=spectate:<address>:<port> or spectate:CODE: watches that match */
             char addr[128];
             int port;
             if (sscanf(what + 9, "%127[^:]:%d", addr, &port) == 2) {
                 Port_LobbySpectate(addr, port);
+            } else {
+                Port_LobbySpectateCode(what + 9);
             }
         } else if (strncmp(what, "direct:", 7) == 0) { /* BT3_LOBBY=direct:<port> hosts, direct:<address>:<port> joins */
             char addr[128];
@@ -3256,7 +3383,9 @@ void Port_LobbyLaunch(void) {
     sSock = -1;
     sLobby = 0;
     if (sCodeMode) {
-        Match_Cancel();
+        if (!(sLobbyRole == 1 && Port_SessionCan() && spec_allowed())) {
+            Match_Cancel(); /* (a host that lets spectators in keeps its room while the match is on: Port_NetSessionEnd) */
+        }
         sCodeMode = 0;
         if (sLobbyRole == 1) {
             sLobbyPort = sCodeLocalPort; /* the host's session listens where the lobby did */

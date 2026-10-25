@@ -48,7 +48,46 @@ static struct {
     int role, sock, localPort, version;
     char code[8], name[20]; /* (role 3, a quick match: `code` is the queue's name until the service gives a room) */
     char queue[8];
+    int watch;              /* a host that lets spectators in: they are asked for with every poll, and once the other
+                               player has come the room is kept for as long as the match is on (Match_Keep) */
+    char watchAddr[MATCH_WATCH_ADDRS][64]; /* the spectators' addresses, all together ("seen=" ones too) */
+    int watchCount, watchGen;
 } sM;
+
+/* The spectators of a poll's answer: "watchers":[["a:p","seen=a"],["b:q"]]. Kept when they changed. */
+static void json_watchers(const char *json) {
+    const char *p = SDL_strstr(json, "\"watchers\":[");
+    char addr[MATCH_WATCH_ADDRS][64];
+    int n = 0;
+
+    if (p == NULL) {
+        return;
+    }
+    for (p += 12; *p != '\0' && *p != ']' && n < MATCH_WATCH_ADDRS; p++) {
+        if (*p == '[') { /* one spectator's list */
+            for (p++; *p == '"' && n < MATCH_WATCH_ADDRS;) {
+                const char *e = SDL_strchr(p + 1, '"');
+                if (e == NULL || (size_t)(e - p - 1) >= sizeof(addr[0])) {
+                    return;
+                }
+                SDL_memcpy(addr[n], p + 1, (size_t)(e - p - 1));
+                addr[n][e - p - 1] = '\0';
+                n++;
+                p = e + 1;
+                if (*p == ',') {
+                    p++;
+                }
+            }
+        }
+    }
+    SDL_LockMutex(sM.lock);
+    if (n != sM.watchCount || SDL_memcmp(addr, sM.watchAddr, sizeof(addr[0]) * (size_t)n) != 0) {
+        SDL_memcpy(sM.watchAddr, addr, sizeof(addr[0]) * (size_t)n);
+        sM.watchCount = n;
+        sM.watchGen++;
+    }
+    SDL_UnlockMutex(sM.lock);
+}
 
 /* Quick match: what this game calls itself to the service (so that a room it left behind is not given back to
    it): sixteen letters made up once per run. */
@@ -451,7 +490,7 @@ static int lan_address(int localPort, char *out, size_t size) {
 /* ---- the thread ---- */
 
 static int SDLCALL match_thread(void *arg) {
-    char pub[64] = "", lan[64] = "", addrs[160], body[512], answer[1024], key[40] = "", you[64] = "", name[20], relayAddr[64] = "";
+    char pub[64] = "", lan[64] = "", addrs[160], body[512], answer[4096], key[40] = "", you[64] = "", name[20], relayAddr[64] = "";
     int i, n = 0, hosting, searches = 0;
 
     SDL_SetTLS(&sMine, arg, NULL);
@@ -564,7 +603,7 @@ again:
         sM.st.searches = searches;
         sM.st.state = 2;
         SDL_UnlockMutex(sM.lock);
-        SDL_snprintf(body, sizeof(body), "{\"code\":\"%s\",\"key\":\"%s\"}", sM.code, key);
+        SDL_snprintf(body, sizeof(body), "{\"code\":\"%s\",\"key\":\"%s\"%s}", sM.code, key, sM.watch ? ",\"watch\":true" : "");
         for (i = 0; i < 165 && !STOPPED(); i++) { /* a room lasts ten minutes */
             int k;
             /* asked every two seconds in the first minute, every four after it (the service's daily requests) */
@@ -577,6 +616,7 @@ again:
             if (http_post("poll", body, answer, sizeof(answer))) {
                 MatchStatus st;
                 SDL_memset(&st, 0, sizeof(st));
+                json_watchers(answer);
                 if (json_peer(answer, &st)) {
                     if (STOPPED()) {
                         break;
@@ -588,6 +628,9 @@ again:
                     sM.st.state = 3;
                     SDL_UnlockMutex(sM.lock);
                     if (relayAddr[0] != '\0' || SDL_getenv("BT3_NO_RELAY") != NULL) {
+                        if (sM.watch) {
+                            goto keep;
+                        }
                         http_post("leave", body, answer, sizeof(answer)); /* the room has done its work: it is given up at once */
                         return 0;
                     }
@@ -626,9 +669,12 @@ again:
                                 }
                             }
                         }
-                        for (w = 0; w < 250 && !STOPPED(); w++) { /* (the lobby gives up after 25 seconds at the latest) */
+                        for (w = 0; w < 250 && !STOPPED() && !sM.watch; w++) { /* (the lobby gives up after 25 seconds at the latest) */
                             SDL_Delay(100);
                         }
+                    }
+                    if (sM.watch) {
+                        goto keep;
                     }
                     http_post("leave", body, answer, sizeof(answer));
                     return 0;
@@ -647,6 +693,35 @@ again:
             goto again;
         }
         set_state(-1, "Nobody joined: the room code has run out. Host again for a new one.");
+    } else if (sM.role == 4) { /* a spectator: the host's addresses (and the host learns this one's by its poll) */
+        MatchStatus st;
+        SDL_snprintf(body, sizeof(body), "{\"v\":%d,\"rel\":%d,\"code\":\"%s\",\"name\":\"%s\",\"addrs\":[%s]}", sM.version, PORT_RELEASE, sM.code, name, addrs);
+        if (!http_post("watch", body, answer, sizeof(answer))) {
+            set_state(-1, "The matchmaking service could not be reached (is the network up?).");
+            return 0;
+        }
+        SDL_memset(&st, 0, sizeof(st));
+        if (!json_peer(answer, &st)) {
+            set_state(-1, SDL_strstr(answer, "\"old\"") != NULL ? "Update available. Online servers are unreachable until you update." :
+                          KEY_REFUSED(answer) ? key_refused(answer, "Room codes need an official release of the game. Watching by address still works.") :
+                          SDL_strstr(answer, "version") != NULL ? "The host's game is a different version: watching needs the same release as the host's." :
+                          SDL_strstr(answer, "full") != NULL ? "Too many have asked to watch that room in the last two minutes; try again soon." :
+                          SDL_strstr(answer, "no room") != NULL ? "No room with that code, or the matchmaking service does not take spectators yet. (Codes last ten minutes; a host on 0.1.38.7 or older gives its room up when the match begins.)" :
+                          SDL_strstr(answer, "busy") != NULL ? "Too many wrong codes from this address; try again in an hour." :
+                          SDL_strstr(answer, "error") != NULL ? "The matchmaking service does not take spectators yet. Watching by address still works." :
+                          "The matchmaking service gave no answer.");
+            return 0;
+        }
+        if (STOPPED()) {
+            return 0;
+        }
+        SDL_LockMutex(sM.lock);
+        SDL_strlcpy(sM.st.peerName, st.peerName, sizeof(sM.st.peerName));
+        SDL_memcpy(sM.st.peerAddr, st.peerAddr, sizeof(st.peerAddr));
+        sM.st.peerCount = st.peerCount;
+        sM.st.state = 3;
+        SDL_UnlockMutex(sM.lock);
+        return 0;
     } else {
         MatchStatus st;
         SDL_snprintf(body, sizeof(body), "{\"v\":%d,\"rel\":%d,\"code\":\"%s\",\"name\":\"%s\",\"addrs\":[%s]}", sM.version, PORT_RELEASE, sM.code, name, addrs);
@@ -677,6 +752,29 @@ again:
         json_str(answer, "key", key, sizeof(key));
         goto joined;
     }
+    return 0;
+keep:
+    /* A host that lets spectators in, once the other player has come: the room is kept while the match is on (the
+       session ends this search, Match_Cancel), and asked every five seconds for spectators who have come (the
+       service's requests a day: 720 an hour of match). */
+    SDL_snprintf(body, sizeof(body), "{\"code\":\"%s\",\"key\":\"%s\",\"watch\":true,\"keep\":true}", sM.code, key);
+    while (!STOPPED()) {
+        int w;
+        for (w = 0; w < 50 && !STOPPED(); w++) {
+            SDL_Delay(100);
+        }
+        if (STOPPED()) {
+            break;
+        }
+        if (http_post("poll", body, answer, sizeof(answer))) {
+            if (SDL_strstr(answer, "no room") != NULL) {
+                return 0;
+            }
+            json_watchers(answer);
+        }
+    }
+    SDL_snprintf(body, sizeof(body), "{\"code\":\"%s\",\"key\":\"%s\"}", sM.code, key);
+    http_post("leave", body, answer, sizeof(answer));
     return 0;
 joined:
     /* The one who joined. If the host's direct addresses stay silent, the host asks for a relay address and adds it
@@ -748,6 +846,8 @@ void Match_Begin(int role, int sock, int localPort, const char *code, const char
     sM.code[n] = '\0';
     SDL_strlcpy(sM.queue, role == 3 ? sM.code : "", sizeof(sM.queue));
     SDL_strlcpy(sM.name, name != NULL ? name : "Player", sizeof(sM.name));
+    sM.watchCount = 0;
+    sM.watchGen++;
     sM.thread = SDL_CreateThread(match_thread, "bt3-match", (void *)(intptr_t)SDL_GetAtomicInt(&sM.gen));
     if (sM.thread == NULL) {
         set_state(-1, "The matchmaking could not be started.");
@@ -902,6 +1002,26 @@ void Match_QueuesAsk(int version) {
 /* Players waiting in queue i as last heard, -1 if not known. */
 int Match_QueueWaiting(int i) {
     return i >= 0 && i < MATCH_QUEUES ? SDL_GetAtomicInt(&sQueueCount[i]) - 1 : -1;
+}
+
+/* A host: whether it lets spectators in (set before Match_Begin). */
+void Match_Watch(int on) {
+    sM.watch = on != 0;
+}
+
+/* The spectators' addresses as last heard (up to `max`); *gen changes whenever they do. */
+int Match_Watchers(char out[][64], int max, int *gen) {
+    int n;
+    if (sM.lock == NULL) {
+        *gen = 0;
+        return 0;
+    }
+    SDL_LockMutex(sM.lock);
+    n = sM.watchCount < max ? sM.watchCount : max;
+    SDL_memcpy(out, sM.watchAddr, sizeof(sM.watchAddr[0]) * (size_t)n);
+    *gen = sM.watchGen;
+    SDL_UnlockMutex(sM.lock);
+    return n;
 }
 
 int Match_SocketBusy(void) {

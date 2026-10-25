@@ -3,11 +3,12 @@
 #define NET_MATCH_H
 
 #define MATCH_ADDRS 4
+#define MATCH_WATCH_ADDRS 32 /* the spectators' addresses a host is told, all together */
 
 typedef struct MatchStatus {
     int state;                      /* 0 idle, 1 working, 2 the room is made (code), 3 the other player is known, -1 failed */
     char code[8];
-    char error[96];                 /* for the window, when state is -1 */
+    char error[256];                /* for the window, when state is -1 */
     char peerName[20];
     char peerAddr[MATCH_ADDRS][64]; /* "ip:port", best first */
     int peerCount;
@@ -20,9 +21,12 @@ typedef struct MatchStatus {
 #define MATCH_QUEUES 5
 extern const char *const kMatchQueues[MATCH_QUEUES]; /* "S", "T", "D10", "D15", "D20" */
 
-/* role 1 makes a room, 2 joins room `code`, 3 is a quick match in the queue named by `code`. */
+/* role 1 makes a room, 2 joins room `code`, 3 is a quick match in the queue named by `code`, 4 watches the match of
+   room `code` (a spectator: state 3 with the host's addresses). */
 void Match_Begin(int role, int sock, int localPort, const char *code, const char *name, int version);
 int Match_SocketBusy(void); /* the search's thread is using the match's socket (asking for a relay address): hands off */
+void Match_Watch(int on);   /* a host lets spectators in: its room is kept while the match is on (see net_match.c) */
+int Match_Watchers(char out[][64], int max, int *gen); /* the spectators' addresses ("seen=" too); *gen: changes */
 void Match_QueuesAsk(int version);
 void Match_HelloAsk(void);
 void Match_UpdateAsk(void);   /* asks GitHub for the newest release (a thread; once is enough) */
