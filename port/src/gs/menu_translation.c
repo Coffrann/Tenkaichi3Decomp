@@ -869,12 +869,13 @@ int MenuTranslation_Available(MenuTranslationOption *out, int capacity) {
     }
     return MenuTranslation_List(folder, out, capacity);
 }
+extern int Port_NetSession(void); /* gs/net.c: an online session (begun without starting the program again too) */
 int MenuTranslation_ShouldPrompt(const MenuTranslationOption *options, int count) {
     char saved[16];
     int i;
     const char *override = getenv("BT3_MENU_LANG");
     if (count <= 1 || options == NULL || (override != NULL && override[0] != '\0') ||
-        getenv("BT3_NET_SESSION") != NULL || getenv("BT3_PAD_PLAY") != NULL ||
+        getenv("BT3_NET_SESSION") != NULL || Port_NetSession() || getenv("BT3_PAD_PLAY") != NULL ||
         getenv("BT3_PAD_TABLE") != NULL || getenv("BT3_SYNCTEST") != NULL) return 0;
     if (__atomic_load_n(&sBootChoiceMade, __ATOMIC_ACQUIRE)) return 0;
     if (Port_Setting("language_prompt_always", 0) != 0) return 1;
