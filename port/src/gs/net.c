@@ -901,6 +901,14 @@ static void spec_hello(const uint8_t *pkt, int n, const struct sockaddr_in *from
         spec_no(from, why);
         return;
     }
+    if (sSpecOpen && n >= 32 + NAME_LEN && (pkt[28 + NAME_LEN] & 1)) { /* a lobby's question: is there room? */
+        for (i = 0; i < SPEC_MAX && sWatch[i].on && !same_addr(&sWatch[i].addr, from); i++) {
+        }
+        if (i == SPEC_MAX) {
+            spec_no(from, SPEC_NO_FULL);
+            return;
+        }
+    }
     if (!sSpecOpen || (n >= 32 + NAME_LEN && (pkt[28 + NAME_LEN] & 1))) {
         uint32_t wait[3] = {MAGIC, sSpecOpen ? T_SPEC_READY : T_SPEC_WAIT, SPEC_VERSION};
         net_send(wait, sizeof(wait), from); /* (a lobby's question: answered, nothing kept) */
