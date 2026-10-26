@@ -16,15 +16,21 @@ typedef struct MatchStatus {
     int searches;                   /* ... and how many times the search has started (a room lasts ten minutes) */
     int addrGen;                    /* raised when peerAddr has changed after state 3 (the host's relay address came) */
     int relayGen;                   /* raised when this side has got a relay address after state 3 (permissions are due) */
+    int lobby;                      /* the code is a lobby's (the service said so when joining): the lobby's member, not a player */
+    char self[64];                  /* this game's public address as STUN saw it ("" not known) */
 } MatchStatus;
 
 #define MATCH_QUEUES 5
 extern const char *const kMatchQueues[MATCH_QUEUES]; /* "S", "T", "D10", "D15", "D20" */
 
 /* role 1 makes a room, 2 joins room `code`, 3 is a quick match in the queue named by `code`, 4 watches the match of
-   room `code` (a spectator: state 3 with the host's addresses). */
+   room `code` (a spectator: state 3 with the host's addresses), 5 makes a lobby's room (state 2 with its code for as
+   long as the lobby lives: its members' addresses come as the spectators' do, Match_Watchers). A join or watch of a
+   lobby's code ends in state 3 with `lobby` set. */
 void Match_Begin(int role, int sock, int localPort, const char *code, const char *name, int version);
 int Match_SocketBusy(void); /* the search's thread is using the match's socket (asking for a relay address): hands off */
+void Match_RelayAsk(void);  /* a lobby's owner: a member cannot reach it directly, a relay address is wanted (once) */
+int Match_RelayGen(void);   /* raised each time this side has got a relay address (a lobby's owner: permissions are due) */
 void Match_Watch(int on);   /* a host lets spectators in: its room is kept while the match is on (see net_match.c) */
 int Match_Watchers(char out[][64], int max, int *gen); /* the spectators' addresses ("seen=" too); *gen: changes */
 void Match_QueuesAsk(int version);

@@ -10,12 +10,14 @@ fs.writeFileSync(copy, src);
 const { worker, network, sameNetwork } = await import(copy);
 const rooms = new Map(), used = new Map(), watchers = new Map();
 let rowids = 0;
+let noLobbyColumn = false; // (a database made before lobbies: rooms without the column)
 const DB = { prepare(sql) { return { args: [], bind(...a) { this.args = a; return this; },
     async all() { const a = this.args;
         if (sql.startsWith("SELECT addrs FROM watchers")) { return { results: [...watchers.values()].filter((w) => w.code === a[0] && w.made >= a[1]).sort((x, y) => x.made - y.made).map((w) => ({ addrs: w.addrs })) }; }
         if (sql.startsWith("SELECT queue, COUNT")) { const m = new Map(); for (const r of rooms.values()) { if (r.queue !== null && r.version === a[0] && r.join_key === null && r.made >= a[1]) m.set(r.queue, (m.get(r.queue) ?? 0) + 1); } return { results: [...m].map(([queue, n]) => ({ queue, n })) }; }
         throw new Error("all: " + sql); },
     async first() { const a = this.args;
+        if (sql.startsWith("SELECT addrs FROM watchers WHERE key")) { const w = watchers.get(a[0]); return w && w.code === a[1] ? { addrs: w.addrs } : null; }
         if (sql.startsWith("SELECT COUNT(*) AS n FROM watchers")) { return { n: [...watchers.values()].filter((w) => w.code === a[0]).length }; }
         if (sql.startsWith("SELECT COUNT(*) AS n FROM rooms WHERE queue") && sql.includes("rowid <")) { const mine = rooms.get(a[3]); return { n: [...rooms.values()].filter((r) => r.queue === a[0] && r.version === a[1] && r.join_key === null && r.made >= a[2] && mine && r.rowid < mine.rowid).length }; }
         if (sql.startsWith("SELECT COUNT(*) AS n FROM rooms WHERE queue")) { return { n: [...rooms.values()].filter((r) => r.queue === a[0] && r.version === a[1] && r.join_key === null && r.made >= a[2]).length }; }
@@ -33,7 +35,7 @@ const DB = { prepare(sql) { return { args: [], bind(...a) { this.args = a; retur
         if (sql.startsWith("INSERT INTO watchers")) { watchers.set(a[0], { key: a[0], code: a[1], made: a[2], name: a[3], addrs: a[4] }); return {}; }
         if (sql.startsWith("UPDATE rooms SET made")) { const r = rooms.get(a[1]); if (r) r.made = a[0]; return {}; }
         if (sql.startsWith("INSERT INTO used")) { used.set(a[0] + "|" + a[1], a[2]); return {}; }
-        if (sql.startsWith("INSERT INTO rooms")) { if (rooms.has(a[0])) throw new Error("taken"); rooms.set(a[0], { code: a[0], made: a[1], version: a[2], ip: a[3], host_key: a[4], join_key: null, host_name: a[5], join_name: null, host_addrs: a[6], join_addrs: null, queue: a[7] ?? null, who: a[8] ?? null, rowid: ++rowids }); return {}; }
+        if (sql.startsWith("INSERT INTO rooms")) { if (rooms.has(a[0])) throw new Error("taken"); if (sql.includes("lobby") && noLobbyColumn) throw new Error("D1_ERROR: table rooms has no column named lobby"); rooms.set(a[0], { code: a[0], made: a[1], version: a[2], ip: a[3], host_key: a[4], join_key: null, host_name: a[5], join_name: null, host_addrs: a[6], join_addrs: null, queue: a[7] ?? null, who: a[8] ?? null, ...(sql.includes("lobby") ? { lobby: 1 } : noLobbyColumn ? {} : { lobby: null }), rowid: ++rowids }); return {}; }
         if (sql.startsWith("DELETE FROM rooms WHERE who")) { for (const [k, r] of rooms) { if (r.who === a[0] && r.queue !== null && r.join_key === null) rooms.delete(k); } return {}; }
         if (sql.startsWith("DELETE FROM rooms WHERE code = ? AND join_key IS NULL")) { const r = rooms.get(a[0]); if (r && r.join_key === null) { rooms.delete(a[0]); return { meta: { changes: 1 } }; } return { meta: { changes: 0 } }; }
         if (sql.startsWith("UPDATE rooms SET join_key")) { const r = rooms.get(a[3]); if (!r || r.join_key !== null) return { meta: { changes: 0 } }; r.join_key = a[0]; r.join_name = a[1]; r.join_addrs = a[2]; return { meta: { changes: 1 } }; }
@@ -354,6 +356,49 @@ rooms.clear();
     check("the 13th spectator in two minutes is refused as full", full.error === "full");
     await post("leave", H, { code: room.code, key: room.key });
     check("leave: the room's spectators go too", ![...watchers.values()].some((x) => x.code === room.code));
+}
+// lobbies (/v1/host with lobby, joins of a lobby's room, the owner's and the members' polls)
+{
+    const O = "198.51.100.60", M1 = "203.0.113.61", M2 = "192.0.2.62";
+    const lob = await post("host", O, { v: 5, rel: 139, name: "Owner", lobby: true, addrs: [O + ":7000", "192.168.1.60:7000"] });
+    check("lobby: a room is made for it, with a code and no relay login", lob.code && lob.key && !lob.turn && rooms.get(lob.code).lobby === 1);
+    let m = await post("join", M1, { v: 5, rel: 139, lobby: 1, code: lob.code, name: "M1", addrs: [M1 + ":9000", "10.1.1.1:9000"] });
+    check("lobby: a member is told it is a lobby, and the owner's public address", m.lobby === true && m.key && JSON.stringify(m.peer.addrs) === JSON.stringify([O + ":7000"]) && m.peer.name === "Owner");
+    let m2 = await post("join", M2, { v: 5, rel: 139, lobby: 1, code: lob.code, name: "M2", addrs: [M2 + ":9100"] });
+    check("lobby: a second member joins the same room", m2.lobby === true && m2.key !== m.key);
+    let old = await post("join", "192.0.2.63", { v: 5, rel: 138, code: lob.code, name: "Old", addrs: ["192.0.2.63:9200"] });
+    check("lobby: a game that does not know lobbies is told to update (old)", old.error === "old" && old.lobby === true);
+    let w = await post("watch", "192.0.2.64", { v: 5, rel: 139, lobby: 1, code: lob.code, name: "Watch", addrs: ["192.0.2.64:9300"] });
+    check("lobby: Watch with a lobby's code is a join", w.lobby === true && w.key);
+    w = await post("watch", "192.0.2.65", { v: 5, rel: 139, code: lob.code, name: "Watch", addrs: ["192.0.2.65:9300"] });
+    check("lobby: ... but not from a game that does not say it knows lobbies", w.error === "old");
+    let v = await post("join", "192.0.2.66", { v: 4, rel: 139, lobby: 1, code: lob.code, name: "V", addrs: ["192.0.2.66:1"] });
+    check("lobby: another netcode version is refused", v.error === "version");
+    let q = await post("poll", O, { code: lob.code, key: lob.key, watch: true, keep: true });
+    check("lobby: the owner's poll lists the members' addresses (no marker)", q.peer === null && q.watchers.length === 3 && JSON.stringify(q.watchers[0]) === JSON.stringify([M1 + ":9000", "seen=" + M1]));
+    rooms.get(lob.code).made -= 500;
+    const was = rooms.get(lob.code).made;
+    await post("poll", O, { code: lob.code, key: lob.key, watch: true, keep: true });
+    check("lobby: kept while its owner asks, nobody having joined as a player", rooms.get(lob.code).made > was);
+    await post("addrs", O, { code: lob.code, key: lob.key, addrs: [O + ":7000", "relay=104.30.1.1:5000"] });
+    q = await post("poll", M1, { code: lob.code, key: m.key });
+    check("lobby: a member's poll gives the owner's addresses again, the relay's too", q.lobby === true && q.peer.addrs.includes("relay=104.30.1.1:5000"));
+    check("lobby: a made-up key gets nothing", (await post("poll", M1, { code: lob.code, key: "X".repeat(24) })).error === "no room");
+    const r = await post("relay", O, { code: lob.code, key: lob.key });
+    check("lobby: the owner may ask for a relay login once members have come", r.noRelay !== undefined && r.error === undefined);
+    const empty = await post("host", "198.51.100.67", { v: 5, rel: 139, name: "Owner2", lobby: true, addrs: ["198.51.100.67:7000"] });
+    check("lobby: ... but not before", (await post("relay", "198.51.100.67", { code: empty.code, key: empty.key })).error === "bad request");
+    const plain = await post("host", "198.51.100.68", { v: 5, rel: 139, name: "H", addrs: ["198.51.100.68:7000"] });
+    m = await post("join", M1, { v: 5, rel: 139, lobby: 1, code: plain.code, name: "New", addrs: [M1 + ":9400"] });
+    check("lobby: a new game joining a match of two (not a lobby) joins it as always", m.lobby === undefined && m.peer.name === "H" && rooms.get(plain.code).join_name === "New");
+    await post("leave", O, { code: lob.code, key: lob.key });
+    check("lobby: leave removes the room and its members", !rooms.has(lob.code) && ![...watchers.values()].some((x) => x.code === lob.code));
+    noLobbyColumn = true;
+    const none = await post("host", "198.51.100.69", { v: 5, rel: 139, name: "O", lobby: true, addrs: ["198.51.100.69:7000"] });
+    check("lobby: a database without the column says no lobbies", none.error === "no lobbies");
+    const still = await post("host", "198.51.100.69", { v: 5, rel: 139, name: "O", addrs: ["198.51.100.69:7000"] });
+    check("lobby: ... and still makes rooms for matches of two", still.code && still.key);
+    noLobbyColumn = false;
 }
 console.log(fails === 0 ? "all passed" : fails + " failed");
 process.exit(fails === 0 ? 0 : 1);

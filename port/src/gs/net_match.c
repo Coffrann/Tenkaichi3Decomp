@@ -52,6 +52,7 @@ static struct {
                                player has come the room is kept for as long as the match is on (Match_Keep) */
     char watchAddr[MATCH_WATCH_ADDRS][64]; /* the spectators' addresses, all together ("seen=" ones too) */
     int watchCount, watchGen;
+    SDL_AtomicInt relayAsk, relayGen;      /* a lobby's owner: a relay address is wanted; how many it has got */
 } sM;
 
 /* The spectators of a poll's answer: "watchers":[["a:p","seen=a"],["b:q"]]. Kept when they changed. */
@@ -508,6 +509,9 @@ static int SDLCALL match_thread(void *arg) {
     if (STOPPED()) {
         return 0;
     }
+    SDL_LockMutex(sM.lock);
+    SDL_strlcpy(sM.st.self, pub, sizeof(sM.st.self));
+    SDL_UnlockMutex(sM.lock);
     /* (no public address found: the Worker's view of this machine's address with the local port is tried in its
        place, below, once the Worker has said what it sees) */
     SDL_snprintf(addrs, sizeof(addrs), "%s%s%s%s%s%s%s", pub[0] ? "\"" : "", pub, pub[0] ? "\"" : "", pub[0] && lan[0] ? "," : "", lan[0] ? "\"" : "", lan,
@@ -517,7 +521,7 @@ static int SDLCALL match_thread(void *arg) {
         return 0;
     }
 again:
-    hosting = sM.role == 1;
+    hosting = sM.role == 1 || sM.role == 5;
     if (sM.role == 3) {
         /* A quick match: the service puts this player with whoever waits longest in the queue (then this is the
            one who joins), or gives it a room of its own in the queue to wait in (then it is the host). A room
@@ -557,8 +561,9 @@ again:
         hosting = 1;
     }
     if (hosting) {
-        if (sM.role == 1) {
-            SDL_snprintf(body, sizeof(body), "{\"v\":%d,\"rel\":%d,\"name\":\"%s\",\"addrs\":[%s]}", sM.version, PORT_RELEASE, name, addrs);
+        if (sM.role == 1 || sM.role == 5) {
+            SDL_snprintf(body, sizeof(body), "{\"v\":%d,\"rel\":%d,\"name\":\"%s\",\"addrs\":[%s]%s}", sM.version, PORT_RELEASE, name, addrs,
+                         sM.role == 5 ? ",\"lobby\":true" : "");
             if (!http_post("host", body, answer, sizeof(answer))) {
                 set_state(-1, "The matchmaking service could not be reached (is the network up?).");
                 return 0;
@@ -568,7 +573,8 @@ again:
             }
         }
         if (!json_str(answer, "code", sM.code, sizeof(sM.code)) || !json_str(answer, "key", key, sizeof(key))) {
-            set_state(-1, SDL_strstr(answer, "\"old\"") != NULL ? "Update available. Online servers are unreachable until you update." :
+            set_state(-1, SDL_strstr(answer, "no lobbies") != NULL ? "The matchmaking service does not take lobbies yet. A lobby by address (a port) still works." :
+                          SDL_strstr(answer, "\"old\"") != NULL ? "Update available. Online servers are unreachable until you update." :
                           KEY_REFUSED(answer) ? key_refused(answer, "Room codes need an official release of the game. Playing by address still works.") :
                           SDL_strstr(answer, "busy") != NULL ? "Too many rooms from this address; try again in a few minutes." : "The matchmaking service gave no room.");
             return 0;
@@ -603,6 +609,9 @@ again:
         sM.st.searches = searches;
         sM.st.state = 2;
         SDL_UnlockMutex(sM.lock);
+        if (sM.role == 5) {
+            goto lobby;
+        }
         SDL_snprintf(body, sizeof(body), "{\"code\":\"%s\",\"key\":\"%s\"%s}", sM.code, key, sM.watch ? ",\"watch\":true" : "");
         for (i = 0; i < 165 && !STOPPED(); i++) { /* a room lasts ten minutes */
             int k;
@@ -695,7 +704,7 @@ again:
         set_state(-1, "Nobody joined: the room code has run out. Host again for a new one.");
     } else if (sM.role == 4) { /* a spectator: the host's addresses (and the host learns this one's by its poll) */
         MatchStatus st;
-        SDL_snprintf(body, sizeof(body), "{\"v\":%d,\"rel\":%d,\"code\":\"%s\",\"name\":\"%s\",\"addrs\":[%s]}", sM.version, PORT_RELEASE, sM.code, name, addrs);
+        SDL_snprintf(body, sizeof(body), "{\"v\":%d,\"rel\":%d,\"lobby\":1,\"code\":\"%s\",\"name\":\"%s\",\"addrs\":[%s]}", sM.version, PORT_RELEASE, sM.code, name, addrs);
         if (!http_post("watch", body, answer, sizeof(answer))) {
             set_state(-1, "The matchmaking service could not be reached (is the network up?).");
             return 0;
@@ -719,12 +728,18 @@ again:
         SDL_strlcpy(sM.st.peerName, st.peerName, sizeof(sM.st.peerName));
         SDL_memcpy(sM.st.peerAddr, st.peerAddr, sizeof(st.peerAddr));
         sM.st.peerCount = st.peerCount;
+        sM.st.lobby = SDL_strstr(answer, "\"lobby\":true") != NULL;
         sM.st.state = 3;
         SDL_UnlockMutex(sM.lock);
+        if (sM.st.lobby) { /* a lobby's code: a member, who asks for the owner's relay address as the one who joins does */
+            json_str(answer, "key", key, sizeof(key));
+            goto joined;
+        }
         return 0;
     } else {
         MatchStatus st;
-        SDL_snprintf(body, sizeof(body), "{\"v\":%d,\"rel\":%d,\"code\":\"%s\",\"name\":\"%s\",\"addrs\":[%s]}", sM.version, PORT_RELEASE, sM.code, name, addrs);
+        /* (`lobby`: this game can be a lobby's member; a code of a lobby is then answered as one) */
+        SDL_snprintf(body, sizeof(body), "{\"v\":%d,\"rel\":%d,\"lobby\":1,\"code\":\"%s\",\"name\":\"%s\",\"addrs\":[%s]}", sM.version, PORT_RELEASE, sM.code, name, addrs);
         if (!http_post("join", body, answer, sizeof(answer))) {
             set_state(-1, "The matchmaking service could not be reached (is the network up?).");
             return 0;
@@ -737,7 +752,7 @@ again:
                           SDL_strstr(answer, "version") != NULL ? "The host's game is a different version: both players need the same release." :
                           SDL_strstr(answer, "full") != NULL ? "Someone has already joined that room." :
                           SDL_strstr(answer, "no room") != NULL ? "No room with that code (codes last ten minutes)." :
-                          SDL_strstr(answer, "busy") != NULL ? "Too many wrong codes from this address; try again in an hour." : "The matchmaking service gave no answer.");
+                          SDL_strstr(answer, "busy") != NULL ? "Too many wrong codes from this address, or too many joining that lobby at once; try again soon." : "The matchmaking service gave no answer.");
             return 0;
         }
         if (STOPPED()) {
@@ -747,11 +762,72 @@ again:
         SDL_strlcpy(sM.st.peerName, st.peerName, sizeof(sM.st.peerName));
         SDL_memcpy(sM.st.peerAddr, st.peerAddr, sizeof(st.peerAddr));
         sM.st.peerCount = st.peerCount;
+        sM.st.lobby = SDL_strstr(answer, "\"lobby\":true") != NULL; /* (a lobby's code: this game is a member) */
         sM.st.state = 3;
         SDL_UnlockMutex(sM.lock);
         json_str(answer, "key", key, sizeof(key));
         goto joined;
     }
+    return 0;
+lobby:
+    /* A lobby's owner. The room lives as long as the lobby: asked every four seconds (900 requests an hour of lobby)
+       for the members who have joined with the code (their addresses, as spectators', Match_Watchers); the lobby
+       knocks at each and lets it through its relay. A relay address is asked for when the lobby says a member
+       cannot reach it directly (Match_RelayAsk), once a member has come. */
+    SDL_snprintf(body, sizeof(body), "{\"code\":\"%s\",\"key\":\"%s\",\"watch\":true,\"keep\":true}", sM.code, key);
+    {
+        int first = 1;
+        while (!STOPPED()) {
+            int w;
+            for (w = 0; w < (first ? 1 : 40) && !STOPPED() && SDL_GetAtomicInt(&sM.relayAsk) != 1; w++) {
+                SDL_Delay(100);
+            }
+            first = 0;
+            if (STOPPED()) {
+                break;
+            }
+            if (SDL_GetAtomicInt(&sM.relayAsk) == 1) {
+                char server[128], user[160], pass[160], relay[64], ask[160];
+                SDL_SetAtomicInt(&sM.relayAsk, 2); /* (once) */
+                if (relayAddr[0] != '\0' || SDL_getenv("BT3_NO_RELAY") != NULL) {
+                    continue;
+                }
+                SDL_snprintf(ask, sizeof(ask), "{\"code\":\"%s\",\"key\":\"%s\"}", sM.code, key);
+                if (http_post("relay", ask, answer, sizeof(answer))) {
+                    if (SDL_getenv("BT3_RELAY_LOG") != NULL) {
+                        char why[160] = "";
+                        json_str(answer, "noRelay", why, sizeof(why));
+                        fprintf(stderr, "relay: the lobby asked for one: the service %s%s\n", SDL_strstr(answer, "\"turn\"") != NULL ? "gave access" : "gave no access: ", why);
+                    }
+                    if (json_str(answer, "server", server, sizeof(server)) && json_str(answer, "username", user, sizeof(user)) &&
+                        json_str(answer, "credential", pass, sizeof(pass)) && !STOPPED()) {
+                        int got;
+                        SDL_SetAtomicInt(&sM.sockBusy, 1);
+                        SDL_Delay(80); /* (the lobby is between two looks at the socket by then) */
+                        got = !STOPPED() && Relay_Allocate(sM.sock, server, user, pass, relay, sizeof(relay));
+                        SDL_SetAtomicInt(&sM.sockBusy, 0);
+                        if (got && !STOPPED()) {
+                            char more[512];
+                            SDL_snprintf(more, sizeof(more), "{\"code\":\"%s\",\"key\":\"%s\",\"addrs\":[%s,\"relay=%s\"]}", sM.code, key, addrs, relay);
+                            http_post("addrs", more, answer, sizeof(answer));
+                            SDL_strlcpy(relayAddr, relay, sizeof(relayAddr));
+                            SDL_AddAtomicInt(&sM.relayGen, 1);
+                        }
+                    }
+                }
+                continue;
+            }
+            if (http_post("poll", body, answer, sizeof(answer))) {
+                if (SDL_strstr(answer, "no room") != NULL) {
+                    set_state(-1, "The lobby's room code has run out (the matchmaking service no longer knows it). Members by address can still come.");
+                    return 0;
+                }
+                json_watchers(answer);
+            }
+        }
+    }
+    SDL_snprintf(body, sizeof(body), "{\"code\":\"%s\",\"key\":\"%s\"}", sM.code, key);
+    http_post("leave", body, answer, sizeof(answer));
     return 0;
 keep:
     /* A host that lets spectators in, once the other player has come: the room is kept while the match is on (the
@@ -848,6 +924,7 @@ void Match_Begin(int role, int sock, int localPort, const char *code, const char
     SDL_strlcpy(sM.name, name != NULL ? name : "Player", sizeof(sM.name));
     sM.watchCount = 0;
     sM.watchGen++;
+    SDL_SetAtomicInt(&sM.relayAsk, 0);
     sM.thread = SDL_CreateThread(match_thread, "bt3-match", (void *)(intptr_t)SDL_GetAtomicInt(&sM.gen));
     if (sM.thread == NULL) {
         set_state(-1, "The matchmaking could not be started.");
@@ -1026,6 +1103,14 @@ int Match_Watchers(char out[][64], int max, int *gen) {
 
 int Match_SocketBusy(void) {
     return SDL_GetAtomicInt(&sM.sockBusy);
+}
+
+void Match_RelayAsk(void) {
+    SDL_CompareAndSwapAtomicInt(&sM.relayAsk, 0, 1);
+}
+
+int Match_RelayGen(void) {
+    return SDL_GetAtomicInt(&sM.relayGen);
 }
 
 /* Where it stands. */

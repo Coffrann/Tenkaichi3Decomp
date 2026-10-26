@@ -6,8 +6,8 @@
 //
 // What it stores (a D1 database bound as DB, table `rooms`, see schema.sql), for at most ten minutes per room: the
 // code, the two player names, the addresses each game reported, and the host's address as Cloudflare saw it (a room
-// whose match is on lasts as long as its host keeps it, see /v1/poll); and in the table `watchers`, for two minutes,
-// a spectator's name and addresses.
+// whose match is on lasts as long as its host keeps it, see /v1/poll, and a lobby's as long as its owner does); and in
+// the table `watchers`, for two minutes, a spectator's or a lobby member's name and addresses.
 //
 // Requests are JSON over POST:
 //   /v1/host   {v, name, addrs}        -> {code, key, you, turn?}
@@ -20,6 +20,15 @@
 //   /v1/watch  {v, code, name, addrs}  -> {key, you, peer: {name, addrs}}   a spectator: the host's addresses, and the
 //       host learns the spectator's (with "seen=ip") by its poll. Any room of the same version, joined or not; at
 //       most WATCHERS_PER_ROOM a room in WATCH_SECONDS. Errors as for join ("no room", "version", "busy", "full").
+//   Lobbies (from the release after 0.1.38.7): /v1/host with `lobby: true` makes a lobby's room (its maker is the
+//       lobby's owner: up to eight games meet at its game, which keeps the lobby itself; table `rooms`, column
+//       `lobby`). /v1/join {v, rel, code, name, addrs, lobby: 1} of a lobby's room -> {lobby: true, key, you, peer}: the
+//       owner's addresses, and the member's are kept for two minutes in `watchers`, where the owner's polls find them
+//       (as a spectator's). Any number of members join (WATCHERS_PER_ROOM in two minutes); the owner's game says who
+//       fits. A game that does not send `lobby` (0.1.38.7 and older) is answered {error: "old", lobby: true} (426): it
+//       shows "Update available...". /v1/watch of a lobby's room is answered as such a join. The owner's poll with
+//       `watch` and `keep` keeps the room for as long as it asks (every few seconds); a member's poll (its key) gets the
+//       owner's addresses again (the relay address that came later); /v1/relay is the owner's once a member has come.
 //   /v1/leave  {code, key}             -> {}
 //   /v1/relay  {code, key}             -> {turn} | {noRelay}   (the host, once someone has joined and the two did not
 //       reach each other directly: a relay login, asked for only then. A game that sends `rel` >= 129 gets none
@@ -353,13 +362,18 @@ async function joinRoom(env, room, ip, addrs, name) {
 }
 
 // Makes a room (queue: null for one with a code to hand on). null if no code could be found for it.
-async function makeRoom(env, ip, now, v, name, addrs, queue, who, wantRelay) {
+async function makeRoom(env, ip, now, v, name, addrs, queue, who, wantRelay, lobby = false) {
     const key = randomText(24, ALPHABET);
     for (let attempt = 0; attempt < 5; attempt++) {
         const code = randomText(6, ALPHABET);
         try {
-            await env.DB.prepare("INSERT INTO rooms (code, made, version, ip, host_key, host_name, host_addrs, queue, who) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-                .bind(code, now, v, ip, key, cleanName(name), JSON.stringify(addrs), queue, who).run();
+            if (lobby) { // (only a lobby's room names the column: a database without it still makes every other room)
+                await env.DB.prepare("INSERT INTO rooms (code, made, version, ip, host_key, host_name, host_addrs, queue, who, lobby) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)")
+                    .bind(code, now, v, ip, key, cleanName(name), JSON.stringify(addrs), queue, who).run();
+            } else {
+                await env.DB.prepare("INSERT INTO rooms (code, made, version, ip, host_key, host_name, host_addrs, queue, who) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                    .bind(code, now, v, ip, key, cleanName(name), JSON.stringify(addrs), queue, who).run();
+            }
             if (!wantRelay) {
                 return { code, key, you: ip };
             }
@@ -367,6 +381,9 @@ async function makeRoom(env, ip, now, v, name, addrs, queue, who, wantRelay) {
             const turn = refused ? { why: refused } : await turnAccess(env);
             return turn.server ? { code, key, you: ip, turn } : { code, key, you: ip, noRelay: turn.why };
         } catch (e) {
+            if (lobby && /column/i.test(String(e && e.message))) {
+                return { noLobbies: true }; // (the column `lobby` is missing: see schema.sql)
+            }
             // the code is taken: another one
         }
     }
@@ -538,7 +555,11 @@ export default {
                 await env.DB.prepare("DELETE FROM used WHERE slot < ? AND slot > 0 AND what != 'relayoff'").bind(now - 2 * 86400).run().catch(() => {});
                 await env.DB.prepare("DELETE FROM used WHERE slot = 0 AND what LIKE 'ended:%' AND n < ?").bind(now - 2 * 86400).run().catch(() => {});
             }
-            const made = await makeRoom(env, ip, now, body.v, body.name, addrs, null, null, !asksLater(body));
+            const lobby = body.lobby === true;
+            const made = await makeRoom(env, ip, now, body.v, body.name, addrs, null, null, !lobby && !asksLater(body), lobby);
+            if (made && made.noLobbies) {
+                return reply({ error: "no lobbies" }, 501);
+            }
             return made ? reply(made) : reply({ error: "busy" }, 503);
         }
         if (what === "queues") { // how many wait in each queue (for the window)
@@ -617,6 +638,39 @@ export default {
             return reply({ error: "no room" }, 404);
         }
 
+        if (room.lobby === 1 && (what === "join" || what === "watch")) {
+            // A lobby's room. A game that knows lobbies says so (`lobby`): it is a member, handed the owner's
+            // addresses as a spectator is, and the owner learns its own by its polls. An older game would take the
+            // room for a match of two: it is told to update (its own words for "old": "Update available...").
+            const addrs = cleanAddrs(body.addrs);
+            if (!Number.isInteger(body.v) || addrs === null) {
+                return reply({ error: "bad request" }, 400);
+            }
+            if (body.lobby === undefined || body.lobby === null || body.lobby === false || body.lobby === 0) {
+                return reply({ error: "old", lobby: true, why: "This code is a lobby's: update the game to join lobbies.", need: minRelease }, 426);
+            }
+            if (body.v !== room.version) {
+                return reply({ error: "version" }, 409);
+            }
+            await env.DB.prepare("DELETE FROM watchers WHERE made < ?").bind(now - WATCH_SECONDS).run().catch(() => {});
+            const many = await env.DB.prepare("SELECT COUNT(*) AS n FROM watchers WHERE code = ?").bind(code).first().catch(() => null);
+            if (many && many.n >= WATCHERS_PER_ROOM) {
+                return reply({ error: "busy" }, 429); // (members coming faster than a lobby can take them: try again soon)
+            }
+            const hostAddrs = JSON.parse(room.host_addrs);
+            const same = sameNetwork(ip, addrs, room.ip, hostAddrs);
+            const kept = shown(addrs, same);
+            if (/^[0-9.]{7,15}$/.test(ip)) {
+                kept.push("seen=" + ip); // for the owner's relay: whom to let through
+            }
+            if (same) {
+                kept.push("same=1");
+            }
+            const key = randomText(24, ALPHABET);
+            await env.DB.prepare("INSERT INTO watchers (key, code, made, name, addrs) VALUES (?, ?, ?, ?, ?)").bind(key, code, now, cleanName(body.name), JSON.stringify(kept)).run();
+            return reply({ lobby: true, key, you: ip, peer: { name: room.host_name, addrs: shown(hostAddrs, same) } });
+        }
+
         if (what === "watch") { // a spectator: the host's addresses; the host learns this one's by its poll
             const addrs = cleanAddrs(body.addrs);
             if (!Number.isInteger(body.v) || addrs === null) {
@@ -659,6 +713,14 @@ export default {
         }
 
         const isHost = body.key === room.host_key, isJoin = room.join_key !== null && body.key === room.join_key;
+        if (!isHost && !isJoin && room.lobby === 1 && what === "poll" && typeof body.key === "string") {
+            // a lobby's member (its key from the join, kept two minutes): the owner's addresses again, with the relay
+            // address that may have come since
+            const mine = await env.DB.prepare("SELECT addrs FROM watchers WHERE key = ? AND code = ?").bind(body.key, code).first().catch(() => null);
+            if (mine) {
+                return reply({ lobby: true, peer: { name: room.host_name, addrs: shown(JSON.parse(room.host_addrs), JSON.parse(mine.addrs).includes("same=1")) } });
+            }
+        }
         if (!isHost && !isJoin) {
             return reply({ error: "no room" }, 404);
         }
@@ -666,12 +728,12 @@ export default {
             if (isHost) {
                 const out = { peer: room.join_key !== null ? { name: room.join_name, addrs: shown(JSON.parse(room.join_addrs), true) } : null };
                 if (body.watch === true) { // (a game that knows spectators: older ones get the answer they always had)
-                    if (body.keep === true && room.join_key !== null) {
+                    if (body.keep === true && (room.join_key !== null || room.lobby === 1)) { // (a lobby: while its owner asks)
                         await env.DB.prepare("UPDATE rooms SET made = ? WHERE code = ?").bind(now, code).run();
                     }
                     try {
                         const rows = await env.DB.prepare("SELECT addrs FROM watchers WHERE code = ? AND made >= ? ORDER BY made").bind(code, now - WATCH_SECONDS).all();
-                        out.watchers = ((rows && rows.results) || []).map((r) => JSON.parse(r.addrs));
+                        out.watchers = ((rows && rows.results) || []).map((r) => JSON.parse(r.addrs).filter((a) => a !== "same=1"));
                     } catch (e) {
                         out.watchers = []; // (the table "watchers" is missing: see schema.sql)
                     }
@@ -681,8 +743,14 @@ export default {
             return reply({ peer: { name: room.host_name, addrs: shown(JSON.parse(room.host_addrs), JSON.parse(room.join_addrs).includes("same=1")) } });
         }
         if (what === "relay") { // the host: the two could not reach each other directly, a relay login is needed after all
-            if (!isHost || room.join_key === null) {
+            if (!isHost || (room.join_key === null && room.lobby !== 1)) {
                 return reply({ error: "bad request" }, 400); // (only once someone has joined: nobody waits with a login)
+            }
+            if (room.lobby === 1) { // a lobby's owner: only once a member has come (in the last two minutes)
+                const any = await env.DB.prepare("SELECT COUNT(*) AS n FROM watchers WHERE code = ?").bind(code).first().catch(() => null);
+                if (!any || any.n === 0) {
+                    return reply({ error: "bad request" }, 400);
+                }
             }
             const refused = await relayAllowed(env, ip, now);
             const turn = refused ? { why: refused } : await turnAccess(env);
