@@ -142,6 +142,9 @@ static struct {
     uint32_t chatIn;           /* a member: the owner's last line taken */
     struct { char name[NAMEB]; char text[TEXT + 1]; } chat[LOBBY_CHAT];
     int chatCount;
+    struct { char name[NAMEB]; char text[TEXT + 1]; } log[LOBBY_LOG]; /* the notes and the chat, in order (the screen's) */
+    int logCount;
+    uint32_t logTotal;
     uint64_t lastView;
 } sL;
 
@@ -193,11 +196,26 @@ static const char *rules_text(void) {
     return t;
 }
 
+static void log_push(const char *name, const char *text);
+
 static void note_set(const char *text) {
+    log_push("", text);
     SDL_strlcpy(sL.note, text, sizeof(sL.note));
     sL.noteSeq++;
     sL.dirty = 1;
     fprintf(stderr, "bt3: lobby: %s\n", text);
+}
+
+/* A line of what happened, for the screen: a note (name "") or a line of chat. */
+static void log_push(const char *name, const char *text) {
+    if (sL.logCount == LOBBY_LOG) {
+        memmove(&sL.log[0], &sL.log[1], sizeof(sL.log[0]) * (LOBBY_LOG - 1));
+        sL.logCount--;
+    }
+    SDL_strlcpy(sL.log[sL.logCount].name, name, NAMEB);
+    SDL_strlcpy(sL.log[sL.logCount].text, text, TEXT + 1);
+    sL.logCount++;
+    sL.logTotal++;
 }
 
 /* ---- the window's copy ---- */
@@ -243,6 +261,12 @@ static void view_update(int force) {
     for (i = 0; i < sL.chatCount; i++) {
         SDL_strlcpy(sView.chatName[i], sL.chat[i].name, LOBBY_NAME);
         SDL_strlcpy(sView.chatText[i], sL.chat[i].text, sizeof(sView.chatText[i]));
+    }
+    sView.logCount = sL.logCount;
+    sView.logTotal = sL.logTotal;
+    for (i = 0; i < sL.logCount; i++) {
+        SDL_strlcpy(sView.logName[i], sL.log[i].name, LOBBY_NAME);
+        SDL_strlcpy(sView.logText[i], sL.log[i].text, sizeof(sView.logText[i]));
     }
     SDL_UnlockSpinlock(&sLock);
 }
@@ -312,6 +336,14 @@ int Port_LobbyJoin(const char *address, int port) {
     SDL_UnlockSpinlock(&sLock);
     queue_put(&c);
     return 1;
+}
+
+int Port_LobbyWantsScreen(void) {
+    int state;
+    SDL_LockSpinlock(&sLock);
+    state = sView.state;
+    SDL_UnlockSpinlock(&sLock);
+    return state != 0 && NetIo_SessionMode() == 0 && !NetIo_SessionStarting();
 }
 
 int Lobby_Active(void) {
@@ -728,6 +760,7 @@ static void owner_say(int k, const char *text) {
     sL.chat[sL.chatCount].text[len] = '\0';
     sL.chatCount++;
     sL.chatOut++;
+    log_push(sL.chat[sL.chatCount - 1].name, sL.chat[sL.chatCount - 1].text);
     fprintf(stderr, "bt3: lobby: chat: %s: %s\n", sL.m[k].name, sL.chat[sL.chatCount - 1].text);
     put(p, 0, MAGIC);
     put(p, 1, T_L_SAID);
@@ -913,6 +946,9 @@ static void member_packet(const uint8_t *pkt, int n, const struct sockaddr_in *f
             sL.noteSeq = noteSeq;
             memcpy(sL.note, pkt + 264, NOTE);
             name_clean(sL.note, NOTE);
+            if (sL.note[0] != '\0') {
+                log_push("", sL.note);
+            }
             fprintf(stderr, "bt3: lobby: note: %s\n", sL.note);
         }
         memcpy(sL.code, pkt + 360, 8);
@@ -985,6 +1021,7 @@ static void member_packet(const uint8_t *pkt, int n, const struct sockaddr_in *f
             sL.chat[sL.chatCount].text[len] = '\0';
             name_clean(sL.chat[sL.chatCount].text, TEXT + 1);
             fprintf(stderr, "bt3: lobby: chat: %s: %s\n", sL.chat[sL.chatCount].name, sL.chat[sL.chatCount].text);
+            log_push(sL.chat[sL.chatCount].name, sL.chat[sL.chatCount].text);
             sL.chatCount++;
         }
     }

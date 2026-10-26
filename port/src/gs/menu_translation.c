@@ -24,7 +24,7 @@
 #endif
 
 enum { TR_MAX_FILE = 1024 * 1024, TR_MAX_ROWS = 640, TR_MAX_GROUPS = 160 };
-enum { TR_PORT_TEXT_COUNT = 3, TR_PORT_TEXT_MAX = 1024, TR_PORT_MAX_FILE = 1024 * 1024 };
+enum { TR_PORT_TEXT_COUNT = 4, TR_PORT_TEXT_MAX = 1024, TR_PORT_MAX_FILE = 1024 * 1024 };
 /* The online menus' lines (ids "tbo/..."): looked up by their English text, as the menu draws them (MenuTranslation_Line).
    Any number up to TR_LINES_MAX; a table is made once per load and kept (the game's thread may be reading the last). */
 enum { TR_LINES_MAX = 2048, TR_LINES_HASH = 4096 };
@@ -34,7 +34,8 @@ static TrLines *sLines;
 static const struct { const char *id, *original; } kPortText[TR_PORT_TEXT_COUNT] = {
     {PORT_TEXT_QUIT_CONFIRM, "Close the game?\nUnsaved progress will be lost."},
     {PORT_TEXT_NET_CONNECTING, "Connecting to your rival..."},
-    {PORT_TEXT_NET_RIVAL, "Your rival \"{name}\" is here! The match begins."}
+    {PORT_TEXT_NET_RIVAL, "Your rival \"{name}\" is here! The match begins."},
+    {PORT_TEXT_LOBBY_JOINED, "You are in the lobby. Its screen opens from the main menu (Tenkaichi Budokai Online)."}
 };
 typedef struct TrPortCatalog {
     char text[TR_PORT_TEXT_COUNT][TR_PORT_TEXT_MAX];

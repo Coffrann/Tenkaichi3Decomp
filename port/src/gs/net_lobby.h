@@ -57,6 +57,7 @@ void Lobby_Stranger(const uint8_t *pkt, int n, const struct sockaddr_in *from, u
 #define LOBBY_SLOTS 8
 #define LOBBY_NAME 20
 #define LOBBY_CHAT 32
+#define LOBBY_LOG 6
 typedef struct PortLobbyView {
     int state;                  /* 0 none, 1 connecting, 2 in the lobby, 3 closed (error says why; Port_LobbyDo(LOBBY_OK) clears it) */
     int owner;                  /* this copy owns the lobby */
@@ -75,6 +76,12 @@ typedef struct PortLobbyView {
     int chatCount;              /* lines of chat, oldest first */
     char chatName[LOBBY_CHAT][LOBBY_NAME];
     char chatText[LOBBY_CHAT][164];
+    /* what happened, in order: the notes and the lines of chat together, the last LOBBY_LOG of them, oldest first
+       (logName "" for a note); logTotal counts every one there has been (a new one: it changed) */
+    int logCount;
+    unsigned logTotal;
+    char logName[LOBBY_LOG][LOBBY_NAME];
+    char logText[LOBBY_LOG][164];
 } PortLobbyView;
 
 enum { LOBBY_START = 1, LOBBY_BACK, LOBBY_LEAVE, LOBBY_KICK, LOBBY_MOVE, LOBBY_RULE, LOBBY_READY, LOBBY_OK };
@@ -90,6 +97,9 @@ void Port_LobbySay(const char *text);     /* a line of chat to everyone in the l
 int Port_LobbyCreate(int byCode, int port, int battle, int time, int speed, int rollback, int delay);
 int Port_LobbyJoin(const char *address, int port); /* a lobby by its owner's address */
 int Port_NetLobbyOwnerSide(void);         /* in a lobby's match: the owner's side (0, 1; 2 a spectator); -1 not a lobby's match */
+/* The lobby's screen (src/menu/port_tbo.c) should be up: this copy is in a lobby, or was just told why it is not
+   (state 1, 2, 3), and no match is on or starting for it. The main menu goes to it (src/menu/menu_a.c). */
+int Port_LobbyWantsScreen(void);
 
 #ifdef __cplusplus
 }

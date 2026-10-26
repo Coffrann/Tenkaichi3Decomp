@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "labels_version": 1,
+  "labels_version": 2,
   "translation_version": 1,
-  "labels_count": 3,
+  "labels_count": 4,
   "locale": "en",
   "name": "English",
   "order": 1,
@@ -18,6 +18,10 @@
     "net/rival_here": {
       "original": "Your rival \"{name}\" is here! The match begins.",
       "text": "Your rival \"{name}\" is here! The match begins."
+    },
+    "net/lobby_joined": {
+      "original": "You are in the lobby. Its screen opens from the main menu (Tenkaichi Budokai Online).",
+      "text": "You are in the lobby. Its screen opens from the main menu (Tenkaichi Budokai Online)."
     }
   }
 }

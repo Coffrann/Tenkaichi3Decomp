@@ -104,8 +104,11 @@ static MenuTranslationOption sLanguages[256];
 static int sLanguageCount, sLanguageChoice;
 static bool sLanguageRestartPending;
 static bool sNet;                              // the open window is the online screen (Dragon Net Battle), not the settings
-static bool sLobbyWin;                         // ... it is the lobby's window (gs/net_lobby.c)
-static bool sSpecPause;                        // ... it is a lobby spectator's own pause menu (pauses nothing)
+// A spectator's own pause menu is the game's (src/menu/port_tbo.c, PortTbo_SpecDraw): Esc, or the test's moment, asks
+// for it here; the controller's START and the key bound to it reach it through the pad.
+extern "C" volatile int gPortSpecMenuAsk;
+volatile int gPortSpecMenuAsk;
+extern "C" void Port_UiNotice(const char *text);
 static void spec_view_next(void);               // watching a match: the next view (player 1, player 2, both)
 static const char *spec_view_name(int view);
 static int sForceTab = -1;                     // BT3_UI_OPEN=<tab>: open at start on that tab (testing)
@@ -612,8 +615,6 @@ static void set_open(bool open) {
     }
     sOpen = open;
     sNet = false;
-    sLobbyWin = false;
-    sSpecPause = false;
     sCapKind = 0;
     gPortInputCapture = 0;
     input_owner();
@@ -972,47 +973,16 @@ static void build_net(void) {
                 ImGui::EndDisabled();
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("Lobby")) {
-                tab = 3;
-                ImGui::TextWrapped("A lobby for up to eight: two play, up to six watch. You are its owner: you put people in the two "
-                                   "player places, choose the rules and start the matches; everyone else joins with the code "
-                                   "(Join tab, as for a match).");
-                ImGui::Spacing();
-                ImGui::Checkbox("Use a room code (no port forwarding needed)##lobby", &useCode);
-                ImGui::BeginDisabled(useCode);
-                ImGui::SetNextItemWidth(U(120.0f));
-                ImGui::InputText("Port##lobby", port, sizeof(port), ImGuiInputTextFlags_CharsDecimal);
-                ImGui::EndDisabled();
-                ImGui::TextDisabled("Without a code, the others join with your address and this port.");
-                ImGui::EndTabItem();
-            }
             ImGui::EndTabBar();
         }
         ImGui::Spacing();
-        if (tab == 3) {
-            if (ImGui::Button("Create a lobby", ImVec2(U(200.0f), 0.0f))) {
-                int b = Port_Setting("net_battle", 0), t = Port_Setting("net_time", 3), sp = Port_Setting("net_speed_host", Port_NetSpeedStandard());
-                int r = Port_RollCan() ? Port_Setting("net_rollback2", 8) : 0, d = Port_Setting("net_delay2", -1) + 1;
-                Port_NetNameSet(name);
-                Port_SettingTextSave("net_name", name);
-                Port_SettingsWrite();
-                Port_LobbyCancel(); // (a 1v1 search under way is given up)
-                Port_LobbyCreate(useCode ? 1 : 0, atoi(port), b, t, sp, r, d);
-                set_open(false); // (the lobby's window opens at once)
-                ImGui::End();
-                return;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("Back", ImVec2(U(120.0f), 0.0f))) {
-                open = false;
-            }
-            ImGui::Spacing();
-            ImGui::TextDisabled("Every match of the lobby is an online match as from the Host tab, with the lobby's rules.");
-        }
-        if (tab != 3) {
+        {
             int state = Port_LobbyPoll();
             sNetBusy = state == 1 || state == 3;
-            if (state == 5) { // the code or address was a lobby's: its window takes over
+            if (state == 5) { // the code or address was a lobby's: this game is its member; its screen is the game's
+                Port_LobbyCancel(); // (the lobby has the socket now)
+                const char *said = MenuTranslation_PortText(PORT_TEXT_LOBBY_JOINED);
+                Port_UiNotice(said != NULL ? said : "You are in the lobby. Its screen opens from the main menu (Tenkaichi Budokai Online).");
                 set_open(false);
                 ImGui::End();
                 return;
@@ -1150,318 +1120,6 @@ static void build_net(void) {
     }
 }
 
-// ---- The lobby's window (gs/net_lobby.c): its eight places, the rules, and the way into its matches ----
-// Up to eight games meet at the owner's. The window shows the two player places and the six spectator places; the
-// owner moves people between them (a name, then the place: the two swap), removes someone, changes the rules (left /
-// right, as in the game's own menus) and starts the match. The rules cannot change while a match is on.
-static const ImVec4 kLobbyGold(1.0f, 0.85f, 0.3f, 1.0f), kLobbyOrange(1.0f, 0.55f, 0.15f, 1.0f), kLobbyDim(0.65f, 0.65f, 0.7f, 1.0f);
-
-static const char *lobby_rule_value(const PortLobbyView &v, int which, char *buf, size_t size) {
-    static const char *const kBattle[] = {"Single battle", "Team battle", "DP battle  10 DP", "DP battle  15 DP", "DP battle  20 DP"};
-    static const char *const kTime[] = {"60 seconds", "90 seconds", "180 seconds", "240 seconds", "No limit"};
-    switch (which) {
-    case LOBBY_RULE_BATTLE: return kBattle[v.battle % 5];
-    case LOBBY_RULE_TIME: return kTime[v.time % 5];
-    case LOBBY_RULE_SPEED: SDL_snprintf(buf, size, "%d%%%s", v.speed, v.speed == Port_NetSpeedStandard() ? "  (standard)" : ""); return buf;
-    case LOBBY_RULE_ROLLBACK:
-        if (v.rollback == 0) { return "Off (wait for each other)"; }
-        SDL_snprintf(buf, size, "Up to %d frames", v.rollback);
-        return buf;
-    default:
-        if (v.delay == 0) { return "Automatic"; }
-        SDL_snprintf(buf, size, "%d frame%s", v.delay - 1, v.delay == 2 ? "" : "s");
-        return buf;
-    }
-}
-
-// One rule as a row of the game's menus: its name on the left, the value between two arrows; left / right (keys,
-// D-pad, stick, or the arrows clicked) change it, for the owner. Everyone else sees it as it is.
-static void lobby_rule_row(const PortLobbyView &v, int which, const char *label, bool can, float w) {
-    char buf[48];
-    const char *value = lobby_rule_value(v, which, buf, sizeof(buf));
-    float arrow = ImGui::GetFrameHeight();
-    ImGui::PushID(which);
-    ImVec2 at = ImGui::GetCursorScreenPos();
-    ImGui::Selectable("##rule", false, can ? ImGuiSelectableFlags_AllowOverlap : ImGuiSelectableFlags_Disabled, ImVec2(w, arrow));
-    bool focus = can && (ImGui::IsItemFocused() || ImGui::IsItemHovered());
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-    float ty = at.y + (arrow - ImGui::GetFontSize()) * 0.5f;
-    if (focus) {
-        dl->AddRectFilled(at, ImVec2(at.x + w, at.y + arrow), ImGui::GetColorU32(ImVec4(1.0f, 0.55f, 0.15f, 0.30f)), U(3.0f));
-    }
-    dl->AddText(ImVec2(at.x + U(6.0f), ty), ImGui::GetColorU32(focus ? kLobbyGold : ImVec4(1, 1, 1, 1)), label);
-    float vx0 = at.x + w * 0.36f, vx1 = at.x + w;
-    ImVec2 ts = ImGui::CalcTextSize(value);
-    dl->AddText(ImVec2((vx0 + vx1 - ts.x) * 0.5f, ty), ImGui::GetColorU32(can ? kLobbyGold : ImVec4(1, 1, 1, 0.9f)), value);
-    int step = 0;
-    if (can) {
-        ImGui::SetCursorScreenPos(ImVec2(vx0, at.y));
-        if (ImGui::ArrowButton("##l", ImGuiDir_Left)) { step = -1; }
-        ImGui::SetCursorScreenPos(ImVec2(vx1 - arrow, at.y));
-        if (ImGui::ArrowButton("##r", ImGuiDir_Right)) { step = 1; }
-        if (ImGui::IsItemFocused() || focus) {
-            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft) || ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft)) { step = -1; }
-            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow) || ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight) || ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight)) { step = 1; }
-        }
-    } else {
-        dl->AddText(ImVec2(vx0 + U(4.0f), ty), ImGui::GetColorU32(kLobbyDim), "<");
-        dl->AddText(ImVec2(vx1 - U(12.0f), ty), ImGui::GetColorU32(kLobbyDim), ">");
-    }
-    if (step != 0) {
-        Port_LobbyDo(LOBBY_RULE, which, step);
-    }
-    ImGui::SetCursorScreenPos(ImVec2(at.x, at.y + arrow + ImGui::GetStyle().ItemSpacing.y));
-    ImGui::Dummy(ImVec2(w, 0.0f));
-    ImGui::PopID();
-}
-
-static void lobby_heading(const char *text) {
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-    ImVec2 at = ImGui::GetCursorScreenPos();
-    float w = ImGui::GetContentRegionAvail().x, h = ImGui::GetTextLineHeight() + U(4.0f);
-    dl->AddRectFilled(at, ImVec2(at.x + w, at.y + h), ImGui::GetColorU32(ImVec4(1.0f, 0.45f, 0.05f, 0.85f)), U(2.0f));
-    dl->AddText(ImVec2(at.x + U(6.0f), at.y + U(2.0f)), ImGui::GetColorU32(ImVec4(1, 1, 1, 1)), text);
-    ImGui::Dummy(ImVec2(w, h));
-}
-
-static void build_lobby(const PortLobbyView &v) {
-    static int picked = -1;   // the owner: the place picked to move someone from
-    static char say[CHAT_TEXT + 1];
-    ImGuiIO &io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    if (ImGui::Begin("Lobby###lobby", NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-        if (v.state == 3) { // closed, or never reached
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.55f, 0.35f, 1.0f));
-            ImGui::PushTextWrapPos(U(420.0f));
-            ImGui::TextWrapped("%s", v.error[0] != '\0' ? v.error : "The lobby is closed.");
-            ImGui::PopTextWrapPos();
-            ImGui::PopStyleColor();
-            if (ImGui::Button("OK", ImVec2(U(120.0f), 0.0f)) || pad_pressed(ImGuiKey_GamepadFaceRight)) {
-                Port_LobbyDo(LOBBY_OK, 0, 0);
-                set_open(false);
-            }
-            ImGui::End();
-            return;
-        }
-        if (v.state == 1) {
-            ImGui::TextUnformatted(v.owner ? "Getting a room code for the lobby..." : "Joining the lobby...");
-            if (ImGui::Button("Cancel", ImVec2(U(120.0f), 0.0f))) {
-                Port_LobbyDo(LOBBY_LEAVE, 0, 0);
-            }
-            ImGui::End();
-            return;
-        }
-        // the code (or the port) to tell the others
-        if (v.code[0] != '\0') {
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Lobby code:");
-            ImGui::SameLine();
-            ImGui::SetWindowFontScale(1.6f);
-            ImGui::TextColored(kLobbyGold, "%s", v.code);
-            ImGui::SetWindowFontScale(1.0f);
-            ImGui::SameLine();
-            static Uint64 copiedAt;
-            if (ImGui::Button("Copy")) {
-                copiedAt = SDL_SetClipboardText(v.code) ? SDL_GetTicks() : 0;
-            }
-            ImGui::SameLine();
-            ImGui::TextDisabled(copiedAt != 0 && SDL_GetTicks() - copiedAt < 2000 ? "Copied" : "Others join with it: Dragon Net Battle, Join tab.");
-        } else if (v.owner) {
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Others join with your address and port");
-            ImGui::SameLine();
-            ImGui::TextColored(kLobbyGold, "%d", v.port);
-        } else {
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("Lobby");
-        }
-        if (v.phase == 1) {
-            ImGui::TextColored(kLobbyOrange, "A match is on: %s vs %s", v.name[0], v.name[1]);
-        }
-        bool own = v.owner && v.phase == 0;
-        int spectators = 0;
-        for (int i = 2; i < LOBBY_SLOTS; i++) {
-            spectators += v.taken[i];
-        }
-        float colW = U(330.0f);
-        if (ImGui::BeginTable("lobbycols", 2, ImGuiTableFlags_SizingFixedFit)) {
-            ImGui::TableSetupColumn("places", ImGuiTableColumnFlags_WidthFixed, colW);
-            ImGui::TableSetupColumn("rules", ImGuiTableColumnFlags_WidthFixed, colW);
-            ImGui::TableNextRow();
-            ImGui::TableSetColumnIndex(0);
-            // the places
-            for (int i = 0; i < LOBBY_SLOTS; i++) {
-                char label[96];
-                if (i == 0) {
-                    lobby_heading("PLAYERS");
-                } else if (i == 2) {
-                    ImGui::Spacing();
-                    SDL_snprintf(label, sizeof(label), "SPECTATORS   %d / 6", spectators);
-                    lobby_heading(label);
-                }
-                ImGui::PushID(i);
-                if (i < 2) {
-                    SDL_snprintf(label, sizeof(label), "%dP", i + 1);
-                } else {
-                    SDL_snprintf(label, sizeof(label), "%d", i - 1);
-                }
-                ImGui::AlignTextToFramePadding();
-                ImGui::TextColored(kLobbyDim, "%s", label);
-                ImGui::SameLine(U(42.0f));
-                if (v.taken[i]) {
-                    SDL_snprintf(label, sizeof(label), "%s%s%s###place", v.name[i], v.isOwner[i] ? "  (owner)" : "", i == v.me ? "  (you)" : "");
-                } else {
-                    SDL_snprintf(label, sizeof(label), "- empty -###place");
-                }
-                ImGui::PushStyleColor(ImGuiCol_Text, v.taken[i] ? (i == v.me ? kLobbyGold : ImVec4(1, 1, 1, 1)) : kLobbyDim);
-                bool hit = ImGui::Selectable(label, picked == i, ImGuiSelectableFlags_AllowOverlap, ImVec2(U(172.0f), ImGui::GetFrameHeight()));
-                ImGui::PopStyleColor();
-                if (own && ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip(picked < 0 ? "Pick someone, then the place to move them to." : "Move here (the two places swap).");
-                }
-                if (hit && own) {
-                    if (picked < 0) {
-                        picked = v.taken[i] ? i : -1;
-                    } else {
-                        if (picked != i) {
-                            Port_LobbyDo(LOBBY_MOVE, picked, i);
-                        }
-                        picked = -1;
-                    }
-                }
-                if (v.taken[i] && v.ready[i]) {
-                    ImGui::SameLine(U(222.0f));
-                    ImGui::TextColored(ImVec4(0.45f, 1.0f, 0.45f, 1.0f), "Ready");
-                }
-                if (v.owner && v.taken[i] && !v.isOwner[i]) {
-                    ImGui::SameLine(U(282.0f));
-                    if (ImGui::SmallButton("Out")) {
-                        Port_LobbyDo(LOBBY_KICK, i, 0);
-                    }
-                    ImGui::SetItemTooltip("Remove %s from the lobby.", v.name[i]);
-                }
-                ImGui::PopID();
-            }
-            if (!own) {
-                picked = -1;
-            }
-            if (own) {
-                ImGui::TextDisabled(picked < 0 ? "Pick a name, then a place: the two swap." : "Now the place to move to.");
-            }
-            ImGui::TableSetColumnIndex(1);
-            lobby_heading(v.owner ? (v.phase == 0 ? "RULES   (left / right)" : "RULES   (between matches)") : "RULES   (the owner's)");
-            bool can = v.owner && v.phase == 0;
-            float rw = ImGui::GetContentRegionAvail().x;
-            lobby_rule_row(v, LOBBY_RULE_BATTLE, "Battle", can, rw);
-            lobby_rule_row(v, LOBBY_RULE_TIME, "Time limit", can, rw);
-            lobby_rule_row(v, LOBBY_RULE_SPEED, "Game speed", can, rw);
-            lobby_rule_row(v, LOBBY_RULE_ROLLBACK, "Rollback", can, rw);
-            lobby_rule_row(v, LOBBY_RULE_DELAY, "Input delay", can, rw);
-            ImGui::Spacing();
-            if (v.owner) {
-                bool startable = v.phase == 0 && v.taken[0] && v.taken[1];
-                ImGui::BeginDisabled(!startable);
-                if (ImGui::Button("Start the match", ImVec2(rw, U(34.0f)))) {
-                    Port_LobbyDo(LOBBY_START, 0, 0);
-                }
-                ImGui::EndDisabled();
-                if (!startable && v.phase == 0) {
-                    ImGui::TextDisabled("Two players are needed in 1P and 2P.");
-                }
-                if (v.phase == 1 && ImGui::Button("Back to the lobby (ends the match)", ImVec2(rw, 0.0f))) {
-                    Port_LobbyDo(LOBBY_BACK, 0, 0);
-                }
-            } else {
-                ImGui::TextDisabled("The owner starts the match.");
-            }
-            if (v.me >= 0) {
-                bool ready = v.ready[v.me] != 0;
-                if (ImGui::Checkbox("Ready", &ready)) {
-                    Port_LobbyDo(LOBBY_READY, ready ? 1 : 0, 0);
-                }
-                ImGui::SameLine();
-            }
-            if (ImGui::Button(v.owner ? "Close the lobby" : "Leave the lobby", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
-                Port_LobbyDo(LOBBY_LEAVE, 0, 0);
-            }
-            if (v.note[0] != '\0') {
-                ImGui::Spacing();
-                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + rw);
-                ImGui::TextColored(kLobbyGold, "%s", v.note);
-                ImGui::PopTextWrapPos();
-            }
-            ImGui::EndTable();
-        }
-        // the lobby's chat
-        ImGui::BeginChild("chat", ImVec2(colW * 2.0f + ImGui::GetStyle().CellPadding.x * 4.0f, U(84.0f)), ImGuiChildFlags_Borders);
-        if (v.chatCount == 0) {
-            ImGui::TextDisabled("The lobby's chat: everyone here reads it.");
-        }
-        for (int i = 0; i < v.chatCount; i++) {
-            ImGui::TextColored(kLobbyGold, "%s:", v.chatName[i]);
-            ImGui::SameLine();
-            ImGui::TextWrapped("%s", v.chatText[i]);
-        }
-        static int seen;
-        if (v.chatCount != seen) {
-            seen = v.chatCount;
-            ImGui::SetScrollHereY(1.0f);
-        }
-        ImGui::EndChild();
-        ImGui::SetNextItemWidth(colW * 2.0f - U(56.0f));
-        bool sent = ImGui::InputText("##say", say, sizeof(say), ImGuiInputTextFlags_EnterReturnsTrue);
-        ImGui::SameLine();
-        sent |= ImGui::Button("Say");
-        if (sent && say[0] != '\0') {
-            Port_LobbySay(say);
-            say[0] = '\0';
-            ImGui::SetKeyboardFocusHere(-1);
-        }
-    }
-    ImGui::End();
-}
-
-// A lobby spectator's own pause menu (START, or the key bound to it): only on this screen, the match goes on.
-static void build_spec_pause(const PortLobbyView &v) {
-    ImGuiIO &io = ImGui::GetIO();
-    bool open = true;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    if (pad_pressed(ImGuiKey_GamepadFaceRight) || pad_pressed(ImGuiKey_GamepadStart)) {
-        open = false;
-    }
-    ImGui::SetNextWindowFocus();
-    if (ImGui::Begin("Paused (your screen only)###specpause", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::TextColored(kLobbyGold, "Spectating %s vs %s", Port_NetName(0), Port_NetName(1));
-        ImGui::TextDisabled("The match goes on: this menu pauses nothing.");
-        ImGui::Spacing();
-        if (ImGui::Button("Continue", ImVec2(U(400.0f), 0.0f))) {
-            open = false;
-        }
-        {
-            static const char *const kViews[] = {"Player 1's view", "Player 2's view", "Both (split screen)"};
-            int view = Port_NetSpecView();
-            ImGui::SetNextItemWidth(U(260.0f));
-            if (ImGui::Combo("##view", &view, kViews, 3)) {
-                Port_NetSpecViewSet(view);
-            }
-            ImGui::SameLine();
-            ImGui::TextDisabled("Change view");
-        }
-        if (v.owner && ImGui::Button("Back to the lobby (ends the match for everyone)", ImVec2(U(400.0f), 0.0f))) {
-            Port_LobbyDo(LOBBY_BACK, 0, 0);
-            open = false;
-        }
-        if (ImGui::Button(v.owner ? "Close the lobby (back to the main menu)" : "Leave the lobby (back to the main menu)", ImVec2(U(400.0f), 0.0f))) {
-            Port_LobbyDo(LOBBY_LEAVE, 0, 0);
-            open = false;
-        }
-    }
-    ImGui::End();
-    if (!open) {
-        set_open(false);
-    }
-}
-
 void Ui_Toggle(void) {
     if (sReady && !sQuit) {
         set_open(!sOpen);
@@ -1532,20 +1190,6 @@ static int chat_event(const SDL_Event *ev) {
            ev->type == SDL_EVENT_MOUSE_BUTTON_DOWN || ev->type == SDL_EVENT_MOUSE_BUTTON_UP || ev->type == SDL_EVENT_MOUSE_WHEEL;
 }
 
-static bool Lobby_view_active(void) {
-    PortLobbyView v;
-    return Port_LobbyView(&v) != 0;
-}
-
-static int start_key(void) { // the key bound to START for player 1
-    for (int a = 0; a < PORT_ACTIONS; a++) {
-        if (SDL_strcmp(PortInput_ActionLabel(a), "START") == 0) {
-            return PortInput_Keys(0)[a];
-        }
-    }
-    return SDL_SCANCODE_RETURN;
-}
-
 int Ui_Event(const SDL_Event *ev) {
     if (!sReady) {
         return 0;
@@ -1583,11 +1227,8 @@ int Ui_Event(const SDL_Event *ev) {
     if (sChat && !sOpen && !sQuit) {
         return chat_event(ev);
     }
-    if (!sOpen && !sQuit && Port_NetSpectating() && Lobby_view_active() &&
-        ((ev->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && ev->gbutton.button == SDL_GAMEPAD_BUTTON_START) ||
-         (ev->type == SDL_EVENT_KEY_DOWN && !ev->key.repeat && (ev->key.scancode == SDL_SCANCODE_ESCAPE || (int)ev->key.scancode == start_key())))) {
-        set_open(true); // a lobby spectator's own pause menu: only on this screen
-        sSpecPause = true;
+    if (!sOpen && !sQuit && Port_NetSpectating() && ev->type == SDL_EVENT_KEY_DOWN && !ev->key.repeat && ev->key.scancode == SDL_SCANCODE_ESCAPE) {
+        gPortSpecMenuAsk = 1; // a spectator's own pause menu (the game's, over the match: only on this screen)
         return 1;
     }
     if (!sOpen && !sQuit && Port_NetSpectating() &&
@@ -2631,28 +2272,6 @@ static void spec_view_next(void) {
     Port_NetSpecViewSet((Port_NetSpecView() + 1) % 3);
 }
 
-static void spectator_line(void) {
-    ImGuiIO &io = ImGui::GetIO();
-    int st[3] = {-1, 0, 0};
-    bool known = Port_NetSpecStatus(st) != 0;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, U(6.0f)), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.55f);
-    if (ImGui::Begin("##spectator", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
-                                              ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings)) {
-        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "Spectating %s vs %s", Port_NetName(0), Port_NetName(1));
-        ImGui::SameLine();
-        ImGui::TextDisabled("  view: %s", spec_view_name(Port_NetSpecView()));
-        ImGui::TextDisabled(Lobby_view_active() ? "V or R1: change view    START: menu" : "V or R1: change view    F1: stop watching");
-        if (known && st[0] >= 0) {
-            ImGui::Text("Catching up with the match... %d%%", st[0]);
-        }
-        if (known && st[2] != 0) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "This screen no longer matches the players' fight (since frame %d)", st[2]);
-        }
-    }
-    ImGui::End();
-}
-
 // For the players: who watches their match (small, in the top right corner).
 static void watchers_line(void) {
     ImGuiIO &io = ImGui::GetIO();
@@ -3023,29 +2642,17 @@ static bool frame_build(void) {
         gPortNetMenuRequest = 0;
         net_open();
     }
-    PortLobbyView lobbyView;
-    bool lobbyOn = sReady && Port_LobbyView(&lobbyView);
-    { // BT3_SPEC_PAUSE_AT=<seconds>: testing, a lobby spectator's own pause menu opens that long into its match
+    { // BT3_SPEC_PAUSE_AT=<seconds>: testing, a spectator's own pause menu (the game's) opens that long into its match
         static Uint64 since;
         static bool done;
-        if (!done && getenv("BT3_SPEC_PAUSE_AT") != NULL && lobbyOn && lobbyView.inMatch && Port_NetSpectating() && !sOpen) {
+        if (!done && getenv("BT3_SPEC_PAUSE_AT") != NULL && sReady && Port_NetSpectating() && !sOpen) {
             if (since == 0) {
                 since = SDL_GetTicks();
             } else if (SDL_GetTicks() - since > (Uint64)atoi(getenv("BT3_SPEC_PAUSE_AT")) * 1000) {
                 done = true;
-                set_open(true);
-                sSpecPause = true;
+                gPortSpecMenuAsk = 1;
             }
         }
-    }
-    if (lobbyOn && !lobbyView.inMatch && !sOpen && !sQuit) { // in a lobby, between its matches: its window
-        set_open(true);
-        sLobbyWin = true;
-        gPortInputCapture = 1; // (the game behind takes no input, as under the online window)
-    } else if (sOpen && sLobbyWin && (!lobbyOn || lobbyView.inMatch)) {
-        set_open(false);
-    } else if (sOpen && sSpecPause && !(lobbyOn && lobbyView.inMatch && Port_NetSpectating())) {
-        set_open(false);
     }
     if (sReady && !sUpdTold && update_latest() > PORT_RELEASE && SDL_GetTicks() >= sNoticeUntil) {
         int latest = update_latest(); // (told once, and not over another notice)
@@ -3078,11 +2685,10 @@ static bool frame_build(void) {
     bool banner = sReady && sBanner[0] != '\0';
     Uint64 now = SDL_GetTicks();
     bool saving = save_icon_on(now) && sReady && gUiPresentW > 0 && gUiPresentH > 0;
-    bool spectating = sReady && Port_NetSpectating() && !sOpen; // the spectator's line (gs/net.c)
     bool watched = sReady && Port_NetWatchers() > 0 && !sOpen;  // a player's: who watches the match
     meter_count();
     sBuilt = false;
-    if (!sReady || (!sOpen && !sQuit && !notice && !overlay && !meter && !names && !bars && !chat && !banner && !saving && !spectating && !watched)) {
+    if (!sReady || (!sOpen && !sQuit && !notice && !overlay && !meter && !names && !bars && !chat && !banner && !saving && !watched)) {
         return false;
     }
     if (sPadHold && sCapKind != 2) { // a binding was taken: the controller works the window again once nothing is held
@@ -3125,11 +2731,7 @@ static bool frame_build(void) {
         bars_draw();
     }
     if (sOpen) {
-        if (sLobbyWin) {
-            build_lobby(lobbyView);
-        } else if (sSpecPause) {
-            build_spec_pause(lobbyView);
-        } else if (sNet) {
+        if (sNet) {
             build_net();
         } else {
             build();
@@ -3198,9 +2800,6 @@ static bool frame_build(void) {
     }
     if (saving) {
         save_icon_draw(now);
-    }
-    if (spectating) {
-        spectator_line();
     }
     if (watched) {
         watchers_line();
