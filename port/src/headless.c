@@ -235,6 +235,11 @@ extern void BtlCharApi_GetPos(int objId, float *out);
 
 
 
+/* For the lobby's tests (gs/net_lobby.c, BT3_LOBBY_DO "waitseq"): the battle sequence's state, -1 outside a battle. */
+int Port_BattleSeqState(void) {
+    return gBtlSeq != NULL ? gBtlSeq->state : -1;
+}
+
 /* Main-menu item 4, Dragon Net Battle, was confirmed (src/menu/menu_a.c): the settings code opens the online
    screen when it sees the request (port/src/gs/ui.cpp). Without a window nothing does. */
 volatile int gPortNetMenuRequest;

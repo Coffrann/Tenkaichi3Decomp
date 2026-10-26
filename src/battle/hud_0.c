@@ -311,6 +311,70 @@ static void PauseMenu_PortRemove(BtlMenu *menu, s32 id) {
         }
     }
 }
+
+/* A lobby's match (port/src/gs/net_lobby.c). Only the lobby's owner goes back to the lobby window, and the game's
+   own way out does it: "Return to Vs Menu" (id 0xE: the versus menu is where the rules are chosen, the lobby
+   window in a lobby) ends the battle for everyone, and the session ends there (menu_a_b.c). The pause menu and the
+   result menu get two forms each: the owner's, with that entry ("Return to Main Menu" of the pause menu becomes
+   it, with its yes / no box; the result menu keeps the one it has), and the other player's, without it and
+   without "Return to Main Menu". Which form a menu has is chosen each time it runs, by the pad it runs for, the
+   same on every copy (the owner's side travels with the rules). */
+static BtlMenuItem sLobbyPause[2][8], sLobbyResult[2][8];
+static s32 sLobbyPauseCount[2], sLobbyResultCount[2], sLobbyBuilt;
+
+static void PauseMenu_PortLobby(void) {
+    BtlMenuItem *pause = gPauseMenuVersus.items, *result = gPauseMenuResultVersus.items, back;
+    s32 i, k, haveBack = 0;
+
+    if (sLobbyBuilt || gPauseMenuVersus.count > 8 || gPauseMenuResultVersus.count > 8) {
+        return; /* (built at the session's first battle, from the game's own menus: a session starts from the game's
+                   first moment, where this is 0 again) */
+    }
+    for (i = 0; i < gPauseMenuResultVersus.count; i++) {
+        if (result[i].id == 0xE) {
+            back = result[i];
+            haveBack = 1;
+        }
+    }
+    for (k = 0; k < 2; k++) {
+        sLobbyPauseCount[k] = sLobbyResultCount[k] = 0;
+        for (i = 0; i < gPauseMenuVersus.count; i++) {
+            if (pause[i].id != 0xF) {
+                sLobbyPause[k][sLobbyPauseCount[k]++] = pause[i];
+            } else if (k == 1 && haveBack) {
+                sLobbyPause[k][sLobbyPauseCount[k]] = pause[i]; /* (its yes / no box stays) */
+                sLobbyPause[k][sLobbyPauseCount[k]].id = 0xE;
+                sLobbyPause[k][sLobbyPauseCount[k]].text[0] = back.text[0];
+                sLobbyPause[k][sLobbyPauseCount[k]].text[1] = back.text[1];
+                sLobbyPauseCount[k]++;
+            }
+        }
+        for (i = 0; i < gPauseMenuResultVersus.count; i++) {
+            if (result[i].id == 0x13 || result[i].id == 0xD || (k == 1 && result[i].id == 0xE)) {
+                sLobbyResult[k][sLobbyResultCount[k]++] = result[i];
+            }
+        }
+    }
+    sLobbyBuilt = 1;
+}
+
+/* The form of the menu for the pad it runs for (a lobby's match only). */
+static void PauseMenu_PortLobbyPick(BtlMenu *menu, s32 pad) {
+    extern int Port_NetLobbyOwnerSide(void);
+    s32 owner = Port_NetLobbyOwnerSide(), mine;
+
+    if (owner < 0 || !sLobbyBuilt) {
+        return;
+    }
+    mine = pad == owner;
+    if (menu == &gPauseMenuVersus) {
+        menu->items = sLobbyPause[mine];
+        menu->count = sLobbyPauseCount[mine];
+    } else if (menu == &gPauseMenuResultVersus) {
+        menu->items = sLobbyResult[mine];
+        menu->count = sLobbyResultCount[mine];
+    }
+}
 #endif
 
 /* Battle start: allocates the menu work. */
@@ -322,7 +386,10 @@ void PauseMenu_Init(void) {
            "View Replay Data" (id 0x18) and "Save Replay Data" (id 0x17). Done on both copies at every battle start (the first time takes them
            out, later ones find nothing); the program is started afresh after a session, so offline has them. */
         extern int Port_NetActive(void);
-        if (Port_NetActive()) {
+        extern int Port_NetLobbyOwnerSide(void);
+        if (Port_NetActive() && Port_NetLobbyOwnerSide() >= 0) {
+            PauseMenu_PortLobby(); /* a lobby's match: the menus' two forms (above) */
+        } else if (Port_NetActive()) {
             PauseMenu_PortRemove(&gPauseMenuResultVersus, 0xE);
             PauseMenu_PortRemove(&gPauseMenuResultVersus, 0x18);
             PauseMenu_PortRemove(&gPauseMenuResultVersus, 0x17);
@@ -363,6 +430,9 @@ s32 PauseMenu_Update(s32 pad, s32 which) {
 
     gPauseMenuWhich = which;
     menu = PauseMenu_GetMenu(which);
+#ifdef PORT
+    PauseMenu_PortLobbyPick(menu, pad);
+#endif
     BtlMenu_SetScript(BtlObj_Get(BattleSide_GetObjId(pad))->skillText);
     set = BattleResult_Set;
     if (BtlMenu_Update(which, NULL, menu, pad)) {

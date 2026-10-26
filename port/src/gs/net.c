@@ -66,6 +66,7 @@ static const uint32_t kVersion = NET_VERSION;
 #include "net_match.h"
 #include "net_relay.h"
 #include "net_chat.h"
+#include "net_lobby.h"
 static int sLobbyOther;
 
 /* What the meter shows (ui.cpp): the round trip time, and per second how often the game went back, how far, and
@@ -85,7 +86,9 @@ static uint32_t now_ms(void) {
    playing work against each other; the host's is only the other side's starting value.) */
 static int sOptRoll = -1, sOptDelay = -1;
 static int sCfgGot, sCfgDelay, sCfgRoll;
-static int sGone; /* the other player said goodbye (2: because its check found the two games apart) */
+static int sGone; /* the other player said goodbye (2: because its check found the two games apart); a lobby's match
+                     ends (net_lobby.c, NetIo_End): 3 back to the lobby, 4 the lobby was closed, 5 this player left it */
+static char sGoneNote[160];
 extern void Port_UiNotice(const char *text); /* ui.cpp: a line over the picture for a few seconds */
 extern void Port_UiBanner(const char *text, int ms); /* ui.cpp: a line in the middle while the game waits */
 extern void Gs_HoldFrame(void);                      /* gs_draw.c: the last picture again, with that line on it */
@@ -126,6 +129,10 @@ static int sCodeLocalPort, sCodePunchSet;
 static int sHandSock = -1, sFromLobby;
 int Port_LobbyRelayed(void);
 static struct sockaddr_in sCodePunch;
+/* A lobby's match (net_lobby.c, NetIo_Go): a second address to knock at (the host) or to greet (the one who joins):
+   the other player's own public address beside the one the lobby's owner sees it under. Port 0: none. */
+static struct sockaddr_in sCodePunch2, sJoinAlt;
+static int sGoPending; /* a lobby's session has been asked for and has not begun yet */
 
 /* The match's rules, chosen by the host in the lobby window (the game's own versus menu is not shown in a session):
    the battle type as the versus menu leaves it (0 single, 1 team, 2 DP battle), the row of the DP limit list
@@ -510,7 +517,7 @@ static void sync_check(uint32_t sure, unsigned tick) {
     if (at != 0 && sSyncMine[at / SYNC_EVERY % SYNC_SLOTS].tick == at) {
         sSyncOutTick = at;
         sSyncOutValue = sSyncMine[at / SYNC_EVERY % SYNC_SLOTS].value;
-        if (sMode == 1) {
+        if (sMode == 1 || (sMode == 2 && Lobby_ServesSpectators())) {
             note_put(&sNotesSure, at, sSyncOutValue); /* (what spectators compare with, for the whole match) */
         }
     }
@@ -600,6 +607,7 @@ static void wait_end(WaitMark w, unsigned tick) {
    character select. A copy that is waiting sends {MAGIC, T_ARRIVED, blank, 0}; one that has arrived answers each such
    greeting with {..., 1}, so a lost packet costs a resend and the two never go on answering each other. */
 enum { T_ARRIVED = 11 };
+enum { T_LOBBY_INVITE = 40, LOBBY_CAP = 0x4C4F4231 }; /* (net_lobby.c) */
 static uint32_t sMyArrival, sTheirArrival; /* (0: not yet) */
 static int sMet;
 static char sBannerSaid[NAME_LEN + 8]; /* what session_banner last put up (empty: nothing yet in this session) */
@@ -676,7 +684,7 @@ static void chat_send(void) {
 enum { T_SPEC_HELLO = 20, T_SPEC_WAIT = 21, T_SPEC_NO = 22, T_SPEC_SETUP = 23, T_SPEC_DATA = 24, T_SPEC_ACK = 25, T_SPEC_BYE = 26, T_SPEC_LIST = 27,
        T_SPEC_READY = 28 };
 enum { SPEC_VERSION = 1, SPEC_MAX = 6, SPEC_HEAD = 32, SPEC_PAYLOAD = 1150, SPEC_BURST = 2, SPEC_BUFFER = 60, SPEC_MAX_BLANKS = 1000000 };
-enum { SPEC_NO_VERSION = 1, SPEC_NO_DATA = 2, SPEC_NO_FULL = 3, SPEC_NO_OFF = 4, SPEC_NO_PLAIN = 5, SPEC_NO_PLAYER = 6 };
+enum { SPEC_NO_VERSION = 1, SPEC_NO_DATA = 2, SPEC_NO_FULL = 3, SPEC_NO_OFF = 4, SPEC_NO_PLAIN = 5, SPEC_NO_PLAYER = 6, SPEC_NO_LOBBY = 7 };
 #define SPEC_QUIET_NS 8000000000ull  /* silent this long: the spectator is gone / the host is gone */
 #define SPEC_ASK_NS 10000000000ull   /* no answer at all this long: nobody hosts there, or a release without spectators */
 #define SPEC_LAG_BLANKS (60u * 60u)   /* a spectator that has been there a minute and is still a minute behind is let go */
@@ -791,6 +799,9 @@ int Port_NetSpecView(void) {
 
 static int spec_allowed(void) {
     extern int Port_Setting(const char *name, int def);
+    if (Lobby_InMatch()) {
+        return 1; /* (a lobby's match: its spectators are the lobby's, whatever this player's setting) */
+    }
     if (getenv("BT3_NET_SPECTATORS") != NULL) {
         return atoi(getenv("BT3_NET_SPECTATORS")) != 0;
     }
@@ -890,12 +901,15 @@ static void spec_setup_send(const struct sockaddr_in *to) {
 
 /* The host: a spectator's greeting. */
 static void spec_hello(const uint8_t *pkt, int n, const struct sockaddr_in *from) {
-    uint32_t why = sMode == 1 ? spec_check(pkt, n) : SPEC_NO_PLAYER;
+    uint32_t why = sMode == 1 || Lobby_ServesSpectators() ? spec_check(pkt, n) : SPEC_NO_PLAYER;
     uint64_t now = SDL_GetTicksNS();
     int i, free = -1;
 
     if (why == 0 && !Port_NetSession()) {
         why = SPEC_NO_PLAIN;
+    }
+    if (why == 0 && Lobby_Active() && !Lobby_IsMember(from)) {
+        why = SPEC_NO_LOBBY; /* (a lobby's match is watched by its members, through its owner) */
     }
     if (why != 0) {
         spec_no(from, why);
@@ -1110,7 +1124,7 @@ static void spec_pump(void) {
     uint64_t now = SDL_GetTicksNS();
     int i, k, budget = SPEC_BURST;
 
-    if (sMode != 1 || now - last < 16000000ull) {
+    if (!(sMode == 1 || Lobby_ServesSpectators()) || now - last < 16000000ull) {
         return;
     }
     if (now - last > 1000000000ull) { /* (this copy was away a while, loading: the spectators' silence says nothing) */
@@ -1119,7 +1133,9 @@ static void spec_pump(void) {
         }
     }
     last = now;
-    spec_log_update();
+    if (sMode != 3) { /* (a lobby's owner that watches passes on what its host sent it) */
+        spec_log_update();
+    }
     if (sFromLobby) {
         watch_service(); /* (a room code: spectators the service has told of) */
     }
@@ -1158,7 +1174,7 @@ static void spec_pump(void) {
             spec_data(w, now);
         }
     }
-    if (sConnected && (sListDirty || (sWatchCount > 0 && now - sListSentNs > 2000000000ull))) {
+    if (sConnected && sMode != 3 && (sListDirty || (sWatchCount > 0 && now - sListSentNs > 2000000000ull))) {
         spec_list_send();
     }
 }
@@ -1271,7 +1287,8 @@ static void spec_take(const uint8_t *pkt, int n) {
 
 /* A packet of the spectators' kind. Returns 1 if it was for this copy. */
 static int spec_packet(const uint8_t *pkt, int n, const struct sockaddr_in *from, uint32_t type) {
-    if (sMode == 3) {
+    int serving = sMode == 1 || Lobby_ServesSpectators(); /* (a lobby's owner passes the match on, whatever its part) */
+    if (sMode == 3 && (same_addr(from, &sPeer) || !serving)) {
         if (!same_addr(from, &sPeer)) {
             return 0; /* (a spectator listens to the host only) */
         }
@@ -1309,11 +1326,15 @@ static int spec_packet(const uint8_t *pkt, int n, const struct sockaddr_in *from
         }
         return 1;
     }
+    if (type == T_SPEC_HELLO && Lobby_Active() && !Lobby_IsMember(from)) {
+        Lobby_Stranger(pkt, n, from, type); /* (a lobby's: told it is one, to join it) */
+        return 1;
+    }
     if (type == T_SPEC_HELLO) {
         spec_hello(pkt, n, from);
         return 1;
     }
-    if (type == T_SPEC_LIST && sMode == 2 && sConnected && same_addr(from, &sPeer) && n >= 12) {
+    if (type == T_SPEC_LIST && (sMode == 2 || (sMode == 1 && Lobby_Active())) && sConnected && same_addr(from, &sPeer) && n >= 12) {
         uint32_t count;
         int i;
         int was = sWatchCount;
@@ -1335,7 +1356,7 @@ static int spec_packet(const uint8_t *pkt, int n, const struct sockaddr_in *from
         }
         return 1;
     }
-    if (sMode == 1 && (type == T_SPEC_ACK || type == T_SPEC_BYE)) {
+    if (serving && (type == T_SPEC_ACK || type == T_SPEC_BYE)) {
         int i;
         for (i = 0; i < SPEC_MAX; i++) {
             Watcher *w = &sWatch[i];
@@ -1393,6 +1414,8 @@ static const char *spec_no_text(int why) {
         return "This match cannot be watched (it was not started from Dragon Net Battle).";
     case SPEC_NO_PLAYER:
         return "That is the address of the player who joined, not of the host: spectators connect to the host.";
+    case SPEC_NO_LOBBY:
+        return "This match is a lobby's: join the lobby (its code, or its owner's address) to watch it.";
     default:
         return "The host's game is a different version: watching needs the same release as the host's.";
     }
@@ -1421,8 +1444,16 @@ static int receive(void) {
         if (magic != MAGIC) {
             continue;
         }
+        if (type >= T_LOBBY_FIRST && type <= T_LOBBY_LAST) { /* (a lobby's: from its members or its owner, net_lobby.c) */
+            Lobby_Packet(pkt, n, &from, type);
+            continue;
+        }
         if (type >= T_SPEC_HELLO && type <= T_SPEC_READY) { /* (spectators: from any address, see spec_packet) */
             got |= spec_packet(pkt, n, &from, type) && sMode == 3;
+            continue;
+        }
+        if (type == T_HELLO && Lobby_ServesSpectators() && !same_addr(&from, &sPeer) && !Lobby_IsMember(&from)) {
+            Lobby_Stranger(pkt, n, &from, type); /* (a lobby's owner in its match: someone knocking as for a match of two) */
             continue;
         }
         if (sMode == 3) {
@@ -1478,7 +1509,9 @@ static int receive(void) {
             if (n >= 12) {
                 memcpy(&why, pkt + 8, 4);
             }
-            sGone = why == BYE_APART ? 2 : 1;
+            if (sGone < 3) { /* (a lobby's own end, said first, stays what the screen says) */
+                sGone = why == BYE_APART ? 2 : 1;
+            }
         } else if (type == T_HELLO && sMode == 1 && !(n >= 12 && memcmp(pkt + 8, &kVersion, 4) == 0)) {
             static int said;
             if (!said++) {
@@ -1528,6 +1561,7 @@ static int receive(void) {
                 sVersionBad = 1;
             } else if (!sConnected) {
                 uint32_t v[2];
+                sPeer = from; /* (a lobby's match: the one of the host's two addresses that answered) */
                 memcpy(v, pkt + 8, 8);
                 sCfgDelay = (int)v[0];
                 sCfgRoll = (int)v[1];
@@ -1616,9 +1650,10 @@ static int receive(void) {
             }
         }
     }
-    if (sMode == 1) {
+    if (sMode == 1 || Lobby_ServesSpectators()) {
         spec_pump();
     }
+    Lobby_Tick();
     return got;
 }
 
@@ -1736,6 +1771,7 @@ static void net_start(int role, const char *host, const char *join) {
     if (sDelay > 30) { sDelay = 30; }
     sCfgGot = 0;
     sGone = 0;
+    sGoneNote[0] = '\0';
     sVersionBad = 0;
     sDataBad = 0;
     sEchoTs = 0;
@@ -1750,6 +1786,8 @@ static void net_start(int role, const char *host, const char *join) {
     sLoss = getenv("BT3_NET_LOSS") != NULL ? atoi(getenv("BT3_NET_LOSS")) : 0;
     sLagMs = getenv("BT3_NET_LAG") != NULL ? atoi(getenv("BT3_NET_LAG")) : 0;
     sLatencyMs = getenv("BT3_NET_LATENCY") != NULL ? atoi(getenv("BT3_NET_LATENCY")) : 0;
+    sQueueHead = sQueueTail = 0; /* (what the test line held back from a session before is not this one's: a lobby's
+                                    next match goes on with the same socket, perhaps to another player) */
     /* BT3_NET_ROLLBACK=<n>: the game does not wait for the other player's input; it goes on with a guess (what
        they held last) for up to n blanks and, when the real input differs, goes back and runs those blanks again
        (roll_tick). Needs the roll ring of gs/state.c (the 64-bit programs); 0 or unset: wait, as before. */
@@ -1814,8 +1852,12 @@ static void net_start(int role, const char *host, const char *join) {
         }
         /* The address is only printed when the player typed it. One that came from the matchmaking service (a
            room code, a quick match) is the other player's, and logs get pasted into bug reports. */
-        if (sMode == 3) {
+        if (sMode == 3 && Lobby_Active()) {
+            fprintf(stderr, "bt3: net: watching the lobby's match (a spectator)...\n");
+        } else if (sMode == 3) {
             fprintf(stderr, "bt3: net: watching the match of %s (a spectator)...\n", sCodeLocalPort != 0 ? "the host found by the matchmaking service" : join);
+        } else if (Lobby_Active()) {
+            fprintf(stderr, "bt3: net: joining the lobby's match (player 2)...\n");
         } else if (sCodeLocalPort != 0) {
             fprintf(stderr, "bt3: net: joining the host found by the matchmaking service (player 2)...\n");
         } else {
@@ -1828,6 +1870,9 @@ static void net_start(int role, const char *host, const char *join) {
         if (sMode == 1 && sCodePunchSet && now - last > 100000000ull) {
             uint32_t punch[2] = {MAGIC, T_PUNCH}; /* (room codes: keeps this side's router open for the one who joins) */
             net_send(punch, sizeof(punch), &sCodePunch);
+            if (sCodePunch2.sin_port != 0) {
+                net_send(punch, sizeof(punch), &sCodePunch2);
+            }
             last = now;
         }
         if (sMode == 3) {
@@ -1841,6 +1886,9 @@ static void net_start(int role, const char *host, const char *join) {
             }
             if (sSession) {
                 Gs_HoldFrame();
+            }
+            if (sGone >= 3 && sSession) {
+                gone(0);
             }
             if (sSpecNo != 0 || sSpecEnded || (!sSpecWaits && now - t0 > SPEC_ASK_NS) || now - t0 > 120000000000ull) {
                 const char *why = sSpecNo != 0 ? spec_no_text(sSpecNo) : sSpecEnded ? "The match has ended." : sSpecWaits ? "The host's match did not begin in two minutes." : kSpecNoAnswer;
@@ -1862,10 +1910,17 @@ static void net_start(int role, const char *host, const char *join) {
             hello[4 + NAME_LEN / 4] = CAP_MARK | 3;
             fprint_send(&sPeer);
             net_send(hello, sizeof(hello), &sPeer);
+            if (sJoinAlt.sin_port != 0) {
+                fprint_send(&sJoinAlt);
+                net_send(hello, sizeof(hello), &sJoinAlt);
+            }
             last = now;
         }
         receive();
         session_hold();
+        if (sGone >= 3 && sSession) {
+            gone(0); /* (a lobby's match that ended before it began: back to the lobby) */
+        }
         if (sVersionBad) {
             fprintf(stderr, "bt3: net: the other player's game is another version; both need the same release\n");
             Port_UiNotice("The other player's game is a different version.");
@@ -1877,6 +1932,10 @@ static void net_start(int role, const char *host, const char *join) {
         SDL_Delay(2);
         if (now - t0 > 120000000000ull) {
             fprintf(stderr, "bt3: net: nobody answered in two minutes\n");
+            if (sSession) {
+                Port_UiNotice("Nobody answered in two minutes.");
+                Port_NetLeave();
+            }
             exit(2);
         }
     }
@@ -1899,6 +1958,9 @@ static void net_start(int role, const char *host, const char *join) {
             }
             receive();
             session_hold();
+            if (sGone >= 3 && sSession) {
+                gone(0);
+            }
             SDL_Delay(1);
         }
         if (sAutoDelay) {
@@ -1918,6 +1980,9 @@ static void net_start(int role, const char *host, const char *join) {
             }
             receive();
             session_hold();
+            if (sGone >= 3 && sSession) {
+                gone(0);
+            }
             SDL_Delay(1);
         }
     } else {
@@ -1929,6 +1994,9 @@ static void net_start(int role, const char *host, const char *join) {
             }
             receive();
             session_hold();
+            if (sGone >= 3 && sSession) {
+                gone(0);
+            }
             SDL_Delay(1);
         }
     }
@@ -1959,9 +2027,12 @@ static void net_start(int role, const char *host, const char *join) {
         sRollMax = 0;
         sStartedMs = now_ms();
         spec_ack_send(0);
+        sSpecOpen = Lobby_ServesSpectators(); /* (a lobby's owner that watches: it passes the match on from here) */
         return;
     }
-    sSpecOpen = sMode == 1; /* (the host: from here its choices are final, and spectators are let in) */
+    /* (the host: from here its choices are final, and spectators are let in; a lobby's owner that joined passes the
+       match on to the lobby's spectators) */
+    sSpecOpen = sMode == 1 || Lobby_ServesSpectators();
     fprintf(stderr, "bt3: net: connected%s; input delay %d blanks, %s\n", sFromLobby && Port_LobbyRelayed() ? " through the relay" : sFromLobby ? " directly" : "", sDelay,
             sRollMax > 0 ? "rollback" : "waiting for each other");
     fprintf(stderr, "bt3: net: game speed %d%%\n", rules_speed());
@@ -2093,6 +2164,14 @@ static void ended(const char *why, unsigned tick) {
 
 /* The other copy said goodbye. */
 static void gone(unsigned tick) {
+    if (sGone >= 3) { /* a lobby's: back to the lobby, the lobby closed, or this player left it (net_lobby.c) */
+        ended(sGoneNote[0] != '\0' ? sGoneNote : "Back to the lobby.", tick);
+    }
+    if (sGone == 1 && Lobby_Active()) {
+        /* a lobby's match: the other copy left the match on its own, which is the owner's way back (the menus) or
+           its leaving the lobby (then the owner's word of it follows) */
+        ended("Back to the lobby.", tick);
+    }
     ended(sGone == 2 ? "The two games no longer agree (desync): the match has ended." : "The other player left the match.", tick);
 }
 
@@ -2401,8 +2480,11 @@ static void spec_tick(unsigned tick) {
         fprintf(stderr, "bt3: net: spectating: leaving at blank %u (BT3_SPEC_LEAVE)\n", tick);
         Port_NetLeave();
     }
+    if (sGone >= 3) {
+        gone(tick);
+    }
     if (sSpecEnded) {
-        ended("The players' match has ended.", tick);
+        ended(Lobby_Active() ? "Back to the lobby." : "The players' match has ended.", tick);
     }
     if (sSpecLeaveAsked) {
         sSpecLeaveAsked = 0;
@@ -2425,6 +2507,7 @@ static void spec_tick(unsigned tick) {
     }
     if (!sMet) {
         sMet = 1;
+        Port_UiBanner(NULL, 0); /* (the start-up's line, "Joining the match as a spectator...", is done) */
         fprintf(stderr, "bt3: net: spectating: at the character select (blank %u), %u ms after connecting; the host has %u blanks\n", tick,
                 (unsigned)(now_ms() - sStartedMs), (unsigned)sLogN);
     }
@@ -2435,8 +2518,11 @@ static void spec_tick(unsigned tick) {
         while (sLogN < tick + SPEC_BUFFER && !(sLogN > tick && sSpecHead <= sLogN && SDL_GetTicksNS() - t0 > 2000000000ull)) {
             uint64_t at = SDL_GetTicksNS();
             spec_service();
+            if (sGone >= 3) {
+                gone(tick);
+            }
             if (sSpecEnded) {
-                ended("The players' match has ended.", tick);
+                ended(Lobby_Active() ? "Back to the lobby." : "The players' match has ended.", tick);
             }
             if (at > sSpecHeardNs && at - sSpecHeardNs > SPEC_QUIET_NS) {
                 ended("The connection to the host was lost.", tick);
@@ -2498,6 +2584,9 @@ void Port_NetBeginTick(unsigned tick) {
     }
     send_inputs();
     receive();
+    if (sGone >= 3) {
+        gone(tick);
+    }
     t0 = last = SDL_GetTicksNS();
     if (sHave[!sMe] <= tick) {
         WaitMark w = wait_begin(t0);
@@ -2790,6 +2879,7 @@ void Port_NetSessionBegin(int role, const char *address, int port) {
         sSock = -1;
     }
     sSession = 1;
+    sGoPending = 0;
     sArrived = 0;
     sMyArrival = sTheirArrival = 0;
     sMet = 0;
@@ -2807,6 +2897,14 @@ int Port_NetSessionsEnded(void) {
 
 void Port_NetSessionEnd(void) {
     sSessionsEnded++;
+    if (Lobby_SessionEnded()) { /* a lobby's match: the lobby goes on, with its socket, its relay and its room code */
+        sMode = 0;
+        sSession = 0;
+        sConnected = 0;
+        PortChat_Reset();
+        put_env("BT3_SAVES", sSavesWasSet ? sSavesBefore : NULL);
+        return;
+    }
     Match_Cancel(); /* (a host's room kept for spectators is given up) */
     Relay_Close(sSock);
     if (sSock >= 0) {
@@ -2833,6 +2931,7 @@ void Port_NetArrived(void) {
    normally is. */
 void Port_NetLeave(void) {
     fprintf(stderr, "bt3: net: the session has ended\n");
+    Lobby_SessionLeaving(); /* (a lobby's owner: everyone back to the lobby, before the goodbyes) */
     if (sApartAt != 0) {
         fprintf(stderr, "bt3: net: the two games differed from blank %u on (%u comparisons differed)\n", (unsigned)sApartAt, sApartCount);
     }
@@ -2901,6 +3000,10 @@ const char *Port_LobbyError(void) { return sCodeError; }
 int Port_LobbyStart(int host, const char *address, int port) {
     struct sockaddr_in local;
 
+    if (Lobby_Active()) { /* (the lobby has the socket) */
+        sLobby = -1;
+        return sLobby;
+    }
     if (sHandSock >= 0) { /* (a session that was asked for and never began) */
         closesocket(sHandSock);
         sHandSock = -1;
@@ -3043,6 +3146,11 @@ int Port_LobbyRelease(int *min, int *latest) { return Match_Release(min, latest)
 int Port_LobbyQueueWaiting(int queue) { return Match_QueueWaiting(queue); }
 
 void Port_LobbyCancel(void) {
+    if (sLobby == 5 || Lobby_Active()) { /* (it became a lobby: the lobby has the socket now) */
+        sLobby = 0;
+        sCodeMode = 0;
+        return;
+    }
     if (sCodeMode) {
         Match_Cancel();
         sCodeMode = 0;
@@ -3152,6 +3260,12 @@ int Port_LobbyPoll(void) {
         if (st.state == -1) {
             snprintf(sCodeError, sizeof(sCodeError), "%s", st.error);
             sLobby = -3;
+        } else if (st.state == 3 && st.lobby) {
+            /* the code is a lobby's (the service said so): this game becomes its member (net_lobby.c), with this
+               socket; the search's thread goes on asking for the owner's relay address meanwhile */
+            Lobby_JoinFound((const char (*)[64])st.peerAddr, st.peerCount, st.code, st.self);
+            sCodeMode = 0;
+            sLobby = 5;
         } else if (st.state == 3) {
             lobby_take_addrs(&st);
             sCodeGen = st.addrGen;
@@ -3181,7 +3295,7 @@ int Port_LobbyPoll(void) {
     }
     if (sCodeMode && now - sLobbyLast > 200000000ull) {
         /* to every address the other player may be reached at: the one who joins greets, the host only knocks */
-        uint32_t hello[3] = {MAGIC, T_HELLO, NET_VERSION}, punch[2] = {MAGIC, T_PUNCH};
+        uint32_t hello[4] = {MAGIC, T_HELLO, NET_VERSION, LOBBY_CAP}, punch[2] = {MAGIC, T_PUNCH};
         int i;
         for (i = 0; i < sCodeAddrs; i++) {
             if (i == sCodeRelay ? now - sCodeSince < 3000000000ull && getenv("BT3_RELAY_ONLY") == NULL : getenv("BT3_RELAY_ONLY") != NULL) {
@@ -3223,7 +3337,7 @@ int Port_LobbyPoll(void) {
             return sLobby;
         }
     } else if (!sCodeMode && sLobbyRole == 2 && now - sLobbyLast > 200000000ull) {
-        uint32_t hello[3] = {MAGIC, T_HELLO, NET_VERSION};
+        uint32_t hello[4] = {MAGIC, T_HELLO, NET_VERSION, LOBBY_CAP}; /* (the last word: this game knows lobbies) */
         fprint_send(&sPeer);
         net_send(hello, sizeof(hello), &sPeer);
         sLobbyLast = now;
@@ -3234,6 +3348,12 @@ int Port_LobbyPoll(void) {
         memcpy(&type, pkt + 4, 4);
         if (magic != MAGIC) {
             continue;
+        }
+        if (type == T_LOBBY_INVITE && sLobbyRole != 1 && !sCodeMode && same_addr(&from, &sPeer)) {
+            /* the address is a lobby's owner: this game becomes its member (net_lobby.c), with this socket */
+            Lobby_JoinAddress(&from);
+            sLobby = 5;
+            return sLobby;
         }
         if (sLobbyRole == 3) { /* watching: only the host's answers */
             int k, ours = !sCodeMode && same_addr(&from, &sPeer);
@@ -3312,6 +3432,12 @@ void Port_LobbyAuto(void) {
     int now;
 
     lobby_background();
+    if (!Port_NetSession()) {
+        Lobby_Pump(); /* (the eight-place lobby, outside its matches: net_lobby.c) */
+    }
+    if (sSpecRejoin && !Port_NetSession() && Lobby_Active()) {
+        sSpecRejoin = 0; /* (a lobby's spectator is sent to the match again by the owner) */
+    }
     if (sSpecRejoin && !Port_NetSession()) { /* a spectator whose game came apart from the host's: from the start again */
         char addr[160], *colon;
         sSpecRejoin = 0;
@@ -3323,8 +3449,8 @@ void Port_LobbyAuto(void) {
         }
         return;
     }
-    if (what == NULL || begun == 2 || Port_NetSession()) {
-        return;
+    if (what == NULL || begun == 2 || Port_NetSession() || strncmp(what, "lobby", 5) == 0) {
+        return; /* (BT3_LOBBY=lobby...: net_lobby.c) */
     }
     if (!begun) {
         static unsigned blanks;
@@ -3332,6 +3458,9 @@ void Port_LobbyAuto(void) {
             return; /* (BT3_LOBBY_AT=<n>: the lobby begins at the program's n-th blank, as a player would from the menus) */
         }
         begun = 1;
+        if (getenv("BT3_NET_NAME") != NULL) {
+            Port_NetNameSet(getenv("BT3_NET_NAME")); /* (the name for the matchmaking service too) */
+        }
         if (strncmp(what, "quick:", 6) == 0) { /* BT3_LOBBY=quick:<queue>: a quick match (S, T, D10, D15, D20) */
             int q, type, dp;
             for (q = 0; q < MATCH_QUEUES && strcmp(what + 6, kMatchQueues[q]) != 0; q++) {
@@ -3370,7 +3499,9 @@ void Port_LobbyAuto(void) {
         coded = Port_LobbyCode()[0] != '\0';
         fprintf(stderr, "bt3: lobby: state %d, code '%s'%s%s\n", now, Port_LobbyCode(), now == -3 ? ", " : "", now == -3 ? Port_LobbyError() : "");
     }
-    if (now == 2) {
+    if (now == 5) {
+        begun = 2; /* (a lobby's: net_lobby.c goes on) */
+    } else if (now == 2) {
         fprintf(stderr, "bt3: lobby: the other player is there (%s)\n", Port_LobbyRelayed() ? "through the relay" : "directly");
         begun = 2;
         Port_LobbyLaunch();
@@ -3479,7 +3610,9 @@ static void lobby_background(void) {
         return;
     }
     now = Port_LobbyPoll();
-    if (now == 2) {
+    if (now == 5) { /* (the code was a lobby's: its window takes over) */
+        sLobbyBg = 0;
+    } else if (now == 2) {
         sLobbyBg = 0;
         Port_UiNotice("Tenkaichi Budokai Online: your opponent is here! The match begins.");
         Port_LobbyLaunch();
@@ -3487,4 +3620,151 @@ static void lobby_background(void) {
         sLobbyBg = 0;
         Port_UiNotice(now == -3 ? Port_LobbyError() : "Tenkaichi Budokai Online: the room was closed.");
     }
+}
+
+/* ---- for the eight-place lobby (net_lobby.c, net_lobby.h) ---- */
+int NetIo_Sock(void) {
+    return sSock;
+}
+
+int NetIo_Version(void) {
+    return NET_VERSION;
+}
+
+int NetIo_Open(int port) {
+    struct sockaddr_in local;
+    socklen_t len = sizeof(local);
+    sLobby = 0;
+    sCodeMode = 0;
+    if (sHandSock >= 0) {
+        closesocket(sHandSock);
+        sHandSock = -1;
+    }
+    if (sSock >= 0) {
+        closesocket(sSock);
+    }
+#ifdef _WIN32
+    {
+        WSADATA w;
+        u_long on = 1;
+        WSAStartup(MAKEWORD(2, 2), &w);
+        sSock = (int)socket(AF_INET, SOCK_DGRAM, 0);
+        ioctlsocket(sSock, FIONBIO, &on);
+    }
+#else
+    sSock = socket(AF_INET, SOCK_DGRAM, 0);
+    fcntl(sSock, F_SETFL, fcntl(sSock, F_GETFL, 0) | O_NONBLOCK);
+#endif
+    memset(&local, 0, sizeof(local));
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = htonl(INADDR_ANY);
+    local.sin_port = htons((uint16_t)port);
+    if (sSock < 0 || bind(sSock, (struct sockaddr *)&local, sizeof(local)) != 0 || getsockname(sSock, (struct sockaddr *)&local, &len) != 0) {
+        if (sSock >= 0) {
+            closesocket(sSock);
+        }
+        sSock = -1;
+        return -1;
+    }
+    Relay_Close(-1);
+    sCodeVia = 0;
+    sCodeLocalPort = 0;
+    sCodePunchSet = 0;
+    return ntohs(local.sin_port);
+}
+
+void NetIo_Close(void) {
+    Relay_Close(sSock);
+    if (sSock >= 0) {
+        closesocket(sSock);
+        sSock = -1;
+    }
+}
+
+void NetIo_Send(const void *buf, int n, const struct sockaddr_in *to) {
+    net_send(buf, n, to);
+}
+
+int NetIo_Recv(uint8_t *pkt, int size, struct sockaddr_in *from) {
+    return net_recv(pkt, size, from);
+}
+
+int NetIo_Fingerprint(unsigned long long *fp) {
+    return fprint_mine(fp);
+}
+
+const char *NetIo_MyName(void) {
+    return sMyName;
+}
+
+void NetIo_WatchService(void) {
+    watch_service();
+}
+
+uint32_t NetIo_Rules(int type, int dp, int time, int speed) {
+    int percent = speed < 100 ? 100 : speed > 200 ? 200 : speed;
+    return (uint32_t)(type < 0 || type > 2 ? 0 : type) | (uint32_t)(dp < 0 || dp > 2 ? 0 : dp) << 4 | (uint32_t)(time < 0 || time > 4 ? 3 : time) << 8 |
+           speed_bits(percent);
+}
+
+void NetIo_Go(int role, const struct sockaddr_in *target, const struct sockaddr_in *alt, const struct sockaddr_in *knock,
+              const struct sockaddr_in *knock2, uint32_t rules, int rollback, int delay) {
+    char text[64] = "";
+    struct sockaddr_in local;
+    socklen_t len = sizeof(local);
+    if (sSock < 0) {
+        return;
+    }
+    if (role == 1) {
+        Port_NetOptions(rollback, delay); /* (the lobby's choices: the host's are the match's) */
+        sRules = rules;
+    } else {
+        Port_NetOptions(-1, -1); /* (the host's choices come with its answer) */
+        sRules = rules;
+    }
+    memset(&sCodePunch2, 0, sizeof(sCodePunch2));
+    memset(&sJoinAlt, 0, sizeof(sJoinAlt));
+    sCodePunchSet = knock != NULL && knock->sin_port != 0;
+    if (sCodePunchSet) {
+        sCodePunch = *knock;
+    }
+    if (knock2 != NULL && knock2->sin_port != 0) {
+        sCodePunch2 = *knock2;
+    }
+    if (alt != NULL && alt->sin_port != 0 && !(target != NULL && same_addr(alt, target))) {
+        sJoinAlt = *alt;
+    }
+    if (target != NULL && target->sin_port != 0) {
+        inet_ntop(AF_INET, &target->sin_addr, text, sizeof(text));
+    }
+    sCodeLocalPort = getsockname(sSock, (struct sockaddr *)&local, &len) == 0 ? ntohs(local.sin_port) : 0;
+    sCodeVia = target != NULL && Relay_IsPeer(target);
+    sHandSock = sSock; /* (the session goes on with the lobby's socket, and gives it back when it ends) */
+    sSock = -1;
+    sGoPending = 1;
+    Port_SessionRequest(role, text, role == 1 ? sCodeLocalPort : target != NULL ? ntohs(target->sin_port) : 0);
+}
+
+void NetIo_End(int why, const char *note) {
+    if (sGone < 3) {
+        sGone = why;
+        snprintf(sGoneNote, sizeof(sGoneNote), "%s", note != NULL ? note : "");
+    }
+}
+
+int NetIo_SessionMode(void) {
+    return sSession && sMode > 0 ? sMode : 0;
+}
+
+int NetIo_SessionStarting(void) {
+    return sGoPending;
+}
+
+int NetIo_Connected(void) {
+    return NetIo_SessionMode() != 0 && (sMode == 3 ? sSpecSetup : sConnected && sMet);
+}
+
+int Port_NetLobbyOwnerSide(void) {
+    uint32_t v = sRules >> 24 & 15;
+    return Port_NetSession() && v >= 1 && v <= 3 ? (int)v - 1 : -1;
 }

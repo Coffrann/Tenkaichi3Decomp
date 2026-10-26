@@ -2,6 +2,7 @@
 #include "menu/menu_g.h"
 #ifdef PORT
 extern int Port_NetSession(void); /* port/src/gs/net.c */
+extern int Port_NetLobbyOwnerSide(void); /* port/src/gs/net.c: in a lobby's match, the owner's side; -1 otherwise */
 #endif
 
 /*
@@ -55,8 +56,11 @@ s32 Duel_Main(void) {
                 bgm = 0;
                 gProgress->mode = 38;
 #ifdef PORT /* PC build, online session: there is no versus menu in it; going back leaves for the main menu, which
-               ends the session (as cancelling the versus menu does) */
-                if (Port_NetSession()) {
+               ends the session (as cancelling the versus menu does). In a lobby's match only its owner ends the
+               session (port/src/gs/net_lobby.c): going back from the select opens it again. */
+                if (Port_NetSession() && Port_NetLobbyOwnerSide() >= 0) {
+                    gProgress->mode = 39;
+                } else if (Port_NetSession()) {
                     gProgress->mode = 4;
                     result = 0;
                     done = 1;
@@ -74,8 +78,11 @@ s32 Duel_Main(void) {
                 bgm = 0;
                 gProgress->mode = 38;
 #ifdef PORT /* PC build, online session: there is no versus menu in it; going back leaves for the main menu, which
-               ends the session (as cancelling the versus menu does) */
-                if (Port_NetSession()) {
+               ends the session (as cancelling the versus menu does). In a lobby's match only its owner ends the
+               session (port/src/gs/net_lobby.c): going back from the select opens it again. */
+                if (Port_NetSession() && Port_NetLobbyOwnerSide() >= 0) {
+                    gProgress->mode = 40;
+                } else if (Port_NetSession()) {
                     gProgress->mode = 4;
                     result = 0;
                     done = 1;
