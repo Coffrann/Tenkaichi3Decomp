@@ -3626,7 +3626,8 @@ by room code); the Host tab "Let others watch the match" (setting `net_spectator
 answers no). While the host has no match yet the spectator waits ("The host is there but its match has not begun
 yet"). The players see "N watching: names" small in the top right corner; the spectator a line at the top
 ("Spectating A vs B, view: ...", "V or R1: change view, F1: stop watching"), and F1 has Change view and Stop
-watching. Its controller and keyboard play nobody (and nothing vibrates). When the players leave, the spectator is
+watching. (Later the same day the spectator's line and a pause menu of its own, START, became the game's: see
+"Lobbies", "The screens".) Its controller and keyboard play nobody (and nothing vibrates). When the players leave, the spectator is
 told and goes back to where it was.
 
 **Room codes** (port/matchmaking/README.md, "Spectators"): the spectator asks the service for the room's host
@@ -3686,20 +3687,23 @@ An eight-place lobby on top of the spectators (the chapter above): two players a
 game of the one who made it, the owner. The owner puts people in the places, chooses the rules and starts the
 matches; the two in the player places play, everyone else watches.
 
-**In the game.** Dragon Net Battle has a fourth tab, Lobby: "Create a lobby" asks for nothing (with a room code, or on
-a port when "Use a room code" is off) and the lobby's window opens at once with the code to hand on. Others join with
-that code (or the owner's address and port) on the Join tab, with either button: the service's answer (or the owner's
-game, by address) says it is a lobby, and the game becomes a member. The window (gs/ui.cpp, `build_lobby`):
+**In the game** (changed the same day: the lobby is one of the game's own screens now, no longer an ImGui window; see
+"The screens" below). Tenkaichi Budokai Online's list has Lobby: it asks for nothing, opens a lobby with a room code
+and shows its page at once, with the code to hand on. Others type that code on Join Room: the service's answer says
+it is a lobby, and the game becomes a member and shows the same page. (By address, `BT3_LOBBY=lobbyjoin:` and the
+Dragon Net Battle window's Join tab still work; the window then closes with a line saying that the lobby's screen
+is in Tenkaichi Budokai Online, which the main menu goes to by itself.) The page (src/menu/port_tbo.c, `TB_LOBBY`):
 
-- the places: 1P and 2P, then spectators 1 to 6. The owner picks a name, then a place: the two swap. "Out" removes
-  someone. A newcomer takes the first free place (a player's while one is free and no match is on);
-- the rules as rows of the game's menus, the value between two arrows, left / right to change it (keys, D-pad,
-  stick, or the arrows clicked): battle (single, team, DP 10 / 15 / 20), time limit, game speed (100 to 150 in
-  steps, 114 marked as the standard), rollback, input delay: what the Host tab offers. The owner's last Host-tab
-  choices are where a new lobby starts. Everyone sees them change at once; while a match is on they cannot change;
-- Start the match (the owner, with both player places taken), Ready (each one's, shown to all), Leave the lobby (the
-  owner: Close the lobby), the last thing that happened ("Vegeta joined the lobby", "Match 2: Goku vs Vegeta"), and a
-  chat for everyone in the lobby.
+- the places: 1P and 2P, then spectators 1 to 6, with the owner's mark, this game's own ("YOU") and who is ready.
+  The owner chooses a name: Move (then the place: the two swap) or Remove from the Lobby. A newcomer takes the first
+  free place (a player's while one is free and no match is on);
+- the rules as rows with left / right: battle (single, team, DP 10 / 15 / 20), time limit, game speed (100 to 150 in
+  steps, 114 marked as the standard), rollback, input delay. A new lobby starts from Create Room's choices. Everyone
+  sees them change at once; while a match is on they cannot change;
+- Start Match (the owner, with both player places taken; also START), Ready / Not Ready, Chat, Leave Lobby (the
+  owner: Close Lobby; also triangle, with a yes / no window), the code (square copies it on a PC), and in the box at
+  the foot of the screen the last three things that happened ("Vegeta joined the lobby", "Match 2: Goku vs Vegeta",
+  the chat's lines).
 
 **A match.** The game in 1P hosts it, the one in 2P joins it, as any online match (the character select, rematches,
 everything as in a match from the Host tab), with the lobby's rules. Everyone else watches it as a spectator **of the
@@ -3716,12 +3720,13 @@ the session with it (`src/battle/hud_0.c` builds the menus' two forms at a battl
 and the other player's without it and without "Return to Main Menu", and picks one each time a menu runs, by its pad;
 the owner's side travels in bits 24..27 of the rules word, the same on every copy; `src/menu/menu_a_b.c` turns that
 result into the main menu, which ends the session); F1 > "Back to the lobby"; and a spectating owner's own pause menu.
-Every member's session ends on the owner's word (`T_LOBBY_BACK`) and all are in the lobby window again, where the
+Every member's session ends on the owner's word (`T_LOBBY_BACK`) and all are on the lobby's page again, where the
 rules can be changed and the next match started. Going back from the character select opens it again in a lobby's
 match (`src/menu/menu_g_b.c`): only the owner ends it.
 
-**A spectator's pause menu** (START, Esc or the key bound to START): only on its screen, nothing stops. Change view
-(player 1's, player 2's, split, as V / R1), Leave the lobby, and for the owner Back to the lobby.
+**A spectator's pause menu** (START, Esc or the key bound to START): only on its screen, nothing stops. Continue, View
+(player 1's, player 2's, split screen, with left / right; also V / R1 outside the menu), Leave the Lobby (the owner:
+Close the Lobby; a yes / no first), and for the owner Back to the Lobby. It is the game's (below).
 
 **Leaving.** Anyone, at any time: the window's button, F1, a spectator's pause menu. A spectator leaving changes
 nothing for the others (its place frees). A player leaving mid-fight ends the match: everyone is back in the lobby
@@ -3735,15 +3740,15 @@ rules, who is ready; members greet it (`HELLO`: versions, gameplay fingerprint, 
 every second that they are there (`ALIVE`: ready, the match they were sent to, the match they are in, connected); the
 owner sends the whole lobby every second and at each change (`STATE`, 368 bytes). `GO` tells a member its part in
 match n (host, join an address, watch the owner) with the rules, rollback and delay; the session begins as one from
-the lobby window always does (the state put back to the first blank, gs/state.c) on the lobby's own socket, which the
+the online screens always does (the state put back to the first blank, gs/state.c) on the lobby's own socket, which the
 session hands back when it ends (`Port_NetSessionEnd`: no close, no relay given up). `BACK`, `CLOSE`, `LEAVE`,
 `CHAT` / `SAID`. Everything runs on the game's thread: outside a session from `Port_VBlank` (`Lobby_Pump`), in one
-from the look at the socket (`receive`). The owner sends `GO` again to a spectator that is back in the lobby window
+from the look at the socket (`receive`). The owner sends `GO` again to a spectator that is back on the lobby's page
 while the match is on (a desync, its connection), and ends the match when a player's session has ended or the two
 have not connected in 40 s. Nothing of the two players' traffic changed; a lobby is a release-after-0.1.38.7 thing.
 
-Lobbies need the session without a start again (the 64-bit programs with their .mem list; otherwise the window says
-so). The ImGui windows are only drawn; the game's state is the same in every view.
+Lobbies need the session without a start again (the 64-bit programs with their .mem list; otherwise the page says
+so). The game is put back, after each match, to the moment its match was asked for: the lobby's page, where it was.
 
 **Old releases.** A 0.1.38.7 with the code: the service answers "old" (it shows "Update available. Online servers
 are unreachable until you update."). By address: the owner answers its greeting as a host of another release would ("The
@@ -3759,11 +3764,65 @@ the multi-peer client is exercised only by code reading; a match of two through 
 The two players reach each other directly only (when neither is the owner): two players who cannot are told "The two
 players could not connect to each other." after 40 s; routing their match through the owner is not done.
 
+**The screens** (the same day, later: the lobby moved out of Dear ImGui into the game's own menus, with the elements
+of Tenkaichi Budokai Online's pages; "the less we rely on ImGui the better").
+
+- *The page* (src/menu/port_tbo.c, `TB_LOBBY`, drawn with the kit of port_screen.c like the other pages: the
+  tournament grounds, the heading, windows, bars, the gold cursor bar, the pad's prompts, the Menu font). Left, the
+  eight places in a window; right, the code (square: Copy Code), the rules and four buttons in two rows. Up / down
+  move in a side, left / right go from the places to the right side and back (on a rule they change it; L1 / R1
+  switch sides from anywhere). Cross on a place opens the owner's window (Move, then the place, the two swap;
+  Remove from the Lobby; Back). Start Match, Ready / Not Ready, Chat, Leave / Close Lobby (a yes / no window; also
+  triangle). The talk box at the foot shows the last three things that happened, each cut to a line, in the game's
+  own font; before anything has, the hosts' hint. While the lobby is being reached a window says so (circle or
+  triangle: cancel); when it is closed, why, and OK goes back to the list. The screen reader is told the page, what
+  the cursor is on, what was typed and each new line of what happened.
+- *Chat* is the name's keypad (letters, digits, -_.!?#&*+, space; the PC keyboard types any plain character but < and
+  >), up to 60 characters, sent with Done or START; the lines are in the talk box. No ImGui is left in the lobby.
+- *Getting there.* The hub's new Lobby (between Join Room and Friends; the list is ten bars now, 26 units apart
+  instead of 27.5) makes one with Create Room's rules and the saved speed, asking nothing. Join Room with a lobby's
+  code goes to the page instead of the search (`Port_LobbyPoll` 5). The screens opened while a lobby is on go to its
+  page; so does the main menu (`Port_LobbyWantsScreen`, src/menu/menu_a.c), for a lobby joined from the Dragon Net
+  Battle window (which no longer has a Lobby tab, and only says where the lobby's screen is) or by the test switches.
+  The game is in the page when a match is asked for, so it is put back into the page when the match ends.
+- *A spectator* (any spectator, of a lobby's match or of a match of two) has the line over the match at the foot of
+  the screen ("Spectating A vs B", the view, R1: change, START: menu; catching up; a desync) and its own pause menu
+  (START, Esc, or the key bound to START): Continue, View (left / right), Back to the Lobby (the owner), Leave / Close
+  the Lobby or Stop Watching (a yes / no first), "Your screen only: the match goes on." Both are drawn by the game
+  over every screen of the match, from `Gfx_EndFrame` (src/sys/gfx.c, `PortTbo_SpecDraw`), with the same kit; the menu
+  reads the PC's controller and keyboard itself (`Port_PadRead`: the spectator's pad plays nobody) and keeps its
+  variables out of the game's state (`TB_HOST`, section `.porthst`). What it draws goes through the game's own draw
+  lists, so a spectator that shows the line differs from its host in those bytes of its state (the fight's values
+  and the check values are the same: tested below); `BT3_SPEC_LINE=0` leaves the line out, and the whole state is
+  the same again. The players' "N watching" corner and F1's entries stay as they were (ImGui).
+- *Text.* Every line is in port_tbo.c, so `port/tools/tbo_strings.py` lists it for translators (ids `tbo/...`; notes
+  for the new places). The lobby's own lines come from the owner's game in English and are translated where they
+  are shown: whole lines by the file, lines with a name by their end ("%s joined the lobby" and four more), "Match %d:
+  %s vs %s" by its parts. The Dragon Net Battle window's one new line is port text `net/lobby_joined`.
+- *Testing.* `BT3_TBO=1` opens Tenkaichi Budokai Online instead of the title (after the logos; with a lobby, its page);
+  `BT3_PAD` (gs_input.c) drives the pages; `BT3_SPEC_PAUSE_AT` now opens the game's menu.
+
+Tested (this machine, offscreen, 127.0.0.1, local Worker; players fed the random-press table):
+
+| case | result |
+|---|---|
+| the pages with the pad alone: the owner takes Lobby on the list, two members type its code on Join Room's keypad (`BT3_PAD`, a fixed code from the local Worker) | lobby made and joined through the screens; a match, back, closed; the spectator's whole state identical to the host's over 6,972 blanks, the players' fight values over 7,030 |
+| the owner's pad on the page: a rule changed twice, a member's window, Move and the place, the chat's keypad typing | the lobby logs the new speed and the swap; screenshots below |
+| by address, owner + 3, two matches (the owner hosts and two watch; then the owner watches and passes the match on), `BT3_SPEC_LINE=0` | every spectator's whole state identical to its host's (5,731 to 5,782 blanks a match), the players' fight values identical; 179 / 180 check values each, none differed; all back on the page after each match |
+| by code, owner + 3: the owner a spectator, line and pause menus open (member and owner) | fight values identical to the host's (4,048 / 4,050 fight blanks); 227 check values each, none differed; the owner back to the lobby (test switch): everyone on the page again with "The owner went back to the lobby." |
+| by code: a spectator leaves mid-fight, the owner removes the 2P player mid-fight, a fifth joins and leaves, the owner closes | "Piccolo left the lobby" (the match goes on), everyone back with "Vegeta was removed from the lobby" (Vegeta: "The lobby's owner removed you from the lobby."), "Krillin joined / left", "The lobby was closed by its owner." |
+| a match of two by code with a spectator by code (`BT3_SPEC_LINE=0`), a quick match | spectator identical over 10,106 blanks; fight values identical (6,933 and 7,447 fight blanks) |
+| 0.1.38.7 against this build, both ways | fight values identical (4,283 / 4,282 fight blanks) |
+
+Screenshots were looked at for each page (owner and member, a rule being changed, a member's window, moving, the
+chat's keypad, a spectator's line, the member's and the owner's pause menu, a match of two's spectator, back on the
+page after a match, removed, closed). The Windows build compiles (mingw-w64). Not done: a person with a controller.
+
 **Testing switches.** `BT3_LOBBY=lobby` (with a code), `lobby:<port>`, `lobbyjoin:<address>:<port>`, and a code with
 `join:<code>` or `spectate:<code>`. `BT3_LOBBY_DO=<s>:<command>|...` (each that many seconds after the one before was
 done): `start`, `back`, `leave`, `kick <place>`, `move <place> <place>`, `rule <rule> <step>` (0 battle, 1 time,
 2 speed, 3 rollback, 4 delay), `ready`, `say <text>`, `wait <members>`, `waitmatch`, `waitlobby`, `waitseq <state>`
-(the battle sequence's state, 6 the result menu). `BT3_SPEC_PAUSE_AT=<s>`: a lobby spectator's pause menu opens
+(the battle sequence's state, 6 the result menu). `BT3_SPEC_PAUSE_AT=<s>`: a spectator's pause menu (the game's) opens
 that long into its match (for screenshots).
 
 **Found on the way.** The spectator's "Joining the match as a spectator..." stayed on its screen for the whole
