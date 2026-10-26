@@ -23,7 +23,7 @@ import pathlib
 import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-SOURCES = [ROOT / "src/menu/port_tbo.c"]
+SOURCES = [ROOT / "src/menu/port_tbo.c", ROOT / "port/src/spec_menu.c"]
 
 # Calls whose strings are not shown: settings' names, file names, comparisons, logs.
 NOT_SHOWN = {"Port_Setting", "Port_SettingSave", "Port_SettingText", "Port_SettingTextSave", "strncmp", "strcmp",
@@ -44,9 +44,9 @@ NOTES = {
     "Tb_LobbyPopItem": "a choice in a window over the lobby's page",
     "Tb_LobbyLine": "a line of what happened in the lobby (shown in the talk box)",
     "Tb_SpecLine": "the line over a match being watched (spectator)",
-    "Tb_SpecMenu": "a spectator's own pause menu over the match",
-    "Tb_SpecItemName": "a spectator's own pause menu over the match",
-    "Tb_SpecLeaveName": "a spectator's own pause menu over the match",
+    "item_line": "an item of a spectator's own pause menu (the battle's pause menu box)",
+    "leave_name": "an item of a spectator's own pause menu (the battle's pause menu box)",
+    "view_name": "a spectator's view of the match, in its pause menu (after \"View: \")",
 }
 # Not words: the name keypad's case key (its rows are the table sTbKeys).
 NOT_WORDS = re.compile(r"Aa")

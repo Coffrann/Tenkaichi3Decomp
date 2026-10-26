@@ -3153,229 +3153,26 @@ void PortTbo_SparSign(void) {
     Ps_Msg(146.0f, 93.0f, line, 1.0f, 0x80);
 }
 /* ----------------------------------------------------------------------------------------------- the spectator */
-/* Watching a match (port/src/gs/net.c, "Spectators"): the line over the match and the spectator's own pause menu,
-   drawn over every screen of the match (character select, fights) from Gfx_EndFrame (sys/gfx.c). The spectator's
-   pad plays nobody, so the menu reads the PC's controller and keyboard itself (Port_PadRead, as the player's game
-   would read them) and stops nothing: the match goes on behind it, on this screen only. Its variables are not the
-   game's (TB_HOST: left out of the state a session saves and compares), so watching with the menu open computes
-   the same game as without. */
-#ifdef __APPLE__
-#define TB_HOST __attribute__((section("__DATA,__porthst")))
-#else
-#define TB_HOST __attribute__((section(".porthst")))
-#endif
+/* Watching a match (port/src/gs/net.c, "Spectators"): the line over the match, drawn over every screen of the match
+   (character select, fights) from Gfx_EndFrame (sys/gfx.c). The spectator's own pause menu (START or Esc) is the
+   game's animated window, as the PC's exit question (port/src/spec_menu.c); while it is up the line is not drawn. */
 extern int Port_NetSpectating(void);
 extern const char *Port_NetName(int player);
 extern int Port_NetSpecView(void);
-extern void Port_NetSpecViewSet(int view);
 extern int Port_NetSpecStatus(int *out);
-extern void Port_NetSpecLeave(void);
-extern int Port_PadRead(int socket, unsigned char *data); /* gs/gs_input.c: the PC's controller and keys, as player 1's pad */
-extern volatile int gPortSpecMenuAsk;                     /* gs/ui.cpp: Esc (or the test's moment) opens / closes it */
-extern int Port_SpecLineShown(void);                      /* headless.c: BT3_SPEC_LINE=0, the line left out (tests) */
-
-#define SP_CONTINUE 0
-#define SP_VIEW 1
-#define SP_BACK 2
-#define SP_LEAVE 3
-#define SP_B_START 0x0008 /* the pad's bytes (active low): PS2 order */
-#define SP_B_UP 0x0010
-#define SP_B_RIGHT 0x0020
-#define SP_B_DOWN 0x0040
-#define SP_B_LEFT 0x0080
-#define SP_B_TRIANGLE 0x1000
-#define SP_B_CIRCLE 0x2000
-#define SP_B_CROSS 0x4000
-#define SP_DIRS (SP_B_UP | SP_B_RIGHT | SP_B_DOWN | SP_B_LEFT)
-
-static TB_HOST s32 sSpOpen;    /* the menu is up */
-static TB_HOST s32 sSpCur;
-static TB_HOST s32 sSpSure;    /* "Leave the lobby?" (or Close, Stop watching): 1 asked, the cursor on No (0) / Yes (1) */
-static TB_HOST s32 sSpSureCur;
-static TB_HOST u32 sSpHeld;    /* the buttons held last time */
-static TB_HOST s32 sSpRepeat;  /* blanks a direction has been held */
-static TB_HOST s32 sSpFrames;
-static TB_HOST s32 sSpSaid = -1;
+extern int Port_SpecLineShown(void);  /* headless.c: BT3_SPEC_LINE=0, the line left out (tests) */
+extern int PortSpecMenu_Frame(int vsyncs); /* port/src/spec_menu.c: the pause menu; 1 while its window is up */
 
 static char *sTbViewName[3] = {"PLAYER 1", "PLAYER 2", "SPLIT SCREEN"};
 
-/* The menu's items, in order (Back to the Lobby only for a lobby's owner). */
-static s32 Tb_SpecItems(s32 *items, PortLobbyView *v) {
-    s32 n = 0;
-
-    items[n++] = SP_CONTINUE;
-    items[n++] = SP_VIEW;
-    if (v->state == 2 && v->owner) {
-        items[n++] = SP_BACK;
-    }
-    items[n++] = SP_LEAVE;
-    return n;
-}
-
-static char *Tb_SpecLeaveName(PortLobbyView *v) {
-    return v->state != 2 ? "Stop Watching" : v->owner ? "Close the Lobby" : "Leave the Lobby";
-}
-
-static char *Tb_SpecItemName(s32 item, PortLobbyView *v) {
-    switch (item) {
-    case SP_CONTINUE:
-        return "Continue";
-    case SP_VIEW:
-        return "View";
-    case SP_BACK:
-        return "Back to the Lobby";
-    }
-    return Tb_SpecLeaveName(v);
-}
-
-/* The PC's pad this blank: pressed (new) and, for the directions, repeated while held. */
-static u32 Tb_SpecPad(s32 vsyncs) {
-    unsigned char d[18];
-    u32 held;
-    u32 pressed;
-
-    memset(d, 0, sizeof(d));
-    d[0] = 0xFF;
-    d[1] = 0xFF;
-    d[2] = d[3] = d[4] = d[5] = 0x80;
-    Port_PadRead(0, d);
-    held = ~((u32)d[0] | ((u32)d[1] << 8)) & 0xFFFF;
-    if (d[4] < 0x40) { /* the left stick as the d-pad */
-        held |= SP_B_LEFT;
-    } else if (d[4] > 0xC0) {
-        held |= SP_B_RIGHT;
-    }
-    if (d[5] < 0x40) {
-        held |= SP_B_UP;
-    } else if (d[5] > 0xC0) {
-        held |= SP_B_DOWN;
-    }
-    pressed = held & ~sSpHeld;
-    if ((held & SP_DIRS) != 0 && (held & SP_DIRS) == (sSpHeld & SP_DIRS)) {
-        sSpRepeat += vsyncs;
-        if (sSpRepeat >= 24) {
-            sSpRepeat -= 6;
-            pressed |= held & SP_DIRS;
-        }
-    } else {
-        sSpRepeat = 0;
-    }
-    sSpHeld = held;
-    return pressed;
-}
-
-static void Tb_SpecSay(PortLobbyView *v, s32 *items) {
-    static char line[160];
-    s32 what = sSpOpen ? (sSpSure ? 100 + sSpSureCur : items[sSpCur] * 4 + Port_NetSpecView()) : -1;
-
-    if (what == sSpSaid) {
-        return;
-    }
-    if (what >= 0) {
-        if (sSpSure) {
-            Ps_Copy(line, Tb_SpecLeaveName(v), 160);
-            Ps_Cat(line, "? ", 160);
-            Ps_Cat(line, sSpSureCur ? "Yes" : "No", 160);
-        } else {
-            Ps_Copy(line, sSpSaid < 0 ? "Paused, your screen only: the match goes on. " : "", 160);
-            Ps_Cat(line, Tb_SpecItemName(items[sSpCur], v), 160);
-            if (items[sSpCur] == SP_VIEW) {
-                Ps_Cat(line, ": ", 160);
-                Ps_Cat(line, sTbViewName[Port_NetSpecView() % 3], 160);
-            }
-        }
-        PortA11y_Say(line, TB_SAY_INTERRUPT);
-    }
-    sSpSaid = what;
-}
-
-static void Tb_SpecUpdate(s32 vsyncs, PortLobbyView *v, s32 *items, s32 count) {
-    u32 p = Tb_SpecPad(vsyncs);
-    s32 ask = gPortSpecMenuAsk;
-
-    if (ask) {
-        gPortSpecMenuAsk = 0;
-    }
-    if (!sSpOpen) {
-        if ((p & SP_B_START) || ask) {
-            sSpOpen = 1;
-            sSpCur = 0;
-            sSpSure = 0;
-            Snd_PlaySe(1, 1);
-        }
-        return;
-    }
-    if (sSpCur >= count) {
-        sSpCur = count - 1;
-    }
-    if (sSpSure) {
-        if (p & (SP_B_LEFT | SP_B_RIGHT | SP_B_UP | SP_B_DOWN)) {
-            sSpSureCur = !sSpSureCur;
-            Snd_PlaySe(1, 0);
-        } else if (p & SP_B_CROSS) {
-            if (sSpSureCur) {
-                Snd_PlaySe(1, 1);
-                if (v->state == 2) {
-                    Port_LobbyDo(LOBBY_LEAVE, 0, 0);
-                } else {
-                    Port_NetSpecLeave();
-                }
-                sSpOpen = 0;
-            } else {
-                Snd_PlaySe(1, 2);
-            }
-            sSpSure = 0;
-        } else if (p & (SP_B_TRIANGLE | SP_B_CIRCLE | SP_B_START) || ask) {
-            Snd_PlaySe(1, 2);
-            sSpSure = 0;
-        }
-        return;
-    }
-    if (p & SP_B_DOWN) {
-        sSpCur = (sSpCur + 1) % count;
-        Snd_PlaySe(1, 0);
-    } else if (p & SP_B_UP) {
-        sSpCur = (sSpCur + count - 1) % count;
-        Snd_PlaySe(1, 0);
-    } else if ((p & (SP_B_LEFT | SP_B_RIGHT)) && items[sSpCur] == SP_VIEW) {
-        Port_NetSpecViewSet((Port_NetSpecView() + ((p & SP_B_RIGHT) ? 1 : 2)) % 3);
-        Snd_PlaySe(1, 0);
-    } else if (p & SP_B_CROSS) {
-        switch (items[sSpCur]) {
-        case SP_CONTINUE:
-            Snd_PlaySe(1, 2);
-            sSpOpen = 0;
-            break;
-        case SP_VIEW:
-            Port_NetSpecViewSet((Port_NetSpecView() + 1) % 3);
-            Snd_PlaySe(1, 0);
-            break;
-        case SP_BACK:
-            Snd_PlaySe(1, 1);
-            Port_LobbyDo(LOBBY_BACK, 0, 0);
-            sSpOpen = 0;
-            break;
-        default:
-            Snd_PlaySe(1, 1);
-            sSpSure = 1;
-            sSpSureCur = 0;
-            break;
-        }
-    } else if ((p & (SP_B_TRIANGLE | SP_B_CIRCLE | SP_B_START)) || ask) {
-        Snd_PlaySe(1, 2);
-        sSpOpen = 0;
-    }
-}
-
 /* The line over the match: who plays, the view, and how to change it and open the menu; catching up, and a
    desync, when they are. At the foot of the screen, between the two gauges. */
-static void Tb_SpecLine(PortLobbyView *v) {
+static void Tb_SpecLine(void) {
     static char line[128];
     int st[3] = {-1, 0, 0};
     s32 known = Port_NetSpecStatus(st) != 0;
     f32 y = 382.0f;
 
-    (void)v;
     Ps_Panel(TBO_KIT_DIALOG, 136.0f, y, 376.0f, y + 52.0f, 0x60);
     Tb_Subst(line, 128, "Spectating %s vs %s", Port_NetName(0), Port_NetName(1), 0);
     Ps_Align(1);
@@ -3395,99 +3192,15 @@ static void Tb_SpecLine(PortLobbyView *v) {
     Ps_Align(0);
 }
 
-static void Tb_SpecMenu(PortLobbyView *v, s32 *items, s32 count) {
-    static char value[32];
-    f32 x0 = 138.0f;
-    f32 x1 = 374.0f;
-    f32 y0 = 104.0f;
-    f32 top = y0 + 64.0f;
-    s32 i;
-
-    Ps_Panel(TBO_KIT_WINDOW, x0, y0, x1, top + 30.0f * (f32)count + 30.0f, 0x80);
-    Ps_Align(1);
-    Ps_Heading(256.0f, y0 + 8.0f, "Paused", 1.0f, 180.0f, 0x80);
-    Ps_Align(0);
-    Ps_Align(0);
-    Ps_Msg(256.0f - Ps_MsgWidth("Your screen only: the match goes on.", 0.88f) * 0.5f, y0 + 36.0f, "Your screen only: the match goes on.", 0.88f, 0x80);
-    for (i = 0; i < count; i++) {
-        f32 y = top + 30.0f * (f32)i;
-        s32 on = i == sSpCur && !sSpSure;
-
-        if (on) {
-            Ps_Pill(TBO_KIT_SEL, x0 + 10.0f, y - 2.0f, x1 - 10.0f, y + 26.0f, 0x80);
-        } else {
-            Ps_Pill(TBO_KIT_BAR, x0 + 12.0f, y, x1 - 12.0f, y + 24.0f, 0x80);
-        }
-        Ps_Text(x0 + 28.0f, Ps_TextTop(y + 12.0f, 0.62f), Tb_SpecItemName(items[i], v), 0.62f, 110.0f, on ? 1 : 0);
-        if (items[i] == SP_VIEW) {
-            Ps_Copy(value, sTbViewName[Port_NetSpecView() % 3], 32);
-            Ps_Align(2);
-            Ps_Text(on ? x1 - 38.0f : x1 - 26.0f, Ps_TextTop(y + 12.0f, 0.48f), value, 0.48f, 90.0f, 3);
-            Ps_Align(0);
-            if (on) {
-                Ps_Button(3, x1 - 24.0f, y + 12.0f, 18.0f);
-            }
-        }
-    }
-    {   /* the buttons it answers to, at its foot */
-        f32 y = top + 30.0f * (f32)count + 8.0f;
-
-        Ps_Button(0, x0 + 30.0f, y + 9.0f, 17.0f);
-        Ps_Msg(x0 + 42.0f, y + 9.0f - (PS_MSG_BASE - PS_MSG_CAP * 0.5f) * 0.9f, "Enter", 0.9f, 0x80);
-        Ps_Button(2, x0 + 106.0f, y + 9.0f, 17.0f);
-        Ps_Msg(x0 + 118.0f, y + 9.0f - (PS_MSG_BASE - PS_MSG_CAP * 0.5f) * 0.9f, "Back", 0.9f, 0x80);
-    }
-    if (sSpSure) {
-        f32 sy = 150.0f;
-
-        Ps_Panel(TBO_KIT_WINDOW, 120.0f, sy, 392.0f, sy + 104.0f, 0x80);
-        Ps_Copy(value, Tb_SpecLeaveName(v), 32);
-        Ps_Cat(value, "?", 32);
-        Ps_Text(140.0f, sy + 10.0f, value, 0.6f, 230.0f, 2);
-        Ps_Msg(140.0f, sy + 34.0f, v->state != 2 ? "Back to where you were." : v->owner ? "It closes for everyone." : "Back to the menus.", 0.92f, 0x80);
-        for (i = 0; i < 2; i++) {
-            f32 bx0 = i == 0 ? 140.0f : 262.0f;
-            s32 on = sSpSureCur == (i == 0 ? 1 : 0);
-
-            if (on) {
-                Ps_Pill(TBO_KIT_SEL, bx0 - 2.0f, sy + 64.0f, bx0 + 112.0f, sy + 92.0f, 0x80);
-            } else {
-                Ps_Pill(TBO_KIT_BAR, bx0, sy + 66.0f, bx0 + 110.0f, sy + 90.0f, 0x80);
-            }
-            Ps_Align(1);
-            Ps_Text(bx0 + 55.0f, Ps_TextTop(sy + 78.0f, 0.6f), i == 0 ? "Yes" : "No", 0.6f, 90.0f, on ? 1 : 0);
-            Ps_Align(0);
-        }
-    }
-}
-
-/* Every frame of every screen (sys/gfx.c, Gfx_EndFrame): nothing unless this copy watches a match. */
+/* Every frame of every screen (sys/gfx.c, Gfx_EndFrame): nothing of the game's touched unless this copy watches a
+   match (and shows the line). */
 void PortTbo_SpecDraw(s32 vsyncs) {
-    static TB_HOST PortLobbyView v;
-    s32 items[4];
-    s32 count;
-
-    if (!Port_NetSpectating()) {
-        sSpOpen = 0;
-        sSpSure = 0;
-        sSpSaid = -1;
+    if (PortSpecMenu_Frame(vsyncs) || !Port_NetSpectating() || !Port_SpecLineShown()) {
         return;
-    }
-    sSpFrames++;
-    Port_LobbyView(&v);
-    count = Tb_SpecItems(items, &v);
-    Tb_SpecUpdate(vsyncs, &v, items, count);
-    Tb_SpecSay(&v, items);
-    if (!sSpOpen && !Port_SpecLineShown()) {
-        return; /* (nothing of the game's touched: tests compare the spectator's whole state with its host's) */
     }
     Ps_PageSet();
     Ps_SetShift(0.0f);
     Ps_Align(0);
-    if (sSpOpen) {
-        Tb_SpecMenu(&v, items, count);
-    } else if (Port_SpecLineShown()) {
-        Tb_SpecLine(&v);
-    }
+    Tb_SpecLine();
 }
 #endif

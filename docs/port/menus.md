@@ -141,9 +141,11 @@ Still in port_tbo.c, to move into the kit next: the keypads (`Tb_Keypad`, `Tb_Pa
 the pages and their slide-in (`Tb_SetMode`, `Tb_In`), the speech (`Tb_Speak`), the windows (`Tb_WinInit`).
 
 **Drawing over the game's own screens.** The kit draws anywhere the game draws: Train While Waiting's sign from the
-battle's HUD (`PortTbo_SparSign`), and a spectator's line and pause menu over every screen of a watched match from
-`Gfx_EndFrame` (src/sys/gfx.c, `PortTbo_SpecDraw`). Such a thing reads the PC's controller itself (`Port_PadRead`)
-when the game's pads are not this player's, keeps its variables out of the game's state (`TB_HOST`, the section
+battle's HUD (`PortTbo_SparSign`), and a spectator's line over every screen of a watched match from `Gfx_EndFrame`
+(src/sys/gfx.c, `PortTbo_SpecDraw`). A game's own window can be drawn with menus of ours too: a spectator's pause
+menu is the battle's pause-menu box, drawn by its engine (port/src/spec_menu.c, `BtlMenu_PortDrawMenu`) with items
+whose texts come from the port. Such a thing reads the PC's controller itself (`Port_PadRead`) when the game's pads
+are not this player's, keeps its variables out of the game's state (a port file's, or `TB_HOST`, the section
 `.porthst` that the state list leaves out), and still writes the game's draw lists: a copy that draws it differs
 from one that does not in those bytes (the fight is the same).
 

@@ -3786,17 +3786,23 @@ of Tenkaichi Budokai Online's pages; "the less we rely on ImGui the better").
   Battle window (which no longer has a Lobby tab, and only says where the lobby's screen is) or by the test switches.
   The game is in the page when a match is asked for, so it is put back into the page when the match ends.
 - *A spectator* (any spectator, of a lobby's match or of a match of two) has the line over the match at the foot of
-  the screen ("Spectating A vs B", the view, R1: change, START: menu; catching up; a desync) and its own pause menu
-  (START, Esc, or the key bound to START): Continue, View (left / right), Back to the Lobby (the owner), Leave / Close
-  the Lobby or Stop Watching (a yes / no first), "Your screen only: the match goes on." Both are drawn by the game
-  over every screen of the match, from `Gfx_EndFrame` (src/sys/gfx.c, `PortTbo_SpecDraw`), with the same kit; the menu
-  reads the PC's controller and keyboard itself (`Port_PadRead`: the spectator's pad plays nobody) and keeps its
-  variables out of the game's state (`TB_HOST`, section `.porthst`). What it draws goes through the game's own draw
-  lists, so a spectator that shows the line differs from its host in those bytes of its state (the fight's values
-  and the check values are the same: tested below); `BT3_SPEC_LINE=0` leaves the line out, and the whole state is
-  the same again. The players' "N watching" corner and F1's entries stay as they were (ImGui).
+  the screen ("Spectating A vs B", the view, R1: change, START: menu; catching up; a desync), drawn by the game over
+  every screen of the match from `Gfx_EndFrame` (src/sys/gfx.c, `PortTbo_SpecDraw`) with the pages' kit; and, in a
+  fight, its own pause menu (START, Esc, or the key bound to START) in the battle's own pause-menu box, drawn by the
+  battle's own menu engine (port/src/spec_menu.c; `BtlMenu_Draw` of src/battle/hud_0_b.c, through
+  `BtlMenu_PortDrawMenu`): the note "Your screen only: the fight goes on" where the battle's menus have their title
+  picture, Continue, View: Player 1 / Player 2 / Split Screen (left / right), Back to the Lobby (the owner), Leave /
+  Close the Lobby or Stop Watching, the latter with the battle's own "EXIT ?" Yes / No box (the versus pause menu's,
+  `PauseMenu_PortConfirmBox`). The box grows and shrinks over six frames and plays the menu's sounds as the
+  players' does. Nothing of the battle's own menus is touched: the engine's update is not run (the file moves the
+  cursor and the box itself), its texts reach the engine through `BtlMenu_GetItemText` (numbers 0x6FFF and on), and
+  the pad is read with `Port_PadRead` (the spectator's pad plays nobody). Outside a fight (the character select)
+  there is no menu. Drawing goes through the game's own draw lists, so a spectator that shows the line or the menu
+  differs from its host in those bytes of its state (the fight's values and the check values are the same: tested
+  below); `BT3_SPEC_LINE=0` leaves the line out, and the whole state is the same again. The players' "N watching"
+  corner and F1's entries stay as they were (ImGui).
 - *Text.* Every line is in port_tbo.c, so `port/tools/tbo_strings.py` lists it for translators (ids `tbo/...`; notes
-  for the new places). The lobby's own lines come from the owner's game in English and are translated where they
+  for the new places). port/src/spec_menu.c is listed as well. The lobby's own lines come from the owner's game in English and are translated where they
   are shown: whole lines by the file, lines with a name by their end ("%s joined the lobby" and four more), "Match %d:
   %s vs %s" by its parts. The Dragon Net Battle window's one new line is port text `net/lobby_joined`.
 - *Testing.* `BT3_TBO=1` opens Tenkaichi Budokai Online instead of the title (after the logos; with a lobby, its page);
@@ -3809,13 +3815,15 @@ Tested (this machine, offscreen, 127.0.0.1, local Worker; players fed the random
 | the pages with the pad alone: the owner takes Lobby on the list, two members type its code on Join Room's keypad (`BT3_PAD`, a fixed code from the local Worker) | lobby made and joined through the screens; a match, back, closed; the spectator's whole state identical to the host's over 6,972 blanks, the players' fight values over 7,030 |
 | the owner's pad on the page: a rule changed twice, a member's window, Move and the place, the chat's keypad typing | the lobby logs the new speed and the swap; screenshots below |
 | by address, owner + 3, two matches (the owner hosts and two watch; then the owner watches and passes the match on), `BT3_SPEC_LINE=0` | every spectator's whole state identical to its host's (5,731 to 5,782 blanks a match), the players' fight values identical; 179 / 180 check values each, none differed; all back on the page after each match |
-| by code, owner + 3: the owner a spectator, line and pause menus open (member and owner) | fight values identical to the host's (4,048 / 4,050 fight blanks); 227 check values each, none differed; the owner back to the lobby (test switch): everyone on the page again with "The owner went back to the lobby." |
+| by code, owner + 3, the owner and a member watching; the pause menu (the battle's box) driven with the pad: every item (Continue, View to player 2 and split, Back to the Lobby, Close the Lobby then No, Leave the Lobby then Yes) | fight values of both spectators and of the two players identical over the match (1,290 to 1,365 fight blanks); 141 check values each, none differed; the owner's Back brought everyone to the page, the member left |
+| a match of two: a spectator with the menu open, one with neither line nor menu | the first's fight values identical; the second's whole state identical (6,281 blanks) |
+| by code, owner + 3: the owner a spectator, line and pause menus open (member and owner; first version of the menu) | fight values identical to the host's (4,048 / 4,050 fight blanks); 227 check values each, none differed; the owner back to the lobby (test switch): everyone on the page again with "The owner went back to the lobby." |
 | by code: a spectator leaves mid-fight, the owner removes the 2P player mid-fight, a fifth joins and leaves, the owner closes | "Piccolo left the lobby" (the match goes on), everyone back with "Vegeta was removed from the lobby" (Vegeta: "The lobby's owner removed you from the lobby."), "Krillin joined / left", "The lobby was closed by its owner." |
 | a match of two by code with a spectator by code (`BT3_SPEC_LINE=0`), a quick match | spectator identical over 10,106 blanks; fight values identical (6,933 and 7,447 fight blanks) |
 | 0.1.38.7 against this build, both ways | fight values identical (4,283 / 4,282 fight blanks) |
 
 Screenshots were looked at for each page (owner and member, a rule being changed, a member's window, moving, the
-chat's keypad, a spectator's line, the member's and the owner's pause menu, a match of two's spectator, back on the
+chat's keypad, a spectator's line, the member's and the owner's pause menu next to a player's own, a match of two's spectator, back on the
 page after a match, removed, closed). The Windows build compiles (mingw-w64). Not done: a person with a controller.
 
 **Testing switches.** `BT3_LOBBY=lobby` (with a code), `lobby:<port>`, `lobbyjoin:<address>:<port>`, and a code with

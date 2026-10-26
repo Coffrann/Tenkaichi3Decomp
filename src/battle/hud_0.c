@@ -377,6 +377,29 @@ static void PauseMenu_PortLobbyPick(BtlMenu *menu, s32 pad) {
 }
 #endif
 
+#ifdef PORT
+/* The battle's menu work exists (between PauseMenu_Init and PauseMenu_Term): a spectator's own pause menu
+   (port/src/spec_menu.c) is drawn with it. Set the same way on every copy. */
+s32 gPortBtlMenuLive;
+#endif
+
+#ifdef PORT
+/* The versus pause menu's own yes / no box ("EXIT ?", Yes, No: a sub menu of three, its title a picture), for a
+   spectator's own pause menu to ask the same way (port/src/spec_menu.c); NULL when there is none. */
+BtlMenu *PauseMenu_PortConfirmBox(void) {
+    s32 i;
+
+    for (i = 0; i < gPauseMenuVersus.count; i++) {
+        BtlMenu *sub = gPauseMenuVersus.items[i].sub;
+
+        if (sub != NULL && sub->count == 3 && sub->items[0].text[0] < 0) {
+            return sub;
+        }
+    }
+    return NULL;
+}
+#endif
+
 /* Battle start: allocates the menu work. */
 void PauseMenu_Init(void) {
 #ifdef PORT
@@ -414,10 +437,16 @@ void PauseMenu_Init(void) {
     }
 #endif
     BtlMenu_Init();
+#ifdef PORT
+    gPortBtlMenuLive = 1;
+#endif
 }
 
 /* Battle end: frees it. */
 void PauseMenu_Term(void) {
+#ifdef PORT
+    gPortBtlMenuLive = 0;
+#endif
     BtlMenu_Term();
 }
 
