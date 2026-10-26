@@ -2185,6 +2185,18 @@ static void Tb_LobbyBtnBox(s32 k, f32 *x0, f32 *y0, f32 *x1, f32 *y1) {
 }
 
 static void Tb_PageIn(s32 on);
+/* The last page's hosts, going off to the right in front of the page's windows and behind the box (16 frames, as a
+   page comes in). */
+static void Tb_LobbyHostsOut(void) {
+    if (sTb->lbHostPose >= 0 && sTb->lbHostT < 16) {
+        f32 t = (f32)sTb->lbHostT / 16.0f;
+
+        Ps_SetShift(0.0f);
+        Tb_Hosts(sTb->lbHostPose, sTb->lbHostX + t * t * 320.0f, 350.0f, sTb->lbHostH);
+        Tb_PageIn(1);
+    }
+}
+
 static void Tb_DrawLobby(void) {
     PortLobbyView *v = &sTbLv;
     s32 i;
@@ -2194,6 +2206,7 @@ static void Tb_DrawLobby(void) {
         if (v->state == 3) { /* (closed: the window says why, the hosts are puzzled) */
             Tb_Hosts(TBO_HOSTS_PUZZLED, 400.0f, 350.0f, 230.0f);
         }
+        Tb_LobbyHostsOut();
         return;
     }
     Ps_Panel(TBO_KIT_WINDOW, LB_L0, 52.0f, LB_L1, 316.0f, 0x80);
@@ -2245,6 +2258,7 @@ static void Tb_DrawLobby(void) {
             Ps_Pill(TBO_KIT_BAR, x0, y0, x1, y1, act == LB_ACT_START && !Tb_LobbyCanStart() ? 0x58 : 0x80);
         }
     }
+    Tb_LobbyHostsOut();
 }
 
 static void Tb_DrawLobbyText(void) {
@@ -2286,7 +2300,7 @@ static void Tb_DrawLobbyText(void) {
             }
             if (v->ready[i]) {
                 Ps_Align(2);
-                Ps_Text(240.0f, Ps_TextTop(mid, 0.42f), "READY", 0.42f, 36.0f, 5);
+                Ps_Text(228.0f, Ps_TextTop(mid, 0.42f), "READY", 0.42f, 36.0f, 5); /* (inside the bar's round end) */
                 Ps_Align(0);
             }
         } else {
@@ -2384,11 +2398,7 @@ static void Tb_DrawLobbyWin(void) {
     static char line[256];
     s32 i;
 
-    if (sTb->lbHostPose >= 0 && sTb->lbHostT < 24) { /* the last page's hosts, going off to the right in front of it */
-        f32 t = (f32)sTb->lbHostT / 24.0f;
 
-        Tb_Hosts(sTb->lbHostPose, sTb->lbHostX + t * t * 340.0f, 350.0f, sTb->lbHostH); /* (slowly at first) */
-    }
     if (v->state == 1 || v->state == 3) {
         Ps_Panel(TBO_KIT_WINDOW, 40.0f, 110.0f, 330.0f, 250.0f, 0x80);
         if (v->state == 1) {
