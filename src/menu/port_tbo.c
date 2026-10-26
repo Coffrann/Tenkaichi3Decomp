@@ -1725,8 +1725,8 @@ static void Tb_LobbyCreate(void) {
 /* The buttons on the right, by place (0 top left, 1 top right, 2 bottom left, 3 bottom right): LB_ACT_, 0 none. The
    owner has four; a member three, Leave across the bottom row. */
 static s32 Tb_LobbyAct(s32 k) {
-    static const s32 own[4] = {LB_ACT_START, LB_ACT_READY, LB_ACT_CHAT, LB_ACT_LEAVE};
-    static const s32 member[4] = {LB_ACT_READY, LB_ACT_CHAT, LB_ACT_LEAVE, 0};
+    static const s32 own[4] = {LB_ACT_START, LB_ACT_READY, LB_ACT_CHAT, 0};
+    static const s32 member[4] = {LB_ACT_READY, LB_ACT_CHAT, 0, 0}; /* (leaving: triangle, with its yes / no) */
 
     return sTbLv.owner ? own[k & 3] : member[k & 3];
 }
@@ -1925,26 +1925,27 @@ static void Tb_LobbyPopUpdate(void) {
 /* Up (-1) and down (1) on the right side: the rules (the owner's), then the two rows of buttons, and round. */
 static s32 Tb_LobbyNext(s32 r, s32 dir) {
     s32 owner = sTbLv.owner;
+    s32 row1 = Tb_LobbyAct(2) != 0; /* (a second row of buttons) */
 
     if (dir > 0) {
         if (r < LB_BTN) {
             return r + 1; /* (the last rule: to the first button) */
         }
         if (r < LB_BTN + 2) {
-            return Tb_LobbyAct(r - LB_BTN + 2) != 0 ? r + 2 : LB_BTN + 2;
+            return row1 ? (Tb_LobbyAct(r - LB_BTN + 2) != 0 ? r + 2 : LB_BTN + 2) : owner ? 0 : r;
         }
         return owner ? 0 : r - 2;
     }
     if (r == 0) {
-        return LB_BTN + 2;
+        return row1 ? LB_BTN + 2 : LB_BTN;
     }
     if (r < LB_BTN) {
         return r - 1;
     }
     if (r < LB_BTN + 2) {
-        return owner ? LB_BTN - 1 : LB_BTN + 2;
+        return owner ? LB_BTN - 1 : row1 ? LB_BTN + 2 : r;
     }
-    return r - 2;
+    return LB_BTN;
 }
 
 static void Tb_LobbyUpdate(s32 live) {
@@ -2131,11 +2132,11 @@ static f32 Tb_LobbyRuleY(s32 i) {
 }
 
 static void Tb_LobbyBtnBox(s32 k, f32 *x0, f32 *y0, f32 *x1, f32 *y1) {
-    s32 wide = !sTbLv.owner && k == 2; /* (a member's Leave across the row) */
+    s32 wide = (k & 1) == 0 && Tb_LobbyAct(k + 1) == 0; /* (a button alone in its row: across it) */
 
     *x0 = (k & 1) ? (LB_R0 + LB_R1) * 0.5f + 3.0f : LB_R0;
     *x1 = (k & 1) || wide ? LB_R1 : (LB_R0 + LB_R1) * 0.5f - 3.0f;
-    *y0 = k < 2 ? 260.0f : 290.0f;
+    *y0 = Tb_LobbyAct(2) == 0 ? 274.0f : k < 2 ? 260.0f : 290.0f; /* (one row: in the middle of the place for two) */
     *y1 = *y0 + 24.0f;
 }
 

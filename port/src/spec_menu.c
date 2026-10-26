@@ -39,7 +39,7 @@ static BtlMenuItem sItem[5], sSureItem[3];
 static int sYes = 0; /* the yes / no box's Yes (No is the next) */
 static BtlMenu sMain, sSure;
 static int sKind[5], sCount, sOpen, sClosing, sLeaveAfter, sBackAfter, sSaid = -1;
-static u16 sText[8][96];
+static u16 sText[9][96]; /* (8: a lobby's "Back to the Lobby" in the players' menus) */
 static PortLobbyView sView;
 static unsigned sHeld;
 static int sRepeat;
@@ -122,7 +122,12 @@ static void put_text(u16 *dst, int cap, const char *s) {
 
 /* The engine asks for our item k's text (hud_0_b.c, BtlMenu_GetItemText). */
 u16 *PortSpecMenu_Text(s32 k) {
-    if (k < 0 || k >= 8) {
+    if (k == 8) { /* a lobby's match: the owner's way back in the players' pause and result menus (src/battle/hud_0.c) */
+        char line[96];
+        item_line(IT_BACK, line, sizeof(line));
+        put_text(sText[8], 96, line);
+    }
+    if (k < 0 || k >= 9) {
         k = 0;
     }
     return sText[k];

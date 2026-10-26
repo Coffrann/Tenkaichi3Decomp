@@ -239,9 +239,10 @@ u16 *BtlMenu_GetItemText(s32 n) {
     extern s32 gPortTboSpar; /* menu/port_tbo.c */
     u16 *s;
 
-    if (n >= 0x6FFF) { /* a spectator's own pause menu (port/src/spec_menu.c): its texts are its own (0x6FFF its header) */
+    if (n >= 0x6FFE) { /* the port's own (port/src/spec_menu.c): a lobby's "Back to the Lobby" (0x6FFE), a spectator's
+                          own pause menu (0x6FFF its header, 0x7000 on its items) */
         extern u16 *PortSpecMenu_Text(s32 k);
-        return PortSpecMenu_Text(n == 0x6FFF ? 7 : n - 0x7000);
+        return PortSpecMenu_Text(n == 0x6FFE ? 8 : n == 0x6FFF ? 7 : n - 0x7000);
     }
     s = BtlMenu_GetText(n + 8);
     if (gPortTboSpar) {

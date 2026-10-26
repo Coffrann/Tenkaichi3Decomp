@@ -56,11 +56,9 @@ s32 Duel_Main(void) {
                 bgm = 0;
                 gProgress->mode = 38;
 #ifdef PORT /* PC build, online session: there is no versus menu in it; going back leaves for the main menu, which
-               ends the session (as cancelling the versus menu does). In a lobby's match only its owner ends the
-               session (port/src/gs/net_lobby.c): going back from the select opens it again. */
-                if (Port_NetSession() && Port_NetLobbyOwnerSide() >= 0) {
-                    gProgress->mode = 39;
-                } else if (Port_NetSession()) {
+               ends the session (as cancelling the versus menu does). In a lobby's match only its owner can go back
+               (menu_c_e.c, CharSel_PortLobbyHold): everyone is back in the lobby (port/src/gs/net_lobby.c). */
+                if (Port_NetSession()) {
                     gProgress->mode = 4;
                     result = 0;
                     done = 1;
@@ -79,8 +77,9 @@ s32 Duel_Main(void) {
                 gProgress->mode = 38;
 #ifdef PORT /* PC build, online session: there is no versus menu in it; going back leaves for the main menu, which
                ends the session (as cancelling the versus menu does). In a lobby's match only its owner ends the
-               session (port/src/gs/net_lobby.c): going back from the select opens it again. */
-                if (Port_NetSession() && Port_NetLobbyOwnerSide() >= 0) {
+               session (port/src/gs/net_lobby.c), as from the character select; the team select goes back on the
+               first pad alone, so another's going back opens it again. */
+                if (Port_NetSession() && Port_NetLobbyOwnerSide() > 0) {
                     gProgress->mode = 40;
                 } else if (Port_NetSession()) {
                     gProgress->mode = 4;

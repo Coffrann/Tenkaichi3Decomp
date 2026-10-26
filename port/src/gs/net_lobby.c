@@ -33,7 +33,7 @@
  *
  * Testing: BT3_LOBBY=lobby (a lobby with a room code), lobby:<port> (on a port), lobbyjoin:<address>:<port>; a
  * code of a lobby with BT3_LOBBY=join:<code>. BT3_LOBBY_DO=<what>|<what>|...: one after the other, each
- * "<seconds>:<command>" (that long after the one before was done): start, back, leave, kick <place>,
+ * "<seconds>:<command>" (that long after the one before was done): start, back, leave, quit (the program ends), kick <place>,
  * move <place> <place>, rule <rule> <step>, ready, say <text>, wait <members> (until that many are there),
  * waitmatch (until a match is on), waitlobby (until none is). The lobby's changes are written to the log.
  */
@@ -886,6 +886,39 @@ static const char *no_text(uint32_t why) {
 
 static void lobby_off(void);
 
+/* The program ends (its window closed, the game quit: atexit) while it is in a lobby: the owner closes it for
+   everyone and a member leaves, three times as when it is done from the screens, on the socket it has (in a match
+   the session's, which reaches the same games). Then the others know at once instead of after the silence. */
+static void lobby_goodbye(void) {
+    static int said;
+    int k, r;
+    if (said || sL.on == 0 || NetIo_Sock() < 0) {
+        return;
+    }
+    said = 1;
+    for (r = 0; r < 3; r++) {
+        if (sL.on == 1) {
+            for (k = 1; k < LOBBY_SLOTS; k++) {
+                if (sL.m[k].on) {
+                    close_send(&sL.m[k].addr, CLOSE_CLOSED, "");
+                }
+            }
+        } else {
+            uint32_t p[3] = {MAGIC, T_L_LEAVE, sL.myId};
+            send_to(p, sizeof(p), &sL.owner);
+        }
+    }
+    fprintf(stderr, "bt3: lobby: the program ends: %s\n", sL.on == 1 ? "the lobby is closed for everyone" : "this game leaves the lobby");
+}
+
+static void goodbye_arm(void) {
+    static int armed;
+    if (!armed) {
+        armed = 1;
+        atexit(lobby_goodbye);
+    }
+}
+
 static void member_closed(const char *why) {
     SDL_strlcpy(sL.error, why, sizeof(sL.error));
     fprintf(stderr, "bt3: lobby: %s\n", why);
@@ -1329,6 +1362,7 @@ static void do_cmd(const Cmd *c) {
 
 static void owner_start(int byCode, int port, const char *r) {
     int local, s;
+    goodbye_arm();
     memset(&sL, 0, sizeof(sL));
     local = NetIo_Open(byCode ? 0 : port);
     if (local < 0) {
@@ -1376,6 +1410,7 @@ static void member_start(void) {
     int relay = sL.candRelay;
     memcpy(cand, sL.cand, sizeof(cand));
     SDL_strlcpy(self, sL.self, sizeof(self));
+    goodbye_arm();
     memset(&sL, 0, sizeof(sL));
     memcpy(sL.cand, cand, sizeof(cand));
     sL.candCount = was;
@@ -1565,6 +1600,9 @@ static void script(void) {
             Port_LobbyDo(LOBBY_BACK, 0, 0);
         } else if (strncmp(c, "leave", 5) == 0) {
             Port_LobbyDo(LOBBY_LEAVE, 0, 0);
+        } else if (strncmp(c, "quit", 4) == 0) { /* the program ends as when its window is closed (atexit) */
+            fprintf(stderr, "bt3: lobby: test: quit\n");
+            exit(0);
         } else if (sscanf(c, "kick %d", &a) == 1) {
             Port_LobbyDo(LOBBY_KICK, a, 0);
         } else if (sscanf(c, "move %d %d", &a, &b) == 2) {

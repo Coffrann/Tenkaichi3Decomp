@@ -344,14 +344,19 @@ static void PauseMenu_PortLobby(void) {
             } else if (k == 1 && haveBack) {
                 sLobbyPause[k][sLobbyPauseCount[k]] = pause[i]; /* (its yes / no box stays) */
                 sLobbyPause[k][sLobbyPauseCount[k]].id = 0xE;
-                sLobbyPause[k][sLobbyPauseCount[k]].text[0] = back.text[0];
-                sLobbyPause[k][sLobbyPauseCount[k]].text[1] = back.text[1];
+                sLobbyPause[k][sLobbyPauseCount[k]].text[0] = 0x6FFE; /* "Back to the Lobby" (hud_0_b.c) */
+                sLobbyPause[k][sLobbyPauseCount[k]].text[1] = 0x6FFE;
                 sLobbyPauseCount[k]++;
             }
         }
         for (i = 0; i < gPauseMenuResultVersus.count; i++) {
             if (result[i].id == 0x13 || result[i].id == 0xD || (k == 1 && result[i].id == 0xE)) {
-                sLobbyResult[k][sLobbyResultCount[k]++] = result[i];
+                sLobbyResult[k][sLobbyResultCount[k]] = result[i];
+                if (result[i].id == 0xE) { /* "Return to Vs Menu" reads "Back to the Lobby" (hud_0_b.c) */
+                    sLobbyResult[k][sLobbyResultCount[k]].text[0] = 0x6FFE;
+                    sLobbyResult[k][sLobbyResultCount[k]].text[1] = 0x6FFE;
+                }
+                sLobbyResultCount[k]++;
             }
         }
     }

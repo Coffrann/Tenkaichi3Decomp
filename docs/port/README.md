@@ -3700,8 +3700,8 @@ is in Tenkaichi Budokai Online, which the main menu goes to by itself.) The page
 - the rules as rows with left / right: battle (single, team, DP 10 / 15 / 20), time limit, game speed (100 to 150 in
   steps, 114 marked as the standard), rollback, input delay. A new lobby starts from Create Room's choices. Everyone
   sees them change at once; while a match is on they cannot change;
-- Start Match (the owner, with both player places taken; also START), Ready / Not Ready, Chat, Leave Lobby (the
-  owner: Close Lobby; also triangle, with a yes / no window), the code (square copies it on a PC), and in the box at
+- Start Match (the owner, with both player places taken; also START), Ready / Not Ready, Chat, leaving (triangle:
+  Leave / Close the Lobby, with a yes / no window), the code (square copies it on a PC), and in the box at
   the foot of the screen the last three things that happened ("Vegeta joined the lobby", "Match 2: Goku vs Vegeta",
   the chat's lines).
 
@@ -3777,6 +3777,23 @@ of Tenkaichi Budokai Online's pages; "the less we rely on ImGui the better").
   own font; before anything has, the hosts' hint. While the lobby is being reached a window says so (circle or
   triangle: cancel); when it is closed, why, and OK goes back to the list. The screen reader is told the page, what
   the cursor is on, what was typed and each new line of what happened.
+- *Changed after the first test by the user* (the same day): the page has no Close / Leave button (triangle does it,
+  with its yes / no): the owner's buttons are Start Match and Ready, with Chat across the row under them; a member's
+  Ready and Chat, one row in the middle. Going back from a lobby match's character select is the owner's way back to
+  the lobby for everyone (as "Back to the Lobby" in a fight: the session ends on every copy); the other player's
+  triangle does nothing there (src/menu/menu_c_e.c, `CharSel_PortLobbyHold`; before, the select opened again). The
+  players' pause menu and the menu after a battle say "Back to the Lobby" for the owner's way back (the item
+  "Return to Vs Menu" kept, its text the port's: text number 0x6FFE, hud_0_b.c). A lobby's game that ends (its
+  window closed, the game quit: atexit) sends what leaving does: the owner closes the lobby for everyone (CLOSE, three
+  times, also in a match, from its socket then), a member leaves (LEAVE); the others know at once ("The lobby was
+  closed by its owner." / "NAME left the lobby") instead of after 15 s of silence. And the player's name is the
+  setting `net_name` (the settings file's, as Dragon Net Battle's window writes it; Profile writes it too) before
+  online_name.txt: two copies with their own settings files had both read the shared file's "Player".
+  Tested (by code, owner + 2): the player's pause and result menus with "Back to the Lobby"; the 2P player's
+  triangle at the character select (nothing), then the owner's (everyone back on the page); the owner quitting in the
+  lobby, at the character select and mid-fight (the members: "The lobby was closed by its owner." at once), the 2P
+  player quitting mid-fight ("Vegeta left the lobby", everyone back); fight values identical in every match.
+  `BT3_LOBBY_DO` has `quit` (the program ends, as when its window is closed).
 - *Chat* is the name's keypad (letters, digits, -_.!?#&*+, space; the PC keyboard types any plain character but < and
   >), up to 60 characters, sent with Done or START; the lines are in the talk box. No ImGui is left in the lobby.
 - *Getting there.* The hub's new Lobby (between Join Room and Friends; the list is ten bars now, 26 units apart

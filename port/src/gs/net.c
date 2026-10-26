@@ -3567,11 +3567,27 @@ int Port_LobbyOther(void) {
    session begins wherever the game is (it starts from the game's first moment anyway). */
 static int sLobbyBg;
 
+/* The player's name: the setting net_name (the settings file's, which Dragon Net Battle's window and Tenkaichi
+   Budokai Online's Profile both write), else online_name.txt beside the program (where Profile alone wrote it
+   before: a game started with its own settings file, BT3_SETTINGS, kept the shared file's name). */
+extern void Port_SettingText(const char *name, const char *def, char *out, int size);
+extern void Port_SettingTextSave(const char *name, const char *value);
+extern void Port_SettingsWrite(void);
 const char *Port_NetNameGet(void) {
     static int loaded;
     if (!loaded) {
-        FILE *f = fopen("online_name.txt", "rb");
+        char set[64];
+        FILE *f;
         loaded = 1;
+        if (strcmp(sMyName, "Player") != 0) {
+            return sMyName; /* (a name given before it was first asked for: BT3_NET_NAME, tests) */
+        }
+        Port_SettingText("net_name", "", set, sizeof(set));
+        if (set[0] != 0) {
+            Port_NetNameSet(set);
+            return sMyName;
+        }
+        f = fopen("online_name.txt", "rb");
         if (f != NULL) {
             char line[64] = "";
             size_t n = fread(line, 1, sizeof(line) - 1, f);
@@ -3589,6 +3605,8 @@ const char *Port_NetNameGet(void) {
 void Port_NetNameSave(const char *name) {
     FILE *f;
     Port_NetNameSet(name);
+    Port_SettingTextSave("net_name", sMyName);
+    Port_SettingsWrite();
     f = fopen("online_name.txt", "wb");
     if (f != NULL) {
         fputs(sMyName, f);
