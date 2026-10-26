@@ -3679,3 +3679,117 @@ on one graphics card made frames of up to 100 ms on the players' copies: this ma
 desync; two 0.1.38.7 copies by room code through the new Worker: connected as before; a spectator of a 0.1.38.7
 host: "No answer from the host..." after 10 s by address, the same or "No room with that code..." by code. The
 Windows build compiles (mingw-w64).
+
+## Lobbies (2026-10-26)
+
+An eight-place lobby on top of the spectators (the chapter above): two players and up to six spectators meet at the
+game of the one who made it, the owner. The owner puts people in the places, chooses the rules and starts the
+matches; the two in the player places play, everyone else watches.
+
+**In the game.** Dragon Net Battle has a fourth tab, Lobby: "Create a lobby" asks for nothing (with a room code, or on
+a port when "Use a room code" is off) and the lobby's window opens at once with the code to hand on. Others join with
+that code (or the owner's address and port) on the Join tab, with either button: the service's answer (or the owner's
+game, by address) says it is a lobby, and the game becomes a member. The window (gs/ui.cpp, `build_lobby`):
+
+- the places: 1P and 2P, then spectators 1 to 6. The owner picks a name, then a place: the two swap. "Out" removes
+  someone. A newcomer takes the first free place (a player's while one is free and no match is on);
+- the rules as rows of the game's menus, the value between two arrows, left / right to change it (keys, D-pad,
+  stick, or the arrows clicked): battle (single, team, DP 10 / 15 / 20), time limit, game speed (100 to 150 in
+  steps, 114 marked as the standard), rollback, input delay: what the Host tab offers. The owner's last Host-tab
+  choices are where a new lobby starts. Everyone sees them change at once; while a match is on they cannot change;
+- Start the match (the owner, with both player places taken), Ready (each one's, shown to all), Leave the lobby (the
+  owner: Close the lobby), the last thing that happened ("Vegeta joined the lobby", "Match 2: Goku vs Vegeta"), and a
+  chat for everyone in the lobby.
+
+**A match.** The game in 1P hosts it, the one in 2P joins it, as any online match (the character select, rematches,
+everything as in a match from the Host tab), with the lobby's rules. Everyone else watches it as a spectator **of the
+owner**: the owner's game passes the match on to them whatever its own part is (host; the one who joined: its own
+confirmed input of both players; a spectator itself: what its host sent it, check values included). So the members
+only ever talk to the owner, whom they can already reach, and the owner's view or part makes no difference to them.
+The two players reach each other directly (when one of them is the owner, over the lobby's own connection); when
+neither is, the host knocks at the other's address as the owner sees it and at its own public address (STUN), and the
+one who joins greets both.
+
+**Back to the lobby.** Only the owner, three ways: the game's pause menu mid-fight and its menu after a battle have
+"Return to Vs Menu" for the owner's side (with the pause menu's yes / no box), which ends the battle on every copy and
+the session with it (`src/battle/hud_0.c` builds the menus' two forms at a battle's start, the owner's with the entry
+and the other player's without it and without "Return to Main Menu", and picks one each time a menu runs, by its pad;
+the owner's side travels in bits 24..27 of the rules word, the same on every copy; `src/menu/menu_a_b.c` turns that
+result into the main menu, which ends the session); F1 > "Back to the lobby"; and a spectating owner's own pause menu.
+Every member's session ends on the owner's word (`T_LOBBY_BACK`) and all are in the lobby window again, where the
+rules can be changed and the next match started. Going back from the character select opens it again in a lobby's
+match (`src/menu/menu_g_b.c`): only the owner ends it.
+
+**A spectator's pause menu** (START, Esc or the key bound to START): only on its screen, nothing stops. Change view
+(player 1's, player 2's, split, as V / R1), Leave the lobby, and for the owner Back to the lobby.
+
+**Leaving.** Anyone, at any time: the window's button, F1, a spectator's pause menu. A spectator leaving changes
+nothing for the others (its place frees). A player leaving mid-fight ends the match: everyone is back in the lobby
+window with "NAME left the lobby", and the owner fills the free place. The owner leaving closes the lobby for everyone
+("The lobby was closed by its owner."). A member whose game falls silent for 15 s is dropped (a player's: the match
+ends); a member that hears nothing from the owner for 15 s says the lobby is closed. Removed members read "The lobby's
+owner removed you from the lobby." A full lobby answers "This lobby is full (8 places)."
+
+**How** (port/src/gs/net_lobby.c; packets 30 to 40, ignored by older releases). The owner keeps the places, the
+rules, who is ready; members greet it (`HELLO`: versions, gameplay fingerprint, name, own public address) and say
+every second that they are there (`ALIVE`: ready, the match they were sent to, the match they are in, connected); the
+owner sends the whole lobby every second and at each change (`STATE`, 368 bytes). `GO` tells a member its part in
+match n (host, join an address, watch the owner) with the rules, rollback and delay; the session begins as one from
+the lobby window always does (the state put back to the first blank, gs/state.c) on the lobby's own socket, which the
+session hands back when it ends (`Port_NetSessionEnd`: no close, no relay given up). `BACK`, `CLOSE`, `LEAVE`,
+`CHAT` / `SAID`. Everything runs on the game's thread: outside a session from `Port_VBlank` (`Lobby_Pump`), in one
+from the look at the socket (`receive`). The owner sends `GO` again to a spectator that is back in the lobby window
+while the match is on (a desync, its connection), and ends the match when a player's session has ended or the two
+have not connected in 40 s. Nothing of the two players' traffic changed; a lobby is a release-after-0.1.38.7 thing.
+
+Lobbies need the session without a start again (the 64-bit programs with their .mem list; otherwise the window says
+so). The ImGui windows are only drawn; the game's state is the same in every view.
+
+**Old releases.** A 0.1.38.7 with the code: the service answers "old" (it shows "Update available. Online servers
+are unreachable until you update."). By address: the owner answers its greeting as a host of another release would ("The
+host's game is a different version"). A new game greeting by address as for a match of two is told "lobby"
+(`INVITE`) and becomes a member.
+
+**The relay.** The owner holds the relay (net_relay.c now serves up to twelve addresses, each with a channel of its
+own, and lets sixteen through): a member who joined with the code and has not reached the owner in eight seconds
+makes it ask for one, once per lobby (`/v1/relay`, allowed to a lobby's owner once a member has come); members learn
+its address by polling with their key. Cloudflare documents no limit on peers or channels per allocation that we
+know of; TURN itself allows 4096 channels. **Not tested against Cloudflare's service** (no local TURN server here):
+the multi-peer client is exercised only by code reading; a match of two through the relay uses one place as before.
+The two players reach each other directly only (when neither is the owner): two players who cannot are told "The two
+players could not connect to each other." after 40 s; routing their match through the owner is not done.
+
+**Testing switches.** `BT3_LOBBY=lobby` (with a code), `lobby:<port>`, `lobbyjoin:<address>:<port>`, and a code with
+`join:<code>` or `spectate:<code>`. `BT3_LOBBY_DO=<s>:<command>|...` (each that many seconds after the one before was
+done): `start`, `back`, `leave`, `kick <place>`, `move <place> <place>`, `rule <rule> <step>` (0 battle, 1 time,
+2 speed, 3 rollback, 4 delay), `ready`, `say <text>`, `wait <members>`, `waitmatch`, `waitlobby`, `waitseq <state>`
+(the battle sequence's state, 6 the result menu). `BT3_SPEC_PAUSE_AT=<s>`: a lobby spectator's pause menu opens
+that long into its match (for screenshots).
+
+**Found on the way.** The spectator's "Joining the match as a spectator..." stayed on its screen for the whole
+match; a test line (`BT3_NET_LATENCY`) delivered what it held back from one session in the next.
+
+**Tested** (this machine, offscreen, 127.0.0.1; players fed the random-press table, rollback 8, `BT3_NET_LATENCY=20`
+where said; `BT3_HASH` of each copy compared session by session, the last line of a blank counting):
+
+| case | result |
+|---|---|
+| owner + 4 by address, three matches: owner hosts (3 watch it); m2 hosts, m1 joins, the owner watches and passes it on to 2; m2 hosts, the owner joins and passes it on to 3 | every spectator's whole state identical to its host's in every blank (5,181 / 5,182 / 4,536 to 4,584 blanks a match), the two players' fight values identical; 1,399 check values compared, none differed |
+| by room code through a local copy of the new Worker: owner + 3, two matches with players swapped, a fourth (`spectate:` with the code) joining mid-match | members in by the code; the late one caught up 359 blanks and was identical over 3,941 |
+| 0.1.38.7 with the lobby's code / by address, before and during a match | "Update available..." / "The host's game is a different version" |
+| a new game knocking by address with Join and with Watch, before and during a match | became members (the second watched the running match) |
+| owner back mid-fight (F1 / the test switch), after a battle (at its result menu), with the game's pause menu ("Return to Vs Menu", Yes) | everyone back in the lobby window each time; the other player's pause menu has 3 entries, its result menu 2 |
+| rules changed, players moved, started again | the members' copies log the same places and rules; the next match runs with them |
+| a spectator leaves mid-fight; a player leaves mid-fight; a player removed mid-fight; the owner closes mid-fight and in the lobby | nothing / everyone back with "m1 left the lobby" / back with "m3 was removed from the lobby" (m3: "removed you") / everyone "The lobby was closed by its owner." |
+| a ninth game | "This lobby is full (8 places)." |
+| chat | every line reached every member once |
+
+Pacing of the two players (owner 1P and a member 2P drawing, `BT3_LAG_LOG`, 150 s, 60 s battles): without spectators
+33.28 / 33.28 ms between pictures on average, 99th percentile 35.1 / 33.9, longest 37.6 / 37.6, no waits; with six
+spectators (not drawing, and computing the state checksum every blank) 33.06 / 33.21, 35.2 / 34.0, longest 43.1 /
+42.9 (one picture over 40 ms each), no waits; rollbacks per 600 blanks the same (47.4 / 47.9). (Spectators that draw
+on this machine's one graphics card stall the players' pictures by up to 1.9 s, with the spectator branch's own build
+as much as with this one: this machine, not the netcode; the spectator tests above did not draw them either.)
+Unchanged: a match of two with a spectator (whole state identical over 8,090 blanks), 0.1.38.7 against this build
+both ways (fight values identical over 4,380 fight blanks), `node port/matchmaking/test.mjs` (17 new checks for lobbies, the earlier ones unchanged). The
+Windows build compiles (mingw-w64).
