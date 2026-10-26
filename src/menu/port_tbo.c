@@ -2300,6 +2300,7 @@ static void Tb_DrawLobbyText(void) {
 
 /* The windows over the page (drawn last): the lobby under way or closed, the owner's choices over a place, leaving,
    and the chat's keypad. */
+#define TB_MSG_NOTE 0.88f /* a window's explanation, smaller than its heading (Ps_Heading 0.9) */
 static void Tb_MsgLines(f32 x, f32 y, f32 width, const char *text, s32 maxLines) {
     static char part[160];
     s32 at = 0;
@@ -2315,14 +2316,14 @@ static void Tb_MsgLines(f32 x, f32 y, f32 width, const char *text, s32 maxLines)
             if (text[at + n] == ' ') {
                 lastSpace = n;
             }
-            if (Ps_MsgWidth(part, 1.0f) > width && lastSpace > 0) {
+            if (Ps_MsgWidth(part, TB_MSG_NOTE) > width && lastSpace > 0) {
                 n = lastSpace;
                 break;
             }
             n++;
         }
         part[n] = 0;
-        Ps_Msg(x, y + 20.0f * (f32)lines, part, 1.0f, 0x80);
+        Ps_Msg(x, y + 18.0f * (f32)lines, part, TB_MSG_NOTE, 0x80);
         at += n;
         while (text[at] == ' ') {
             at++;
@@ -2339,16 +2340,16 @@ static void Tb_DrawLobbyWin(void) {
     if (v->state == 1 || v->state == 3) {
         Ps_Panel(TBO_KIT_WINDOW, 40.0f, 110.0f, 330.0f, 250.0f, 0x80);
         if (v->state == 1) {
-            Ps_Text(60.0f, 122.0f, v->owner ? "OPENING THE LOBBY" : "JOINING THE LOBBY", 0.6f, 250.0f, 2);
-            Ps_Msg(60.0f, 162.0f, v->owner ? "Asking the matchmaking service for a code..." : "Looking for the lobby's owner...", 1.0f, 0x80);
+            Ps_Heading(60.0f, 118.0f, v->owner ? "Opening the Lobby" : "Joining the Lobby", 0.9f, 250.0f, 0x80);
+            Ps_Msg(60.0f, 160.0f, v->owner ? "Asking the matchmaking service for a code..." : "Looking for the lobby's owner...", 0.88f, 0x80);
         } else {
-            Ps_Text(60.0f, 122.0f, "NO LONGER IN THE LOBBY", 0.6f, 250.0f, 2);
+            Ps_Heading(60.0f, 118.0f, "No Longer in the Lobby", 0.9f, 250.0f, 0x80);
             if (v->error[0] != 0) { /* (not `?:` between the view's line and a literal: the 32-bit pointers) */
                 Tb_LobbyLine(line, 256, v->error);
             } else {
                 Tb_LobbyLine(line, 256, "The lobby is closed.");
             }
-            Tb_MsgLines(60.0f, 156.0f, 254.0f, line, 4);
+            Tb_MsgLines(60.0f, 158.0f, 254.0f, line, 4);
         }
         return;
     }
@@ -2357,15 +2358,15 @@ static void Tb_DrawLobbyWin(void) {
         f32 y0 = sTb->lbPop == LB_POP_LEAVE ? 120.0f : Tb_LobbyRowY(sTb->lbPopPlace) - 8.0f;
         f32 x0 = sTb->lbPop == LB_POP_LEAVE ? 126.0f : 150.0f;
         f32 x1 = sTb->lbPop == LB_POP_LEAVE ? 386.0f : 350.0f;
-        f32 top = sTb->lbPop == LB_POP_LEAVE ? 56.0f : 34.0f;
+        f32 top = sTb->lbPop == LB_POP_LEAVE ? 60.0f : 34.0f;
 
         if (y0 + top + 28.0f * (f32)count + 10.0f > 318.0f) {
             y0 = 318.0f - top - 28.0f * (f32)count - 10.0f;
         }
         Ps_Panel(TBO_KIT_WINDOW, x0, y0, x1, y0 + top + 28.0f * (f32)count + 10.0f, 0x80);
         if (sTb->lbPop == LB_POP_LEAVE) {
-            Ps_Text(x0 + 16.0f, y0 + 8.0f, v->owner ? "CLOSE THE LOBBY?" : "LEAVE THE LOBBY?", 0.6f, x1 - x0 - 32.0f, 2);
-            Ps_Msg(x0 + 16.0f, y0 + 30.0f, v->owner ? "Everyone in it goes back to the menus." : "You go back to the online menu.", 1.0f, 0x80);
+            Ps_Heading(x0 + 16.0f, y0 + 6.0f, v->owner ? "Close the Lobby?" : "Leave the Lobby?", 0.9f, x1 - x0 - 32.0f, 0x80);
+            Ps_Msg(x0 + 16.0f, y0 + 36.0f, v->owner ? "Everyone in it goes back to the menus." : "You go back to the online menu.", TB_MSG_NOTE, 0x80);
         } else {
             Ps_Text(x0 + 16.0f, y0 + 8.0f, v->name[sTb->lbPopPlace], 0.6f, x1 - x0 - 32.0f, 3);
         }
