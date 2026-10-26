@@ -362,6 +362,13 @@ typedef struct TboScreen {
     s32 lbPopCur;
     s32 lbPopPlace;     /* (the place the owner's window is about) */
     s32 lbChat;         /* the keypad for a line of chat is up */
+    s32 lbPopT;         /* frames since the window over the page opened */
+    s32 lbPopClose;     /* frames left of its going (it slides out, then is gone) */
+    s32 lbHostPose;     /* the hosts of the page the lobby's came from, who leave as it comes in (-1 none) */
+    f32 lbHostX;
+    f32 lbHostH;
+    s32 lbHostT;        /* frames since they began to go */
+    s32 lbSeenState;    /* the lobby's state last frame (reached: the page's windows come in then) */
     char chat[TB_CHAT_MAX + 1];
     s32 chatLen;
 } TboScreen;
@@ -1699,6 +1706,15 @@ static void Tb_RuleValue(char *out, s32 which) {
 
 /* The page opens (from the hub's Lobby, Join Room with a lobby's code, or the screens opened with a lobby on). */
 static void Tb_LobbyOpen(void) {
+    /* the hosts of the page it comes from go off to the right while the lobby's windows come in from the left (the
+       lobby's page has no room for them) */
+    sTb->lbHostPose = sTb->mode == TB_HUB ? TBO_HOSTS_MIC_WAVE : sTb->mode == TB_JOIN ? TBO_HOSTS_PUZZLED
+                    : sTb->mode == TB_WAIT ? (sTb->found ? TBO_HOSTS_CHEER : TBO_HOSTS_BINOCULARS) : -1;
+    sTb->lbHostX = sTb->mode == TB_HUB ? 396.0f : sTb->mode == TB_JOIN ? 432.0f : sTb->found ? 426.0f : 434.0f;
+    sTb->lbHostH = sTb->mode == TB_HUB ? 262.0f : sTb->mode == TB_JOIN ? 200.0f : sTb->found ? 180.0f : 210.0f;
+    sTb->lbPopClose = 0;
+    sTb->lbHostT = 0;
+    sTb->lbSeenState = sTbLv.state;
     sTb->lbCol = 0;
     sTb->lbPlace = 0;
     sTb->lbRight = LB_BTN;
@@ -1787,6 +1803,8 @@ static void Tb_LobbyAction(s32 act) {
     case LB_ACT_LEAVE:
         Snd_PlaySe(1, 0);
         sTb->lbPop = LB_POP_LEAVE;
+        sTb->lbPopT = 0;
+        sTb->lbPopClose = 0;
         sTb->lbPopCur = 1; /* (on No) */
         break;
     }
@@ -1882,6 +1900,20 @@ static char *Tb_LobbyPopItem(s32 i) {
     return i == 1 && !sTbLv.isOwner[sTb->lbPopPlace] ? "Remove from the Lobby" : "Back";
 }
 
+#define TB_POP_IN 10  /* frames a window over the lobby's page takes to come in */
+#define TB_POP_OUT 8  /* ... and to go */
+
+/* How far in a window over the page is, 0..1 (eased as the pages' slide, Tb_In). */
+static f32 Tb_LobbyPopIn(void) {
+    f32 t = sTb->lbPopClose > 0 ? (f32)sTb->lbPopClose / (f32)TB_POP_OUT : (f32)sTb->lbPopT / (f32)TB_POP_IN;
+
+    if (t > 1.0f) {
+        t = 1.0f;
+    }
+    t = 1.0f - t;
+    return 1.0f - t * t * t;
+}
+
 static void Tb_LobbyPopUpdate(void) {
     Pad *pad = &gPad[0];
     s32 count = Tb_LobbyPopCount();
@@ -1892,7 +1924,7 @@ static void Tb_LobbyPopUpdate(void) {
     Ps_Move(&sTb->lbPopCur, count);
     if (pad->gamePressed & (PADG_TRIANGLE | PADG_CIRCLE)) {
         Snd_PlaySe(1, 2);
-        sTb->lbPop = 0;
+        sTb->lbPopClose = TB_POP_OUT; /* (it slides out first) */
         return;
     }
     if (!(pad->gamePressed & PADG_CROSS)) {
@@ -1906,7 +1938,7 @@ static void Tb_LobbyPopUpdate(void) {
         } else {
             Snd_PlaySe(1, 2);
         }
-        sTb->lbPop = 0;
+        sTb->lbPopClose = TB_POP_OUT; /* (it slides out first) */
         return;
     }
     if (strcmp(item, "Move") == 0) {
@@ -1919,7 +1951,7 @@ static void Tb_LobbyPopUpdate(void) {
         Snd_PlaySe(1, 1);
         Port_LobbyDo(LOBBY_KICK, sTb->lbPopPlace, 0);
     }
-    sTb->lbPop = 0;
+    sTb->lbPopClose = TB_POP_OUT; /* (it slides out first) */
 }
 
 /* Up (-1) and down (1) on the right side: the rules (the owner's), then the two rows of buttons, and round. */
@@ -1961,6 +1993,11 @@ static void Tb_LobbyUpdate(s32 live) {
             Tb_ChatClose();
         }
     }
+    sTb->lbHostT++;
+    if (v->state == 2 && sTb->lbSeenState == 1) {
+        sTb->modeT = 0; /* reached (joined, or the code came): the page's windows come in now, as a page's do */
+    }
+    sTb->lbSeenState = v->state;
     if (v->state == 0) { /* left, or closed and read */
         if (sTb->lbChat) {
             Tb_ChatClose();
@@ -2000,7 +2037,12 @@ static void Tb_LobbyUpdate(s32 live) {
         return;
     }
     if (sTb->lbPop != 0) {
-        if (live) {
+        sTb->lbPopT++;
+        if (sTb->lbPopClose > 0) { /* going: no input meanwhile */
+            if (--sTb->lbPopClose == 0) {
+                sTb->lbPop = 0;
+            }
+        } else if (live) {
             Tb_LobbyPopUpdate();
         }
         return;
@@ -2086,6 +2128,8 @@ static void Tb_LobbyUpdate(s32 live) {
             } else if (own && v->taken[i]) {
                 Snd_PlaySe(1, 1);
                 sTb->lbPop = LB_POP_MEMBER;
+                sTb->lbPopT = 0;
+                sTb->lbPopClose = 0;
                 sTb->lbPopPlace = i;
                 sTb->lbPopCur = 0;
             } else if (v->owner && v->phase) {
@@ -2140,13 +2184,16 @@ static void Tb_LobbyBtnBox(s32 k, f32 *x0, f32 *y0, f32 *x1, f32 *y1) {
     *y1 = *y0 + 24.0f;
 }
 
+static void Tb_PageIn(s32 on);
 static void Tb_DrawLobby(void) {
     PortLobbyView *v = &sTbLv;
     s32 i;
     s32 k;
 
     if (v->state != 2) {
-        Tb_Hosts(v->state == 3 ? TBO_HOSTS_PUZZLED : TBO_HOSTS_BINOCULARS, 400.0f, 350.0f, 230.0f);
+        if (v->state == 3) { /* (closed: the window says why, the hosts are puzzled) */
+            Tb_Hosts(TBO_HOSTS_PUZZLED, 400.0f, 350.0f, 230.0f);
+        }
         return;
     }
     Ps_Panel(TBO_KIT_WINDOW, LB_L0, 52.0f, LB_L1, 316.0f, 0x80);
@@ -2272,7 +2319,7 @@ static void Tb_DrawLobbyText(void) {
         f32 mid = Tb_LobbyRuleY(i) + 10.0f;
         s32 on = sTb->lbCol == 1 && sTb->lbRight == i && !sTb->lbChat;
 
-        Ps_Text(270.0f, Ps_TextTop(mid, 0.54f), sTbRuleName[i], 0.54f, 92.0f, on ? 1 : 0);
+        Ps_Text(282.0f, Ps_TextTop(mid, 0.54f), sTbRuleName[i], 0.54f, 92.0f, on ? 1 : 0); /* (inside its bar as the places' names are) */
         Tb_RuleValue(line, i);
         Ps_Align(2);
         Ps_Text(on && v->owner && v->phase == 0 ? 456.0f : 482.0f, Ps_TextTop(mid, 0.46f), line, 0.46f, 124.0f, 3);
@@ -2337,6 +2384,11 @@ static void Tb_DrawLobbyWin(void) {
     static char line[256];
     s32 i;
 
+    if (sTb->lbHostPose >= 0 && sTb->lbHostT < 24) { /* the last page's hosts, going off to the right in front of it */
+        f32 t = (f32)sTb->lbHostT / 24.0f;
+
+        Tb_Hosts(sTb->lbHostPose, sTb->lbHostX + t * t * 340.0f, 350.0f, sTb->lbHostH); /* (slowly at first) */
+    }
     if (v->state == 1 || v->state == 3) {
         Ps_Panel(TBO_KIT_WINDOW, 40.0f, 110.0f, 330.0f, 250.0f, 0x80);
         if (v->state == 1) {
@@ -2355,6 +2407,8 @@ static void Tb_DrawLobbyWin(void) {
     }
     if (sTb->lbPop == LB_POP_MEMBER || sTb->lbPop == LB_POP_LEAVE) {
         s32 count = Tb_LobbyPopCount();
+
+        Ps_SetShift((1.0f - Tb_LobbyPopIn()) * -200.0f); /* (it slides in from the left, and out the same way) */
         f32 y0 = sTb->lbPop == LB_POP_LEAVE ? 120.0f : Tb_LobbyRowY(sTb->lbPopPlace) - 8.0f;
         f32 x0 = sTb->lbPop == LB_POP_LEAVE ? 126.0f : 150.0f;
         f32 x1 = sTb->lbPop == LB_POP_LEAVE ? 386.0f : 350.0f;
@@ -2381,6 +2435,7 @@ static void Tb_DrawLobbyWin(void) {
             }
             Ps_Text(x0 + 28.0f, Ps_TextTop(y + 11.0f, 0.6f), Tb_LobbyPopItem(i), 0.6f, x1 - x0 - 56.0f, on ? 1 : 0);
         }
+        Ps_SetShift(0.0f);
     }
     if (sTb->lbChat) { /* the name's keypad, for a line to everyone */
         static char typed[TB_CHAT_MAX + 2];
