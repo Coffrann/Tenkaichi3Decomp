@@ -37,6 +37,9 @@
  * move <place> <place>, rule <rule> <step>, ready, say <text>, wait <members> (until that many are there),
  * waitmatch (until a match is on), waitlobby (until none is). The lobby's changes are written to the log.
  */
+#ifdef _WIN32
+#define _CRT_RAND_S /* (rand_s: the system's random numbers, RtlGenRandom) */
+#endif
 #include <SDL3/SDL.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -58,7 +61,7 @@
 #define MAGIC 0x4E335442u
 enum { T_HELLO = 1, T_HELLO_ACK = 2, T_SPEC_HELLO = 20 };
 enum { T_L_HELLO = 30, T_L_NO, T_L_STATE, T_L_ALIVE, T_L_GO, T_L_BACK, T_L_LEAVE, T_L_CLOSE, T_L_CHAT, T_L_SAID, T_L_INVITE };
-enum { LOBBY_VERSION = 1, FP_MARK = 0x46505231, LOBBY_CAP = 0x4C4F4231 /* "1BOL": a game's 1v1 greeting says it knows lobbies */ };
+enum { LOBBY_VERSION = 2, /* 2: STATE carries the member's nonce (its greeting's), which a member connecting asks for */ FP_MARK = 0x46505231, LOBBY_CAP = 0x4C4F4231 /* "1BOL": a game's 1v1 greeting says it knows lobbies */ };
 enum { LNO_VERSION = 1, LNO_DATA = 2, LNO_FULL = 3 };
 enum { CLOSE_CLOSED = 1, CLOSE_KICKED = 2 };
 #define NOTE 96
@@ -197,6 +200,28 @@ static const char *rules_text(void) {
 }
 
 static void log_push(const char *name, const char *text);
+
+/* A number nobody can guess, from the system (a member's nonce: the owner's first answer is known by it). */
+static uint32_t os_random32(void) {
+    uint32_t v = 0;
+#ifdef _WIN32
+    unsigned int r;
+    if (rand_s(&r) == 0) {
+        return (uint32_t)r;
+    }
+#else
+    FILE *f = fopen("/dev/urandom", "rb");
+    if (f != NULL) {
+        size_t got = fread(&v, 1, sizeof(v), f);
+        fclose(f);
+        if (got == sizeof(v)) {
+            return v;
+        }
+    }
+#endif
+    v = (uint32_t)SDL_rand_bits() ^ (uint32_t)SDL_GetPerformanceCounter(); /* (only if the system had none to give) */
+    return v;
+}
 
 static void note_set(const char *text) {
     log_push("", text);
@@ -411,7 +436,7 @@ static void log_table(void) {
 }
 
 static void state_send(int k) {
-    uint8_t p[368];
+    uint8_t p[372];
     int s;
     memset(p, 0, sizeof(p));
     put(p, 0, MAGIC);
@@ -431,6 +456,7 @@ static void state_send(int k) {
     }
     memcpy(p + 264, sL.note, NOTE);
     memcpy(p + 360, sL.code, 8);
+    put(p, 92, sL.m[k].nonce); /* (the member's greeting's: how a member connecting knows this is its owner's answer) */
     send_to(p, (int)sizeof(p), &sL.m[k].addr);
 }
 
@@ -926,26 +952,26 @@ static void member_closed(const char *why) {
 }
 
 static void member_packet(const uint8_t *pkt, int n, const struct sockaddr_in *from, uint32_t type) {
-    if (sL.state == 1) { /* connecting: an answer from any of the owner's addresses, or from one of their machines or
-                            ports (the owner's game may answer from another address of its machine than the one the
-                            service was told of, or through its router with another port) */
-        int i, ours = sL.owner.sin_port != 0 && same(from, &sL.owner);
-        for (i = 0; i < sL.candCount; i++) {
-            ours |= same(from, &sL.cand[i]) || from->sin_addr.s_addr == sL.cand[i].sin_addr.s_addr || from->sin_port == sL.cand[i].sin_port;
+    if (sL.state == 1) { /* connecting: the owner's first answer is the one that carries this member's nonce (its
+                            greeting's, a number nobody else knows), from whatever address it comes (the owner's
+                            game may answer from another address of its machine, or through its router with
+                            another port, than the service was told of) */
+        int ours = 0;
+        if (type == T_L_NO && n >= 16) {
+            ours = get(pkt, 3) == sL.nonce;
+        } else if (type == T_L_STATE && n >= 372) {
+            ours = get(pkt, 92) == sL.nonce;
         }
         if (!ours) {
             static int said;
             char text[32];
-            if (said++ < 4 && inet_ntop(AF_INET, &from->sin_addr, text, sizeof(text)) != NULL) {
-                fprintf(stderr, "bt3: lobby: an answer from %s:%d, not one of the owner's addresses: not taken\n", text, ntohs(from->sin_port));
+            if ((type == T_L_STATE || type == T_L_NO) && said++ < 4 && inet_ntop(AF_INET, &from->sin_addr, text, sizeof(text)) != NULL) {
+                fprintf(stderr, "bt3: lobby: an answer from %s:%d without this member's nonce: not taken\n", text, ntohs(from->sin_port));
             }
             return;
         }
-        if (type == T_L_NO && n >= 16) {
+        if (type == T_L_NO) {
             member_closed(no_text(get(pkt, 2)));
-            return;
-        }
-        if (type != T_L_STATE) {
             return;
         }
         sL.owner = *from;
@@ -1429,7 +1455,10 @@ static void member_start(void) {
     sL.speed = 114;
     sL.wantReady = -1;
     sL.candSince = now_ns();
-    sL.nonce = (uint32_t)SDL_rand_bits();
+    sL.nonce = os_random32();
+    if (sL.nonce == 0) {
+        sL.nonce = 1;
+    }
     {
         MatchStatus st;
         Match_Poll(&st);
@@ -1754,20 +1783,6 @@ void Lobby_Pump(void) {
             }
             if (type >= T_LOBBY_FIRST && type <= T_LOBBY_LAST) {
                 Lobby_Packet(pkt, n, &from, type);
-            } else if (type == 9 && sL.on == 2 && sL.state == 1) { /* T_PUNCH: the owner knocking (net.c); where it
-                                                                        comes from is the owner's, as its router or
-                                                                        its machine sends it: greeted from now on too */
-                int i, known = 0;
-                for (i = 0; i < sL.candCount; i++) {
-                    known |= same(&from, &sL.cand[i]);
-                }
-                if (!known && sL.candCount < MATCH_ADDRS + 1) {
-                    char text[32];
-                    sL.cand[sL.candCount++] = from;
-                    if (inet_ntop(AF_INET, &from.sin_addr, text, sizeof(text)) != NULL) {
-                        fprintf(stderr, "bt3: lobby: the owner knocked from %s:%d: greeted there too\n", text, ntohs(from.sin_port));
-                    }
-                }
             } else if (type == T_HELLO || type == T_SPEC_HELLO) {
                 Lobby_Stranger(pkt, n, &from, type);
             }
