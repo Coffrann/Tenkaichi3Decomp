@@ -770,6 +770,14 @@ static uint64_t sListSentNs;
 static uint32_t sSpecHead;                 /* the blanks the host has (its last word) */
 static uint64_t sSpecHeardNs, sSpecAckNs, sSpecGapNs;
 static int sSpecSkip;                      /* running blanks without picture to catch up */
+/* How far behind the host the spectator runs (its buffer, in blanks): short while the host's blanks come evenly,
+   longer after this copy ran out of them (a stall of the line or of the host), shorter again after a quiet while.
+   (It began as a fixed second, SPEC_BUFFER: the view was a second late.) */
+enum { SPEC_LEAD_MIN = 18, SPEC_LEAD_START = 24, SPEC_LEAD_STEP = 12, SPEC_LEAD_QUIET = 900 };
+static int sSpecLead = SPEC_LEAD_START;
+static unsigned sSpecLeadSince;            /* the blank it last ran out at, or grew shorter at */
+static unsigned sSpecLeadLog;
+static int sSpecNudge;                     /* this blank runs without picture and pacing: a little ahead (behind by a lot) */
 static int sSpecSetup, sSpecWaits, sSpecNo, sSpecEnded;
 static uint32_t sSpecApartAt;
 static unsigned sSpecCompared, sSpecDiffered;
@@ -1706,6 +1714,9 @@ static void net_start(int role, const char *host, const char *join) {
             }
         }
         sSpecOpen = sSpecSetup = sSpecWaits = sSpecNo = sSpecEnded = sSpecSkip = sSpecNoticed = sSpecLeaveAsked = sSpecRejoin = 0;
+        sSpecLead = SPEC_LEAD_START;
+        sSpecLeadSince = sSpecLeadLog = 0;
+        sSpecNudge = 0;
         sSpecHead = 0;
         sSpecApartAt = 0;
         sSpecCompared = sSpecDiffered = sSpecSkipped = 0;
@@ -2431,7 +2442,7 @@ static void spec_hold(const char *line) {
 
 /* 1 while a spectator runs blanks without picture and not held to real time, to catch up (plat_stub.c). */
 int Port_NetSpecSkip(void) {
-    return sMode == 3 && sSpecSkip;
+    return sMode == 3 && (sSpecSkip || sSpecNudge);
 }
 
 /* A blank of the spectator. Its input is the host's (Port_NetInput); the start-up runs as the players' does
@@ -2511,11 +2522,16 @@ static void spec_tick(unsigned tick) {
         fprintf(stderr, "bt3: net: spectating: at the character select (blank %u), %u ms after connecting; the host has %u blanks\n", tick,
                 (unsigned)(now_ms() - sStartedMs), (unsigned)sLogN);
     }
-    if (tick >= sLogN) { /* nothing to run this blank with: wait for a second's worth */
+    sSpecNudge = 0;
+    if (tick >= sLogN) { /* nothing to run this blank with: wait until it has its lead again, a longer one from now */
         uint64_t t0 = now;
         int said = 0;
+        if (tick > 1800) { /* (not the first wait, at the character select: the host's blanks were only beginning) */
+            sSpecLead = sSpecLead + SPEC_LEAD_STEP < SPEC_BUFFER ? sSpecLead + SPEC_LEAD_STEP : SPEC_BUFFER;
+        }
+        sSpecLeadSince = tick;
         sSpecSkip = 0;
-        while (sLogN < tick + SPEC_BUFFER && !(sLogN > tick && sSpecHead <= sLogN && SDL_GetTicksNS() - t0 > 2000000000ull)) {
+        while (sLogN < tick + (unsigned)sSpecLead && !(sLogN > tick && sSpecHead <= sLogN && SDL_GetTicksNS() - t0 > 2000000000ull)) {
             uint64_t at = SDL_GetTicksNS();
             spec_service();
             if (sGone >= 3) {
@@ -2535,18 +2551,30 @@ static void spec_tick(unsigned tick) {
         }
         if (said) {
             Port_UiBanner(NULL, 0);
-            fprintf(stderr, "bt3: net: spectating: waited %u ms for the host's blanks at blank %u\n", (unsigned)((SDL_GetTicksNS() - t0) / 1000000ull), tick);
+            fprintf(stderr, "bt3: net: spectating: waited %u ms for the host's blanks at blank %u (running %d blanks behind from now)\n",
+                    (unsigned)((SDL_GetTicksNS() - t0) / 1000000ull), tick, sSpecLead);
         }
     }
-    if (!sSpecSkip && sLogN > tick + SPEC_BUFFER + 60) {
+    if (tick - sSpecLeadSince > SPEC_LEAD_QUIET && sSpecLead > SPEC_LEAD_MIN) { /* a quiet while: a little closer again */
+        sSpecLead -= 2;
+        sSpecLeadSince = tick;
+    }
+    if (!sSpecSkip && sLogN > tick + (unsigned)sSpecLead + 60) {
         sSpecSkip = 1;
         sSpecSkipped = 0;
         fprintf(stderr, "bt3: net: spectating: %u blanks behind the host at blank %u: catching up without picture\n", (unsigned)(sLogN - tick), tick);
-    } else if (sSpecSkip && sLogN <= tick + SPEC_BUFFER) {
+    } else if (sSpecSkip && sLogN <= tick + (unsigned)sSpecLead) {
         sSpecSkip = 0;
         sSpecDrawNs = 0;
         Port_UiBanner(NULL, 0);
         fprintf(stderr, "bt3: net: spectating: caught up at blank %u (%u blanks run without picture)\n", tick, sSpecSkipped);
+    }
+    if (tick >= sSpecLeadLog + 1800) { /* (the log: how far behind the host this copy runs) */
+        sSpecLeadLog = tick;
+        fprintf(stderr, "bt3: net: spectating: blank %u, %u blanks behind the host's latest (lead %d)\n", tick, (unsigned)(sLogN - tick), sSpecLead);
+    }
+    if (!sSpecSkip && sLogN > tick + (unsigned)sSpecLead + 12 && tick % 16 == 0) {
+        sSpecNudge = 1; /* a little behind: one blank in sixteen runs without picture (gently back to the lead) */
     }
     if (sSpecSkip) {
         char line[96];

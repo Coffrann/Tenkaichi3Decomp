@@ -3794,6 +3794,17 @@ of Tenkaichi Budokai Online's pages; "the less we rely on ImGui the better").
   lobby, at the character select and mid-fight (the members: "The lobby was closed by its owner." at once), the 2P
   player quitting mid-fight ("Vegeta left the lobby", everyone back); fight values identical in every match.
   `BT3_LOBBY_DO` has `quit` (the program ends, as when its window is closed).
+- *A spectator's delay* (the same day, from the user's test with three windows): the spectator ran a fixed second
+  behind the host (`SPEC_BUFFER`). It now runs 24 blanks behind at first (about 0.4 s at 114%), 12 more each time
+  it runs out of the host's blanks (a stall of the line or of the host; at most the old second), and 2 fewer after
+  each quiet 900 blanks (down to 18); a spectator further behind than its lead and 12 runs one blank in sixteen
+  without picture until it is back (only beyond the lead and 60, as before, it runs without picture until caught
+  up). Still only the host's confirmed blanks. Measured (offscreen, 114%, drawing, 100 s; `BT3_PRESENT_LOG`, the
+  fight's pictures): the spectator's pictures 29.0 / 29.5 / 30.1 ms (5th / 95th / 99th percentile) before and
+  29.1 / 29.4 / 30.0 after, no picture over 36 ms; 27 blanks behind the host's latest from the fight on, with 5% of
+  its packets lost too; the host's pictures unchanged; fight values identical. The 20 frames a second of that test
+  were the three windows at 8x with a texture pack on one graphics card (the players' too), and its 0.7 s pauses
+  came in all three windows at once ("submitting the frame"): the card, not the netcode.
 - *Chat* is the name's keypad (letters, digits, -_.!?#&*+, space; the PC keyboard types any plain character but < and
   >), up to 60 characters, sent with Done or START; the lines are in the talk box. No ImGui is left in the lobby.
 - *Getting there.* The hub's new Lobby (between Join Room and Friends; the list is ten bars now, 26 units apart
