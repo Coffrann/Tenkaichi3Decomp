@@ -350,7 +350,50 @@ static void net_stat(void) { /* BT3_RELAY_LOG: packets out and in, a line a seco
     }
 }
 
+/* BT3_TEST_FIREWALL=1 (testing): this copy's socket lets in only what comes from an address it has sent to, as a
+   stateful firewall does (Windows' with no rule for the game): what a game must cope with on the other side. */
+static struct sockaddr_in sFwSent[64];
+static int sFwCount = -1, sFwNext;
+
+static int fw_on(void) {
+    if (sFwCount == -1) {
+        sFwCount = getenv("BT3_TEST_FIREWALL") != NULL && atoi(getenv("BT3_TEST_FIREWALL")) != 0 ? 0 : -2;
+    }
+    return sFwCount >= 0;
+}
+
+static void fw_sent(const struct sockaddr_in *to) {
+    int i;
+    if (!fw_on()) {
+        return;
+    }
+    for (i = 0; i < sFwCount; i++) {
+        if (sFwSent[i].sin_addr.s_addr == to->sin_addr.s_addr && sFwSent[i].sin_port == to->sin_port) {
+            return;
+        }
+    }
+    if (sFwCount < 64) {
+        sFwSent[sFwCount++] = *to;
+    } else {
+        sFwSent[sFwNext++ % 64] = *to;
+    }
+}
+
+static int fw_drops(const struct sockaddr_in *from) {
+    int i;
+    if (!fw_on()) {
+        return 0;
+    }
+    for (i = 0; i < sFwCount; i++) {
+        if (sFwSent[i].sin_addr.s_addr == from->sin_addr.s_addr && sFwSent[i].sin_port == from->sin_port) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void net_send(const void *buf, int n, const struct sockaddr_in *to) {
+    fw_sent(to);
     sStatOut++;
     sStatBytes += n;
     if (Relay_IsPeer(to)) {
@@ -424,6 +467,9 @@ static int net_recv(uint8_t *pkt, int size, struct sockaddr_in *from) {
         }
         kind = Relay_Unwrap(pkt, n, from, &data, &len);
         if (kind == 2) {
+            if (fw_drops(from)) {
+                continue; /* (BT3_TEST_FIREWALL: unasked for) */
+            }
             Relay_SawDirect(from);
             sStatIn++;
             return n;

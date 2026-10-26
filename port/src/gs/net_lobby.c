@@ -926,12 +926,19 @@ static void member_closed(const char *why) {
 }
 
 static void member_packet(const uint8_t *pkt, int n, const struct sockaddr_in *from, uint32_t type) {
-    if (sL.state == 1) { /* connecting: an answer from any of the owner's addresses */
+    if (sL.state == 1) { /* connecting: an answer from any of the owner's addresses, or from one of their machines or
+                            ports (the owner's game may answer from another address of its machine than the one the
+                            service was told of, or through its router with another port) */
         int i, ours = sL.owner.sin_port != 0 && same(from, &sL.owner);
         for (i = 0; i < sL.candCount; i++) {
-            ours |= same(from, &sL.cand[i]);
+            ours |= same(from, &sL.cand[i]) || from->sin_addr.s_addr == sL.cand[i].sin_addr.s_addr || from->sin_port == sL.cand[i].sin_port;
         }
         if (!ours) {
+            static int said;
+            char text[32];
+            if (said++ < 4 && inet_ntop(AF_INET, &from->sin_addr, text, sizeof(text)) != NULL) {
+                fprintf(stderr, "bt3: lobby: an answer from %s:%d, not one of the owner's addresses: not taken\n", text, ntohs(from->sin_port));
+            }
             return;
         }
         if (type == T_L_NO && n >= 16) {
@@ -1277,7 +1284,8 @@ static void timers(void) {
                 }
             }
             if (now - sL.candSince > CONNECT_NS) {
-                member_closed("The lobby's owner could not be reached (no answer from its game). A lobby needs a release newer than 0.1.38.7 on both sides.");
+                member_closed("The lobby's owner did not answer. A firewall on the owner's PC may be blocking the game: "
+                              "allow Tenkaichi3Decomp through it (Windows Firewall: allow an app), then try again.");
                 return;
             }
         } else {
@@ -1472,7 +1480,14 @@ static void join_found(const char addrs[][64], int count, const char *code, cons
     sL.candRelay = relay;
     SDL_strlcpy(sL.self, self != NULL ? self : "", sizeof(sL.self));
     member_start();
-    fprintf(stderr, "bt3: lobby: the code is a lobby's: joining it\n");
+    fprintf(stderr, "bt3: lobby: the code is a lobby's: joining it (the owner at");
+    for (i = 0; i < sL.candCount; i++) {
+        char text[32];
+        if (inet_ntop(AF_INET, &sL.cand[i].sin_addr, text, sizeof(text)) != NULL) {
+            fprintf(stderr, " %s%s:%d", i == sL.candRelay ? "relay " : "", text, ntohs(sL.cand[i].sin_port));
+        }
+    }
+    fprintf(stderr, ")\n");
 }
 
 void Lobby_JoinFound(const char addrs[][64], int count, const char *code, const char *self) {
@@ -1739,6 +1754,20 @@ void Lobby_Pump(void) {
             }
             if (type >= T_LOBBY_FIRST && type <= T_LOBBY_LAST) {
                 Lobby_Packet(pkt, n, &from, type);
+            } else if (type == 9 && sL.on == 2 && sL.state == 1) { /* T_PUNCH: the owner knocking (net.c); where it
+                                                                        comes from is the owner's, as its router or
+                                                                        its machine sends it: greeted from now on too */
+                int i, known = 0;
+                for (i = 0; i < sL.candCount; i++) {
+                    known |= same(&from, &sL.cand[i]);
+                }
+                if (!known && sL.candCount < MATCH_ADDRS + 1) {
+                    char text[32];
+                    sL.cand[sL.candCount++] = from;
+                    if (inet_ntop(AF_INET, &from.sin_addr, text, sizeof(text)) != NULL) {
+                        fprintf(stderr, "bt3: lobby: the owner knocked from %s:%d: greeted there too\n", text, ntohs(from.sin_port));
+                    }
+                }
             } else if (type == T_HELLO || type == T_SPEC_HELLO) {
                 Lobby_Stranger(pkt, n, &from, type);
             }

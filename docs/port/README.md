@@ -3805,6 +3805,16 @@ of Tenkaichi Budokai Online's pages; "the less we rely on ImGui the better").
   its packets lost too; the host's pictures unchanged; fight values identical. The 20 frames a second of that test
   were the three windows at 8x with a texture pack on one graphics card (the players' too), and its 0.7 s pauses
   came in all three windows at once ("submitting the frame"): the card, not the netcode.
+- *Reaching the owner* (from the user's test, a Windows owner and a Linux member on one network: the owner said the
+  member had joined, the member never heard it): a member connecting takes the owner's answer from any address of
+  the owner's machines or with the port of the owner's socket (an answer from another address of the machine, or
+  through its router with another port, was dropped), greets every address the owner knocks at it from (its
+  T_PUNCH, net.c), says in the log where it greets the owner and what it did not take, and when nothing answers says
+  so without guessing a version ("A firewall on the owner's PC may be blocking the game..."). The owner already
+  knocks at the addresses of members the service tells of, as a room's host does, and asks for a relay after eight
+  seconds. `BT3_TEST_FIREWALL=1`: this copy takes only what comes from addresses it has sent to (a stateful
+  firewall). Tested: an owner with it, a member by code, ten times through a local Worker and twice through the
+  live one: joined each time. The user's case itself was not reproduced here.
 - *Chat* is the name's keypad (letters, digits, -_.!?#&*+, space; the PC keyboard types any plain character but < and
   >), up to 60 characters, sent with Done or START; the lines are in the talk box. No ImGui is left in the lobby.
 - *Getting there.* The hub's new Lobby (between Join Room and Friends; the list is ten bars now, 26 units apart
